@@ -6,6 +6,7 @@ Run on Windows:
 Notes:
 - Uses the best available Python via the Windows 'py' launcher (prefers 3.11).
 - Creates a local .venv and installs requirements automatically on first run.
+- When you click "Enable Mouse", the main window minimizes and a small always-on-top status overlay stays visible.
 
 This build is optimized for:
 - 640x480 camera capture

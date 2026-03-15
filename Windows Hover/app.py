@@ -7,6 +7,7 @@ gesture, cursor, and UI logic.
 from __future__ import annotations
 
 import math
+import os
 import platform
 import threading
 import time
@@ -31,6 +32,39 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+def _configure_input_latency() -> None:
+    # Reduce pyautogui built-in delays for lower latency.
+    try:
+        pyautogui.PAUSE = 0
+        pyautogui.MINIMUM_DURATION = 0
+        pyautogui.MINIMUM_SLEEP = 0
+        pyautogui.FAILSAFE = False
+    except Exception:
+        pass
+
+
+def _boost_runtime_priority() -> None:
+    # Best-effort: prefer responsiveness on Windows.
+    if platform.system() != "Windows":
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        GetCurrentProcess = kernel32.GetCurrentProcess
+        GetCurrentThread = kernel32.GetCurrentThread
+        SetPriorityClass = kernel32.SetPriorityClass
+        SetThreadPriority = kernel32.SetThreadPriority
+
+        HIGH_PRIORITY_CLASS = 0x00000080
+        THREAD_PRIORITY_HIGHEST = 2
+
+        SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST)
+    except Exception:
+        pass
 
 
 class GestureType(str, Enum):
@@ -173,8 +207,8 @@ class HandTracker:
             static_image_mode=False,
             max_num_hands=1,
             model_complexity=0,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5,
+            min_detection_confidence=0.45,
+            min_tracking_confidence=0.45,
         )
 
         self._landmark_style = self._styles.get_default_hand_landmarks_style()
@@ -219,7 +253,8 @@ class CursorMapper:
         self.scr_h = scr_h - 1
 
         self.frame_r = 90
-        self.smoothening = 6.5
+        # Lower smoothing => more responsive.
+        self.smoothening = 4.8
 
         self._ploc_x = -1.0
         self._ploc_y = -1.0
@@ -231,7 +266,7 @@ class CursorMapper:
 
         self._kalman_x = -1.0
         self._kalman_y = -1.0
-        self._kalman_gain = 0.42
+        self._kalman_gain = 0.52
 
     def set_camera_size(self, w: int, h: int) -> None:
         self.cam_w = max(1, w)
@@ -307,12 +342,111 @@ class CursorMapper:
         return int(self._kalman_x), int(self._kalman_y)
 
 
+class StatusOverlay(QWidget):
+    def __init__(self) -> None:
+        super().__init__(None)
+        self.setWindowTitle("Windows Hover Status")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setFixedSize(260, 120)
+
+        root = QFrame(self)
+        root.setObjectName("overlayRoot")
+        root.setGeometry(0, 0, 260, 120)
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        self._dot = QLabel("●")
+        self._dot.setObjectName("statusOnline")
+        self._title = QLabel("Windows Hover")
+        self._title.setObjectName("overlayTitle")
+        top.addWidget(self._dot)
+        top.addWidget(self._title)
+        top.addStretch(1)
+        self._fps = QLabel("FPS 0")
+        self._fps.setObjectName("muted")
+        top.addWidget(self._fps)
+        layout.addLayout(top)
+
+        mid = QHBoxLayout()
+        mid.setSpacing(10)
+        self._badge = QLabel("PAUSED")
+        self._badge.setObjectName("badge")
+        self._hand = QLabel("Hand: -")
+        self._hand.setObjectName("muted")
+        mid.addWidget(self._badge)
+        mid.addWidget(self._hand)
+        mid.addStretch(1)
+        layout.addLayout(mid)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(8)
+        self.open_btn = QPushButton("Open")
+        self.open_btn.setObjectName("ghostButton")
+        self.disable_btn = QPushButton("Disable Mouse")
+        self.disable_btn.setObjectName("redButton")
+        btns.addWidget(self.open_btn)
+        btns.addStretch(1)
+        btns.addWidget(self.disable_btn)
+        layout.addLayout(btns)
+
+        self.setStyleSheet(
+            """
+            #overlayRoot {
+                background: #1A1D24;
+                border: 1px solid #222733;
+                border-radius: 14px;
+            }
+            QLabel { color: #E5E7EB; font-size: 13px; }
+            #overlayTitle { font-weight: 700; }
+            #muted { color: #A3A9B8; }
+            #statusOnline { color: #4ADE80; font-size: 18px; }
+            #badge {
+                border-radius: 12px;
+                padding: 6px 10px;
+                font-weight: 700;
+                background: #334155;
+                color: #F8FAFC;
+                max-width: 160px;
+            }
+            QPushButton {
+                border: 0;
+                border-radius: 12px;
+                color: #F8FAFC;
+                padding: 8px 10px;
+                font-weight: 600;
+                background: #2A3040;
+            }
+            QPushButton:hover { background: #394055; }
+            #ghostButton { background: #252A36; color: #E5E7EB; }
+            #ghostButton:hover { background: #313849; }
+            #redButton { background: #F87171; color: #0B1118; }
+            #redButton:hover { background: #FA8A8A; }
+            """
+        )
+
+    def update_status(self, gesture: GestureType, fps: float, hand_ok: bool) -> None:
+        self._fps.setText(f"FPS {fps:.0f}")
+        self._hand.setText(f"Hand: {'Detected' if hand_ok else 'Not Detected'}")
+        self._badge.setText(gesture.value)
+        self._badge.setStyleSheet(
+            f"border-radius: 12px; padding: 6px 10px; font-weight: 700; background: {_BADGE_COLORS.get(gesture, '#64748B')}; color: #0B1118;"
+        )
+
+
 class MouseController:
     def __init__(self) -> None:
         pyautogui.FAILSAFE = False
         pyautogui.PAUSE = 0
 
-        self._move_interval = 1.0 / 120.0
+        self._move_interval = 1.0 / 240.0
         self._last_move = 0.0
         self._last_x = -1
         self._last_y = -1
@@ -346,7 +480,7 @@ class MouseController:
 
         dx = x - self._last_x
         dy = y - self._last_y
-        if dx * dx + dy * dy < 9:
+        if dx * dx + dy * dy < 4:
             return
 
         self._move_to(x, y)
@@ -610,6 +744,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
+        _configure_input_latency()
+
         if platform.system() != "Windows":
             print("Windows Hover is optimized for Windows.")
 
@@ -631,6 +767,7 @@ class MainWindow(QMainWindow):
         self.proc_thread = None
         self.mouse_enabled = False
         self.debug = False
+        self._overlay: StatusOverlay | None = None
 
         local_icons = Path(__file__).resolve().parent / "assets" / "icons"
         repo_icons = Path(__file__).resolve().parents[1] / "assets" / "icons"
@@ -918,19 +1055,74 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
+        if self._overlay is not None:
+            self._overlay.close()
+            self._overlay = None
+
+    def closeEvent(self, event) -> None:
+        try:
+            self.stop_camera()
+        except Exception:
+            pass
+        try:
+            self.tracker.close()
+        except Exception:
+            pass
+        try:
+            if self._overlay is not None:
+                self._overlay.close()
+        except Exception:
+            pass
+        event.accept()
+
     def toggle_mouse(self) -> None:
         self.mouse_enabled = not self.mouse_enabled
         if self.mouse_enabled:
             self.mouse_btn.setText("Disable Mouse")
             self.mouse_lbl.setText("Mouse: ON")
+
+            if self._overlay is None:
+                self._overlay = StatusOverlay()
+                self._overlay.open_btn.clicked.connect(self._show_main_window)
+                self._overlay.disable_btn.clicked.connect(self._disable_mouse_from_overlay)
+                # Top-right-ish.
+                try:
+                    sw, _ = pyautogui.size()
+                    self._overlay.move(max(10, sw - self._overlay.width() - 20), 20)
+                except Exception:
+                    self._overlay.move(20, 20)
+                self._overlay.show()
+
+            # Minimize the main UI when mouse control is active.
+            self.showMinimized()
         else:
             self.mouse_btn.setText("Enable Mouse")
             self.mouse_lbl.setText("Mouse: OFF")
+
+            if self._overlay is not None:
+                self._overlay.close()
+                self._overlay = None
+            self.showNormal()
+            self.raise_()
+
+    def _show_main_window(self) -> None:
+        self.showNormal()
+        self.raise_()
+
+    def _disable_mouse_from_overlay(self) -> None:
+        if self.mouse_enabled:
+            self.toggle_mouse()
 
     def _process_loop(self) -> None:
         last_overlay = GestureType.NONE
         last_action = GestureType.NONE
         last_task_view_action = 0.0
+
+        _boost_runtime_priority()
+        try:
+            cv2.setUseOptimized(True)
+        except Exception:
+            pass
 
         while self.running:
             frame = self.camera.latest()
@@ -1023,6 +1215,17 @@ class MainWindow(QMainWindow):
         )
         self.fingers_lbl.setText(f"Fingers: {fingers}")
         self.hand_lbl.setText("Hand: Detected" if hand_proto is not None else "Hand: Not Detected")
+
+        if self._overlay is not None:
+            try:
+                self._overlay.update_status(gesture, self.fps, hand_proto is not None)
+            except Exception:
+                pass
+
+        # When minimized (mouse control mode), keep the overlay responsive and
+        # avoid spending CPU on preview rendering.
+        if self.isMinimized():
+            return
 
         if frame is None:
             return
