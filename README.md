@@ -142,20 +142,28 @@ This project uses the following tools and libraries:
 # 📂 Project Structure
 
 ```
-ai-holographic-touch/
-│
+AI-HollowGraphic-Like-Touch/
 ├── main.py
-├── hand_tracker.py
-├── gesture_detector.py
-├── mouse_controller.py
-├── utils.py
-│
 ├── requirements.txt
 ├── README.md
-│
-└── demo/
-    ├── demo.gif
-    └── demo.mp4
+├── src/
+│   ├── config.py
+│   ├── main.py
+│   ├── controller/
+│   │   ├── cursor_mapper.py
+│   │   └── mouse_controller.py
+│   ├── gestures/
+│   │   ├── gesture_detector.py
+│   │   └── gesture_types.py
+│   ├── tracking/
+│   │   ├── hand_tracker.py
+│   │   └── landmark_processor.py
+│   └── utils/
+│       ├── fps_counter.py
+│       ├── math_utils.py
+│       └── smoothing.py
+└── tests/
+      └── test_gestures.py
 ```
 
 ---
@@ -182,7 +190,7 @@ pip install -r requirements.txt
 Start the program:
 
 ```bash
-python main.py
+python src/main.py
 ```
 
 Your webcam will open and the system will begin tracking your hand.
