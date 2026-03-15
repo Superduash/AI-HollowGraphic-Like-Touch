@@ -2,3 +2,5 @@ opencv-python
 mediapipe
 pyautogui
 numpy
+pyobjc-core; platform_system == "Darwin"
+pyobjc-framework-Quartz; platform_system == "Darwin"

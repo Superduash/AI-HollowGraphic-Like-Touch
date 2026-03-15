@@ -4,6 +4,8 @@
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 CAMERA_INDEX = 0
+# Try multiple indexes in order for systems where default camera is not index 0.
+CAMERA_INDEXES = [0, 1, 2]
 
 # MediaPipe Hands settings
 MAX_NUM_HANDS = 1

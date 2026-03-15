@@ -1,9 +1,19 @@
 """Entry point for AI-HollowGraphic-Like-Touch."""
 
+import platform
+
 import cv2
 import pyautogui
 
-from config import CAMERA_HEIGHT, CAMERA_INDEX, CAMERA_WIDTH, SMOOTHING_ALPHA, SMOOTHING_WINDOW, WINDOW_NAME
+from config import (
+    CAMERA_HEIGHT,
+    CAMERA_INDEX,
+    CAMERA_INDEXES,
+    CAMERA_WIDTH,
+    SMOOTHING_ALPHA,
+    SMOOTHING_WINDOW,
+    WINDOW_NAME,
+)
 from controller.cursor_mapper import CursorMapper
 from controller.mouse_controller import MouseController
 from gestures.gesture_detector import GestureDetector
@@ -14,21 +24,68 @@ from utils.fps_counter import FPSCounter
 from utils.smoothing import CursorSmoother
 
 
+def _get_capture_backends() -> list[int]:
+    """Return preferred OpenCV capture backends for this operating system."""
+    system_name = platform.system().lower()
+    if system_name == "darwin":
+        backends = [getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY), cv2.CAP_ANY]
+    elif system_name == "windows":
+        backends = [getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY), cv2.CAP_ANY]
+    else:
+        backends = [getattr(cv2, "CAP_V4L2", cv2.CAP_ANY), cv2.CAP_ANY]
+
+    unique_backends: list[int] = []
+    for backend in backends:
+        if backend not in unique_backends:
+            unique_backends.append(backend)
+    return unique_backends
+
+
+def _open_camera_with_fallback() -> tuple[cv2.VideoCapture | None, int | None, int | None]:
+    """Try multiple camera indexes/backends and return the first working capture."""
+    indexes = [CAMERA_INDEX]
+    for extra_index in CAMERA_INDEXES:
+        if extra_index not in indexes:
+            indexes.append(extra_index)
+
+    for backend in _get_capture_backends():
+        for index in indexes:
+            cap = cv2.VideoCapture(index, backend)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+
+            if cap.isOpened():
+                return cap, index, backend
+            cap.release()
+
+    return None, None, None
+
+
 def run() -> None:
     """Run the webcam loop and control the mouse from hand gestures."""
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+    cap, active_camera_index, active_backend = _open_camera_with_fallback()
 
-    if not cap.isOpened():
-        print("Error: Could not open webcam.")
+    if cap is None:
+        print("Error: Could not open webcam with any configured camera index.")
+        print(f"Tried indexes: {[CAMERA_INDEX] + [i for i in CAMERA_INDEXES if i != CAMERA_INDEX]}")
+        if platform.system().lower() == "darwin":
+            print("On macOS, allow Camera access for Terminal/IDE in System Settings > Privacy & Security > Camera.")
         return
 
-    screen_width, screen_height = pyautogui.size()
+    mouse_init_warning = ""
+    try:
+        screen_width, screen_height = pyautogui.size()
+    except Exception as error:
+        # Keep app running for preview/debug even when OS blocks automation APIs.
+        screen_width, screen_height = 1920, 1080
+        mouse_init_warning = f"Mouse API warning: {error}"
 
     hand_tracker = HandTracker()
     gesture_detector = GestureDetector()
     mouse_controller = MouseController()
+    if mouse_init_warning:
+        mouse_controller.is_available = False
+        mouse_controller.last_error_message = mouse_init_warning
     cursor_mapper = CursorMapper(CAMERA_WIDTH, CAMERA_HEIGHT, screen_width, screen_height)
     smoother = CursorSmoother(window_size=SMOOTHING_WINDOW, alpha=SMOOTHING_ALPHA)
     fps_counter = FPSCounter()
@@ -86,8 +143,28 @@ def run() -> None:
 
         fps = fps_counter.update()
         cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        cv2.putText(
+            frame,
+            f"Camera: idx={active_camera_index} backend={active_backend}",
+            (10, 55),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (180, 180, 180),
+            1,
+        )
         cv2.putText(frame, f"Gesture: {gesture_state_text}", (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
         cv2.putText(frame, "Press q to quit", (10, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+
+        if not mouse_controller.is_available:
+            cv2.putText(
+                frame,
+                "Mouse control unavailable: grant Accessibility permission",
+                (10, 190),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 0, 255),
+                2,
+            )
 
         cv2.imshow(WINDOW_NAME, frame)
 

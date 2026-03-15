@@ -1,32 +1,34 @@
 # AI-HollowGraphic-Like-Touch
 
-A real-time, webcam-based AI hand-gesture mouse controller built with Python, OpenCV, MediaPipe, PyAutoGUI, and NumPy.
+Real-time AI hand-gesture mouse controller using webcam input.
 
-This starter project creates a "holographic touch" feel: move your hand in front of the camera to move the cursor, then pinch to click.
+Built with Python, OpenCV, MediaPipe, PyAutoGUI, and NumPy.
 
-## Project Overview
+## Overview
 
-AI-HollowGraphic-Like-Touch captures webcam frames, detects one hand with MediaPipe, extracts 21 landmarks, detects gestures, and maps index fingertip movement to your desktop cursor.
+This project creates a touchless "holographic touch" interaction:
 
-The app is designed for local CPU execution on Windows 11 and targets smooth interaction around 20-30 FPS on mid-range laptops.
+1. Detect one hand (21 landmarks) with MediaPipe.
+2. Track index fingertip for cursor movement.
+3. Use pinch gestures for left and right click.
+4. Smooth cursor coordinates to reduce jitter.
+5. Show live FPS + debug overlays in the preview window.
 
-## How Gesture Mouse Works
+Runs locally on CPU and targets around 20 to 30 FPS on mid-range laptops.
 
-Pipeline:
+## Gesture Controls
 
-1. Webcam captures 640x480 frames.
-2. MediaPipe Hands detects one hand and tracks 21 landmarks.
-3. Landmark processor extracts key tips (thumb, index, middle).
-4. Cursor mapper interpolates camera coordinates to screen coordinates.
-5. Cursor smoother reduces jitter.
-6. Gesture detector recognizes pinch gestures.
-7. Mouse controller sends cursor and click commands via PyAutoGUI.
-8. OpenCV preview displays landmarks, gesture state, and FPS.
+| Gesture | Action |
+|---|---|
+| Index finger up | Move cursor |
+| Thumb + index pinch | Left click |
+| Thumb + middle pinch | Right click |
 
 ## Project Structure
 
 ```text
 AI-HollowGraphic-Like-Touch/
++-- main.py
 +-- src/
 ¦   +-- main.py
 ¦   +-- config.py
@@ -52,71 +54,88 @@ AI-HollowGraphic-Like-Touch/
 +-- README.md
 ```
 
+## Requirements
+
+- Python 3.10+
+- Webcam
+- macOS or Windows
+
 ## Installation
 
-1. Open PowerShell in the project folder.
-2. (Optional but recommended) Create and activate a virtual environment:
+### macOS
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+macOS permissions you must allow:
+
+1. System Settings > Privacy & Security > Camera
+2. System Settings > Privacy & Security > Accessibility
+
+Enable both for the app you use to run Python (Terminal, iTerm, VS Code).
+
+### Windows
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-3. Install dependencies:
-
-```powershell
 pip install -r requirements.txt
 ```
 
-## Running the Program
+## Run
 
-Run the app from the project root:
+From project root, either command works:
 
-```powershell
+```bash
+python main.py
+```
+
+or
+
+```bash
 python src/main.py
 ```
 
-Press `q` in the preview window to exit.
+Press `q` to exit the preview window.
 
-## Gesture Controls
+## Performance Defaults
 
-| Gesture | Action |
-|---|---|
-| Index finger up | Move cursor |
-| Thumb + index pinch | Left click |
-| Thumb + middle pinch | Right click |
+Configured in src/config.py:
 
-## Configuration Defaults
-
-Configured in `src/config.py`:
-
-- Camera: 640x480
+- Camera resolution: 640x480
 - max_num_hands: 1
 - min_detection_confidence: 0.7
 - min_tracking_confidence: 0.7
-- Click cooldown to avoid repeated click spam
-- Smoothing window + interpolation for stable movement
+- Click cooldown to avoid repeated clicks
+- Cursor smoothing window and interpolation
+- Camera fallback indexes: [0, 1, 2]
 
-## Notes for Best Results
+## Troubleshooting
 
-- Keep your hand inside the webcam frame.
-- Use good lighting for better landmark stability.
-- Avoid cluttered backgrounds when possible.
-- Start with a relaxed distance from camera, then fine-tune thresholds in `src/config.py`.
+- Webcam not opening:
+  - Close Zoom/Meet/Teams/OBS and retry.
+  - On macOS, confirm Camera permission.
+  - The app automatically tries multiple camera indexes and backends.
+
+- Cursor does not move/click on macOS:
+  - Grant Accessibility permission to the Python host app.
+
+- Low FPS:
+  - Improve lighting, keep only one hand in frame, close heavy apps.
 
 ## Testing
 
-Run gesture logic tests:
-
-```powershell
+```bash
 pytest tests/test_gestures.py
 ```
 
 ## Future Improvements
 
-- Drag-and-drop gesture
 - Scroll gesture
-- Multi-hand shortcuts
-- Per-user calibration mode
-- Dynamic gesture thresholds based on hand size
-- Optional UI overlay panel for live tuning
+- Drag gesture
+- Per-user calibration
+- Runtime sensitivity UI panel
+- Gesture shortcuts
