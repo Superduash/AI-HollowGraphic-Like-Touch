@@ -6,7 +6,7 @@ _GESTURES = [
     ("☝️ Index only", "Move"),
     ("🤏 Thumb+Index", "L-Click"),
     ("🤏⏳ Hold Thumb+Index", "Drag"),
-    ("🤏 Thumb+Middle", "R-Click"),
+    ("👇+🤏 Index down + Thumb+Middle", "R-Click"),
     ("✌️↕ Peace + Y", "Scroll"),
     ("🖐️ Open palm", "Task View"),
     ("🛑 No gesture / hand down", "Pause"),

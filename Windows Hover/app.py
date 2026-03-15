@@ -620,6 +620,7 @@ class GestureEngine:
         self._left_pinch_start = 0.0
         self._left_pinch_frames = 0
         self._right_pinch_frames = 0
+        self._right_pose_frames = 0
         self._left_click_fired = False
         self._right_click_fired = False
 
@@ -634,6 +635,9 @@ class GestureEngine:
         # Less sensitive pinches to avoid accidental clicks.
         self._pinch_enter = 0.20
         self._pinch_exit = 0.28
+        self._right_pinch_enter_factor = 0.86
+        self._right_click_pose_frames = 2
+        self._right_click_pinch_frames = 2
         self._scroll_motion_threshold = 3.0
         self._task_view_cooldown = 1.0
         self._task_view_confirm_frames = 6
@@ -699,6 +703,7 @@ class GestureEngine:
             self._left_pinch_start = 0.0
             self._left_pinch_frames = 0
             self._right_pinch_frames = 0
+            self._right_pose_frames = 0
             self._left_click_fired = False
             self._right_click_fired = False
 
@@ -744,6 +749,7 @@ class GestureEngine:
         middle_tip = xy[12]
         enter = max(12.0, min(42.0, hand_scale * self._pinch_enter))
         exit_ = max(enter + 2.0, min(58.0, hand_scale * self._pinch_exit))
+        right_enter = max(10.0, enter * self._right_pinch_enter_factor)
 
         left_dist = self._distance(thumb, index_tip)
         right_dist = self._distance(thumb, middle_tip)
@@ -758,14 +764,20 @@ class GestureEngine:
                 if left_dist < enter:
                     self._left_pinch_active = True
 
+        right_click_pose = (not fs.index) and (not fs.ring) and (not fs.pinky)
+        if right_click_pose:
+            self._right_pose_frames += 1
+        else:
+            self._right_pose_frames = 0
+
         if not fs.middle:
             self._right_pinch_active = False
         else:
             if self._right_pinch_active:
-                if right_dist > exit_:
+                if right_dist > exit_ or not right_click_pose:
                     self._right_pinch_active = False
             else:
-                if right_dist < enter:
+                if right_click_pose and right_dist < right_enter:
                     self._right_pinch_active = True
 
         # Right click: thumb + middle pinch.
@@ -775,7 +787,8 @@ class GestureEngine:
             self._right_pinch_frames += 1
             if (
                 not self._right_click_fired
-                and self._right_pinch_frames >= 1
+                and self._right_pose_frames >= self._right_click_pose_frames
+                and self._right_pinch_frames >= self._right_click_pinch_frames
                 and now - self._last_right >= self._click_cooldown
             ):
                 self._right_click_fired = True
@@ -1007,7 +1020,7 @@ class MainWindow(QMainWindow):
             ("move.svg", "Index finger", "Move cursor"),
             ("click.svg", "Thumb + Index pinch", "Left click"),
             ("drag.svg", "Hold Thumb + Index pinch", "Drag"),
-            ("click.svg", "Thumb + Middle pinch", "Right click"),
+            ("click.svg", "Index down + Thumb + Middle pinch", "Right click"),
             ("scroll.svg", "Peace sign + up/down", "Scroll"),
             ("settings.svg", "Open palm", "Task View (Win+Tab)"),
             ("pause.svg", "No gesture / hand down", "Pause"),

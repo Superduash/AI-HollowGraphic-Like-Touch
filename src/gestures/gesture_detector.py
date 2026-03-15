@@ -53,6 +53,7 @@ class GestureDetector:
         self._left_pinch_start = 0.0
         self._left_pinch_frames = 0
         self._right_pinch_frames = 0
+        self._right_pose_frames = 0
         self._left_click_fired = False
         self._right_click_fired = False
 
@@ -70,6 +71,9 @@ class GestureDetector:
         # Slightly more sensitive than before for easier real-world pinching.
         self._pinch_enter = 0.23
         self._pinch_exit = 0.30
+        self._right_pinch_enter_factor = 0.86
+        self._right_click_pose_frames = 2
+        self._right_click_pinch_frames = 2
         self._scroll_motion_threshold = 3.0
         self._task_view_cooldown = 1.0
         self._task_view_confirm_frames = 6
@@ -138,7 +142,7 @@ class GestureDetector:
         # Clamp thresholds to be robust across camera resolutions.
         left_enter = max(12.0, min(42.0, hand_scale * self._pinch_enter))
         left_exit = max(left_enter + 2.0, min(58.0, hand_scale * self._pinch_exit))
-        right_enter = left_enter
+        right_enter = max(10.0, left_enter * self._right_pinch_enter_factor)
         right_exit = left_exit
 
         # Update pinch states with hysteresis.
@@ -149,11 +153,17 @@ class GestureDetector:
             if left_dist < left_enter:
                 self._left_pinch_active = True
 
+        right_click_pose = (not fingers.index) and (not fingers.ring) and (not fingers.pinky)
+        if right_click_pose:
+            self._right_pose_frames += 1
+        else:
+            self._right_pose_frames = 0
+
         if self._right_pinch_active:
-            if right_dist > right_exit:
+            if right_dist > right_exit or not right_click_pose:
                 self._right_pinch_active = False
         else:
-            if right_dist < right_enter:
+            if right_click_pose and right_dist < right_enter:
                 self._right_pinch_active = True
 
         # Right click: middle+thumb pinch (edge-trigger).
@@ -161,7 +171,12 @@ class GestureDetector:
             self._scroll_active = False
             self._prev_scroll_y = None
             self._right_pinch_frames += 1
-            if not self._right_click_fired and self._right_pinch_frames >= 1 and now - self._last_right_click >= CLICK_COOLDOWN:
+            if (
+                not self._right_click_fired
+                and self._right_pose_frames >= self._right_click_pose_frames
+                and self._right_pinch_frames >= self._right_click_pinch_frames
+                and now - self._last_right_click >= CLICK_COOLDOWN
+            ):
                 self._right_click_fired = True
                 self._last_right_click = now
                 return self._confirm_result(GestureType.RIGHT_CLICK)
@@ -241,6 +256,7 @@ class GestureDetector:
         self._left_pinch_start = 0.0
         self._left_pinch_frames = 0
         self._right_pinch_frames = 0
+        self._right_pose_frames = 0
         self._left_click_fired = False
         self._right_click_fired = False
 
@@ -254,6 +270,7 @@ class GestureDetector:
         self._left_pinch_start = 0.0
         self._left_pinch_frames = 0
         self._right_pinch_frames = 0
+        self._right_pose_frames = 0
         self._left_click_fired = False
         self._right_click_fired = False
         self._is_dragging = False

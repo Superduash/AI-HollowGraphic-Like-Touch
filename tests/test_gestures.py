@@ -105,7 +105,7 @@ def test_left_click_requires_stability() -> None:
 
 
 def test_right_click_thumb_middle_pinch() -> None:
-    """Thumb + middle pinch → RIGHT_CLICK after stability."""
+    """Thumb + middle pinch with index down -> RIGHT_CLICK after brief hold."""
     detector = GestureDetector()
     lm = _landmarks(
         # Make index "down" to avoid thumb-index pinch triggering left click.
@@ -116,7 +116,9 @@ def test_right_click_thumb_middle_pinch() -> None:
         thumb=(222, 102), thumb_ip=(210, 115),
     )
     r1 = detector.detect(lm)
-    assert r1.gesture == GestureType.RIGHT_CLICK
+    assert r1.gesture in {GestureType.MOVE, GestureType.PAUSE}
+    r2 = detector.detect(lm)
+    assert r2.gesture == GestureType.RIGHT_CLICK
 
 
 def test_task_view_open_palm() -> None:

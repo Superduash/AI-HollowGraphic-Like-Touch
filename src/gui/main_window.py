@@ -215,7 +215,7 @@ class MainWindow(QMainWindow):
             ("move.svg", "Index finger", "Move cursor"),
             ("click.svg", "Thumb + Index pinch", "Left click"),
             ("drag.svg", "Hold Thumb + Index pinch", "Drag"),
-            ("click.svg", "Thumb + Middle pinch", "Right click"),
+            ("click.svg", "Index down + Thumb + Middle pinch", "Right click"),
             ("scroll.svg", "Peace sign + up/down", "Scroll"),
             ("settings.svg", "Open palm", "Task View (Win+Tab)"),
             ("pause.svg", "No gesture / hand down", "Pause"),
