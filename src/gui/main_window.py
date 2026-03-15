@@ -351,7 +351,15 @@ class MainWindow(QMainWindow):
             self._tracker.close()
         except Exception:
             pass
-        self._tracker = HandTracker()
+        try:
+            self._tracker = HandTracker()
+        except Exception as exc:
+            self._status_text.setText("MediaPipe Error")
+            self._status_dot.setObjectName("statusOffline")
+            self._status_dot.style().unpolish(self._status_dot)
+            self._status_dot.style().polish(self._status_dot)
+            self._preview.setText(str(exc))
+            return
         self._detector = GestureDetector()
         self._detector.set_confirm_frames(3)
 

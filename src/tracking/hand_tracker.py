@@ -20,8 +20,32 @@ _CONNECTIONS = [
 _PROC_SIZE = (PROCESS_WIDTH, PROCESS_HEIGHT)
 
 
+def _mediapipe_diagnostic() -> str:
+    try:
+        file_path = getattr(mp, "__file__", None)
+        version = getattr(mp, "__version__", None)
+        has_solutions = hasattr(mp, "solutions")
+        return f"mediapipe version={version} file={file_path} has_solutions={has_solutions}"
+    except Exception:
+        return "mediapipe diagnostic unavailable"
+
+
+def _ensure_mediapipe_solutions() -> None:
+    if hasattr(mp, "solutions"):
+        return
+    detail = _mediapipe_diagnostic()
+    raise RuntimeError(
+        "MediaPipe import looks wrong: 'mediapipe' has no attribute 'solutions'.\n"
+        f"{detail}\n\n"
+        "Fix (inside your venv):\n"
+        "- pip uninstall -y mediapipe\n"
+        "- pip install mediapipe==0.10.21\n"
+    )
+
+
 class HandTracker:
     def __init__(self):
+        _ensure_mediapipe_solutions()
         self._mp_hands = mp.solutions.hands
         self._draw_utils = mp.solutions.drawing_utils
         self._draw_styles = mp.solutions.drawing_styles

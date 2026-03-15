@@ -16,7 +16,10 @@ from enum import Enum
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
+try:
+    import mediapipe as mp  # type: ignore
+except Exception:  # ImportError on missing package; also guard weird install states
+    mp = None  # type: ignore[assignment]
 import pyautogui
 from PySide6.QtCore import Qt, QTimer, QSize
 from PySide6.QtGui import QIcon, QImage, QPixmap
@@ -32,6 +35,44 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+def _mediapipe_diagnostic() -> str:
+    try:
+        if mp is None:
+            return "mediapipe import failed (package not installed or import error)"
+        file_path = getattr(mp, "__file__", None)
+        version = getattr(mp, "__version__", None)
+        has_solutions = hasattr(mp, "solutions")
+        return f"mediapipe version={version} file={file_path} has_solutions={has_solutions}"
+    except Exception:
+        return "mediapipe diagnostic unavailable"
+
+
+def _ensure_mediapipe_solutions() -> None:
+    if mp is None:
+        raise RuntimeError(
+            "MediaPipe is not installed (or failed to import).\n\n"
+            "Fix (inside this app's .venv):\n"
+            "1) Open a terminal in this folder\n"
+            "2) Run: .venv\\Scripts\\python -m pip install -r requirements.txt\n"
+        )
+
+    if hasattr(mp, "solutions"):
+        return
+
+    detail = _mediapipe_diagnostic()
+    raise RuntimeError(
+        "MediaPipe import looks wrong: 'mediapipe' has no attribute 'solutions'.\n"
+        f"{detail}\n\n"
+        "Most common causes:\n"
+        "- A different 'mediapipe' module is being imported (shadowing).\n"
+        "- A broken/partial mediapipe install in the venv.\n\n"
+        "Fix (inside this app's .venv):\n"
+        "1) Open a terminal in this folder\n"
+        "2) Run: .venv\\Scripts\\python -m pip uninstall -y mediapipe\n"
+        "3) Run: .venv\\Scripts\\python -m pip install mediapipe==0.10.21\n"
+    )
 
 
 def _configure_input_latency() -> None:
@@ -199,6 +240,9 @@ class HandTracker:
     def __init__(self, process_w: int = 320, process_h: int = 240) -> None:
         self.process_w = process_w
         self.process_h = process_h
+
+        _ensure_mediapipe_solutions()
+
         self._mp_hands = mp.solutions.hands  # type: ignore[attr-defined]
         self._draw = mp.solutions.drawing_utils  # type: ignore[attr-defined]
         self._styles = mp.solutions.drawing_styles  # type: ignore[attr-defined]
@@ -754,7 +798,12 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1024, 680)
 
         self.camera = CameraSource(640, 480)
-        self.tracker = HandTracker(320, 240)
+        self._mediapipe_error: str | None = None
+        try:
+            self.tracker: HandTracker | None = HandTracker(320, 240)
+        except Exception as exc:
+            self.tracker = None
+            self._mediapipe_error = str(exc)
         self.gestures = GestureEngine()
         self.fps = 0.0
         self._fps_prev = time.monotonic()
@@ -769,9 +818,8 @@ class MainWindow(QMainWindow):
         self.debug = False
         self._overlay: StatusOverlay | None = None
 
-        local_icons = Path(__file__).resolve().parent / "assets" / "icons"
-        repo_icons = Path(__file__).resolve().parents[1] / "assets" / "icons"
-        self._icons_dir = local_icons if local_icons.exists() else repo_icons
+        # Self-contained: only use assets shipped inside the Windows Hover folder.
+        self._icons_dir = Path(__file__).resolve().parent / "assets" / "icons"
 
         self._lock = threading.Lock()
         self._frame = None
@@ -781,6 +829,11 @@ class MainWindow(QMainWindow):
         self._fingers = 0
 
         self._build_ui()
+
+        if self._mediapipe_error:
+            self.cam_status.setText("MediaPipe Error")
+            self.preview.setText(self._mediapipe_error)
+            self.start_btn.setEnabled(False)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._render)
@@ -1004,8 +1057,22 @@ class MainWindow(QMainWindow):
     def start_camera(self) -> None:
         if self.running:
             return
-        self.tracker.close()
-        self.tracker = HandTracker(320, 240)
+
+        if self._mediapipe_error:
+            self.preview.setText(self._mediapipe_error)
+            return
+
+        if self.tracker is not None:
+            self.tracker.close()
+        try:
+            self.tracker = HandTracker(320, 240)
+        except Exception as exc:
+            self.tracker = None
+            self._mediapipe_error = str(exc)
+            self.cam_status.setText("MediaPipe Error")
+            self.preview.setText(self._mediapipe_error)
+            self.start_btn.setEnabled(False)
+            return
         self.gestures = GestureEngine()
 
         if not self.camera.start():
@@ -1060,7 +1127,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         try:
-            self.tracker.close()
+            if self.tracker is not None:
+                self.tracker.close()
         except Exception:
             pass
         try:
@@ -1129,7 +1197,11 @@ class MainWindow(QMainWindow):
             h, w = frame.shape[:2]
             self.mapper.set_camera_size(w, h)
 
-            hand_data, hand_proto = self.tracker.detect(frame)
+            tracker = self.tracker
+            if tracker is None:
+                time.sleep(0.01)
+                continue
+            hand_data, hand_proto = tracker.detect(frame)
             result = self.gestures.detect(hand_data)
             gesture = result.gesture
             gesture_changed = gesture != last_action
@@ -1150,8 +1222,8 @@ class MainWindow(QMainWindow):
 
             if self.mouse_enabled and hand_data and gesture not in {GestureType.NONE, GestureType.PAUSE, GestureType.TASK_VIEW}:
                 tip = hand_data["xy"][8]
-                cam_x = int((tip[0] / float(self.tracker.process_w)) * w)
-                cam_y = int((tip[1] / float(self.tracker.process_h)) * h)
+                cam_x = int((tip[0] / float(tracker.process_w)) * w)
+                cam_y = int((tip[1] / float(tracker.process_h)) * h)
                 sx, sy = self.mapper.map_point(cam_x, cam_y)
 
                 if gesture == GestureType.MOVE:
@@ -1230,8 +1302,9 @@ class MainWindow(QMainWindow):
         x1, y1, x2, y2 = self.mapper.control_region()
         cv2.rectangle(rgb, (x1, y1), (x2, y2), (96, 165, 250), 2)
 
-        if self.debug and hand_proto is not None:
-            self.tracker.draw(rgb, hand_proto)
+        tracker = self.tracker
+        if self.debug and hand_proto is not None and tracker is not None:
+            tracker.draw(rgb, hand_proto)
 
         cv2.putText(
             rgb,
