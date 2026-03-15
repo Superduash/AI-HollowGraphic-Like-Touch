@@ -507,6 +507,29 @@ class MouseController:
             except Exception:
                 self._pdi = None
 
+    @staticmethod
+    def _native_scroll_windows(amount: int) -> bool:
+        if platform.system() != "Windows":
+            return False
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+            MOUSEEVENTF_WHEEL = 0x0800
+            WHEEL_DELTA = 120
+
+            clicks = int(amount)
+            if clicks == 0:
+                return True
+
+            # Clamp to avoid extreme values.
+            clicks = max(-50, min(50, clicks))
+            delta = int(clicks * WHEEL_DELTA)
+            user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
+            return True
+        except Exception:
+            return False
+
     @property
     def is_dragging(self) -> bool:
         return self._dragging
@@ -544,11 +567,26 @@ class MouseController:
             pyautogui.click(button="right")
 
     def scroll(self, amount: int) -> None:
-        if amount != 0:
-            if self._pdi is not None:
-                self._pdi.scroll(amount)
-            else:
-                pyautogui.scroll(amount)
+        if amount == 0:
+            return
+
+        pdi = self._pdi
+        if pdi is not None and hasattr(pdi, "scroll"):
+            try:
+                pdi.scroll(int(amount))
+                return
+            except Exception:
+                pass
+
+        if hasattr(pyautogui, "scroll"):
+            try:
+                pyautogui.scroll(int(amount))
+                return
+            except Exception:
+                pass
+
+        # Last resort: Windows-native wheel event.
+        self._native_scroll_windows(int(amount))
 
     def start_drag(self) -> None:
         if not self._dragging:
