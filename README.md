@@ -190,7 +190,13 @@ pip install -r requirements.txt
 Start the program:
 
 ```bash
-python src/main.py
+./run_app.sh
+```
+
+Or run directly with the project venv Python:
+
+```bash
+.venv/bin/python src/main.py
 ```
 
 Your webcam will open and the system will begin tracking your hand.
