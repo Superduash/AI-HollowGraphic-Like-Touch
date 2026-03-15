@@ -1,11 +1,12 @@
 """Root launcher so `python main.py` works from project directory."""
 
+from pathlib import Path
+import runpy
+
 
 def main() -> None:
-    # Import lazily so this file stays a lightweight entrypoint.
-    from src.main import run
-
-    run()
+    src_main = Path(__file__).resolve().parent / "src" / "main.py"
+    runpy.run_path(str(src_main), run_name="__main__")
 
 
 if __name__ == "__main__":
