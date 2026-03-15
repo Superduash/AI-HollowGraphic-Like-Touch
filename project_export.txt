@@ -334,8 +334,10 @@ if __name__ == "__main__":
 ===== FILE: requirements.txt =====
 mediapipe==0.10.21
 opencv-contrib-python==4.10.0.84
-numpy==1.26.4
+numpy>=1.26.0
 pyautogui==0.9.54
+customtkinter>=5.2.0
+Pillow>=10.0.0
 pyobjc-core==12.1; platform_system == "Darwin"
 pyobjc-framework-Quartz==12.1; platform_system == "Darwin"
 pytest==8.3.5
@@ -343,197 +345,437 @@ pytest==8.3.5
 ===== FILE: src/config.py =====
 """Central configuration for the AI gesture mouse controller."""
 
-# Camera settings
+# ---------------------------------------------------------------------------
+# Runtime-toggleable flags (defaults — GUI can change at runtime)
+# ---------------------------------------------------------------------------
+DEBUG_MODE = False
+PERFORMANCE_MODE = False
+ENABLE_MOUSE_CONTROL = True
+
+# ---------------------------------------------------------------------------
+# Camera
+# ---------------------------------------------------------------------------
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 CAMERA_INDEX = 0
-# Try multiple indexes in order for systems where default camera is not index 0.
 CAMERA_INDEXES = [0, 1, 2]
 
-# MediaPipe Hands settings
+# Processing resolution — MediaPipe runs on this smaller frame.
+PROCESS_WIDTH = 320
+PROCESS_HEIGHT = 240
+
+# ---------------------------------------------------------------------------
+# MediaPipe Hands
+# ---------------------------------------------------------------------------
 MAX_NUM_HANDS = 1
 MIN_DETECTION_CONFIDENCE = 0.7
 MIN_TRACKING_CONFIDENCE = 0.7
 
-# Cursor and gesture behavior
-SMOOTHING_WINDOW = 5
-SMOOTHING_ALPHA = 0.35
-LEFT_CLICK_PINCH_THRESHOLD = 35
-RIGHT_CLICK_PINCH_THRESHOLD = 40
-CLICK_COOLDOWN_SECONDS = 0.35
+# ---------------------------------------------------------------------------
+# Adaptive smoothing
+# ---------------------------------------------------------------------------
+ALPHA_SLOW = 0.25          # strong smoothing for slow movements
+ALPHA_FAST = 0.70          # light smoothing for fast movements
+SPEED_THRESHOLD = 50.0     # pixels — above this counts as "fast"
 
-# UI settings
+# ---------------------------------------------------------------------------
+# Gesture thresholds
+# ---------------------------------------------------------------------------
+PINCH_DISTANCE_THRESHOLD = 20
+PINCH_RELEASE_FACTOR = 1.3
+GESTURE_STABILITY_FRAMES = 2
+CLICK_COOLDOWN = 0.40
+DOUBLE_CLICK_WINDOW = 0.40
+DRAG_HOLD_TIME = 0.30
+SCROLL_SENSITIVITY = 2.0
+SCROLL_THRESHOLD = 10
+CURSOR_MOVE_THRESHOLD = 3
+
+# ---------------------------------------------------------------------------
+# Performance
+# ---------------------------------------------------------------------------
+TARGET_FPS = 60
+
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
 WINDOW_NAME = "AI-HollowGraphic-Like-Touch"
-TEXT_COLOR = (0, 255, 0)
-ALERT_COLOR = (0, 0, 255)
 
 ===== FILE: src/controller/cursor_mapper.py =====
-"""Map camera-space coordinates to screen-space coordinates."""
-
-from typing import Tuple
-
-import numpy as np
+"""Map camera-space coordinates to screen-space (pure Python, no numpy)."""
 
 from utils.math_utils import clamp
 
 
 class CursorMapper:
-    """Convert webcam pixel coordinates to display coordinates."""
+    """Convert process-frame pixel coordinates to display coordinates."""
+
+    __slots__ = ("cam_w", "cam_h", "scr_w", "scr_h", "scale_x", "scale_y")
 
     def __init__(self, cam_width: int, cam_height: int, screen_width: int, screen_height: int) -> None:
-        self.cam_width = cam_width
-        self.cam_height = cam_height
-        self.screen_width = screen_width
-        self.screen_height = screen_height
+        self.cam_w = cam_width
+        self.cam_h = cam_height
+        self.scr_w = screen_width - 1
+        self.scr_h = screen_height - 1
+        # Pre-compute scale factors once
+        self.scale_x = self.scr_w / cam_width if cam_width else 1.0
+        self.scale_y = self.scr_h / cam_height if cam_height else 1.0
 
-    def map_to_screen(self, cam_x: int, cam_y: int) -> Tuple[int, int]:
-        """Interpolate camera coordinate onto screen resolution."""
-        clamped_x = clamp(cam_x, 0, self.cam_width)
-        clamped_y = clamp(cam_y, 0, self.cam_height)
-
-        screen_x = np.interp(clamped_x, [0, self.cam_width], [0, self.screen_width - 1])
-        screen_y = np.interp(clamped_y, [0, self.cam_height], [0, self.screen_height - 1])
-
-        return int(screen_x), int(screen_y)
+    def map_to_screen(self, cam_x: int, cam_y: int) -> tuple[int, int]:
+        sx = clamp(cam_x, 0, self.cam_w) * self.scale_x
+        sy = clamp(cam_y, 0, self.cam_h) * self.scale_y
+        return int(sx), int(sy)
 
 ===== FILE: src/controller/mouse_controller.py =====
-"""PyAutoGUI mouse commands with click cooldown protection."""
+"""Mouse control: move, click, double-click, scroll, drag. Supports pydirectinput on Windows."""
 
-import time
-
+import platform
 import pyautogui
+from config import CLICK_COOLDOWN, CURSOR_MOVE_THRESHOLD
 
-from config import CLICK_COOLDOWN_SECONDS
+pyautogui.FAILSAFE = False
+pyautogui.PAUSE = 0
+
+# On Windows, prefer pydirectinput for lower-latency cursor updates.
+_pdi = None
+if platform.system() == "Windows":
+    try:
+        import pydirectinput
+        pydirectinput.FAILSAFE = False
+        pydirectinput.PAUSE = 0
+        _pdi = pydirectinput
+    except ImportError:
+        pass
+
+
+def _move(x, y):
+    if _pdi:
+        _pdi.moveTo(x, y)
+    else:
+        pyautogui.moveTo(x, y)
 
 
 class MouseController:
-    """Control mouse movement and clicks safely."""
-
-    def __init__(self, click_cooldown_seconds: float = CLICK_COOLDOWN_SECONDS) -> None:
-        pyautogui.FAILSAFE = False
-        pyautogui.PAUSE = 0
-        self.click_cooldown_seconds = click_cooldown_seconds
-        self._last_left_click_time = 0.0
-        self._last_right_click_time = 0.0
+    def __init__(self, cooldown=CLICK_COOLDOWN, threshold=CURSOR_MOVE_THRESHOLD):
+        self.thresh_sq = threshold * threshold
+        self._lx = -1
+        self._ly = -1
+        self._dragging = False
         self.is_available = True
         self.last_error_message = ""
 
-    def _mark_unavailable(self, error: Exception) -> None:
-        self.is_available = False
-        self.last_error_message = str(error)
+    def _safe(self, fn, *a, **kw):
+        if not self.is_available:
+            return False
+        try:
+            fn(*a, **kw)
+            return True
+        except Exception as e:
+            self.is_available = False
+            self.last_error_message = str(e)
+            return False
 
-    def move_cursor(self, x: int, y: int) -> None:
-        """Move cursor instantly to target screen position."""
+    def move_cursor(self, x, y):
         if not self.is_available:
             return
+        dx, dy = x - self._lx, y - self._ly
+        if dx * dx + dy * dy < self.thresh_sq:
+            return
+        if self._safe(_move, x, y):
+            self._lx, self._ly = x, y
 
-        try:
-            pyautogui.moveTo(x, y)
-        except Exception as error:
-            self._mark_unavailable(error)
+    def left_click(self):
+        return self._safe(pyautogui.click, button="left")
 
-    def left_click(self) -> bool:
-        """Trigger left click if cooldown has elapsed."""
-        if not self.is_available:
-            return False
+    def right_click(self):
+        return self._safe(pyautogui.click, button="right")
 
-        now = time.time()
-        if now - self._last_left_click_time < self.click_cooldown_seconds:
-            return False
+    def double_click(self):
+        return self._safe(pyautogui.doubleClick)
 
-        try:
-            pyautogui.click(button="left")
-        except Exception as error:
-            self._mark_unavailable(error)
-            return False
+    def scroll(self, amount):
+        if amount != 0:
+            self._safe(pyautogui.scroll, amount)
 
-        self._last_left_click_time = now
-        return True
+    def start_drag(self):
+        if not self._dragging:
+            self._dragging = True
+            self._safe(pyautogui.mouseDown, button="left")
 
-    def right_click(self) -> bool:
-        """Trigger right click if cooldown has elapsed."""
-        if not self.is_available:
-            return False
+    def end_drag(self):
+        if self._dragging:
+            self._dragging = False
+            self._safe(pyautogui.mouseUp, button="left")
 
-        now = time.time()
-        if now - self._last_right_click_time < self.click_cooldown_seconds:
-            return False
-
-        try:
-            pyautogui.click(button="right")
-        except Exception as error:
-            self._mark_unavailable(error)
-            return False
-
-        self._last_right_click_time = now
-        return True
+    @property
+    def is_dragging(self):
+        return self._dragging
 
 ===== FILE: src/gestures/gesture_detector.py =====
-"""Gesture detection logic for pinch-based mouse clicks."""
+"""Robust gesture detection engine with state machine and priority system.
 
-from dataclasses import dataclass
-from typing import List, Tuple
+Priority order: DRAG > CLICK > SCROLL > MOVE
+All detection is O(1) per frame using only required landmark indices.
+"""
 
-from config import LEFT_CLICK_PINCH_THRESHOLD, RIGHT_CLICK_PINCH_THRESHOLD
+import time
+
+from config import (
+    CLICK_COOLDOWN,
+    DOUBLE_CLICK_WINDOW,
+    DRAG_HOLD_TIME,
+    GESTURE_STABILITY_FRAMES,
+    PINCH_DISTANCE_THRESHOLD,
+    PINCH_RELEASE_FACTOR,
+    SCROLL_SENSITIVITY,
+    SCROLL_THRESHOLD,
+)
 from gestures.gesture_types import GestureType
-from tracking.landmark_processor import get_index_tip, get_middle_tip, get_thumb_tip
-from utils.math_utils import distance_between_points
+from tracking.landmark_processor import get_finger_states
+
+# Landmark indices (inlined for zero function-call overhead)
+_THUMB = 4
+_INDEX = 8
+_MIDDLE = 12
 
 
-@dataclass
-class GestureState:
-    """Detected gesture and optional debug distances."""
+class GestureResult:
+    """Output of gesture detection for one frame."""
+    __slots__ = ("gesture", "scroll_delta")
 
-    gesture: GestureType
-    thumb_index_distance: float | None = None
-    thumb_middle_distance: float | None = None
+    def __init__(self, gesture: GestureType = GestureType.NONE, scroll_delta: int = 0) -> None:
+        self.gesture = gesture
+        self.scroll_delta = scroll_delta
+
+
+_NONE = GestureResult()
+_PAUSE = GestureResult(GestureType.PAUSE)
+_MOVE = GestureResult(GestureType.MOVE)
+_OPEN_PALM = GestureResult(GestureType.OPEN_PALM)
+_VOLUME = GestureResult(GestureType.VOLUME)
+_SWITCH = GestureResult(GestureType.SWITCH_WINDOW)
 
 
 class GestureDetector:
-    """Detect movement and pinch gestures from hand landmarks."""
+    """State-machine gesture detector with stability, cooldowns, and hysteresis."""
 
-    def __init__(
-        self,
-        left_pinch_threshold: float = LEFT_CLICK_PINCH_THRESHOLD,
-        right_pinch_threshold: float = RIGHT_CLICK_PINCH_THRESHOLD,
-    ) -> None:
-        self.left_pinch_threshold = left_pinch_threshold
-        self.right_pinch_threshold = right_pinch_threshold
+    def __init__(self) -> None:
+        # State machine
+        self._prev_raw: GestureType = GestureType.NONE
+        self._raw_frames: int = 0
 
-    def detect(self, landmarks: List[Tuple[int, int]] | None) -> GestureState:
-        """Return the current gesture from the 21-point hand landmarks."""
-        if not landmarks or len(landmarks) < 13:
-            return GestureState(gesture=GestureType.NONE)
+        # Pinch tracking
+        self._is_pinching: bool = False
+        self._pinch_start: float = 0.0
+        self._click_fired: bool = False
 
-        thumb_tip = get_thumb_tip(landmarks)
-        index_tip = get_index_tip(landmarks)
-        middle_tip = get_middle_tip(landmarks)
+        # Drag
+        self._is_dragging: bool = False
 
-        if not thumb_tip or not index_tip or not middle_tip:
-            return GestureState(gesture=GestureType.NONE)
+        # Click / double-click cooldown
+        self._last_click_time: float = 0.0
 
-        thumb_index_distance = distance_between_points(thumb_tip, index_tip)
-        thumb_middle_distance = distance_between_points(thumb_tip, middle_tip)
+        # Right-click cooldown
+        self._last_rclick_time: float = 0.0
+        self._rclick_fired: bool = False
 
-        if thumb_index_distance <= self.left_pinch_threshold:
-            return GestureState(
-                gesture=GestureType.LEFT_CLICK,
-                thumb_index_distance=thumb_index_distance,
-                thumb_middle_distance=thumb_middle_distance,
-            )
+        # Two-finger / scroll state
+        self._two_finger_frames: int = 0
+        self._two_finger_y_accum: float = 0.0
+        self._prev_scroll_y: float = -1.0
+        self._in_scroll_mode: bool = False
+        self._smooth_scroll: float = 0.0
 
-        if thumb_middle_distance <= self.right_pinch_threshold:
-            return GestureState(
-                gesture=GestureType.RIGHT_CLICK,
-                thumb_index_distance=thumb_index_distance,
-                thumb_middle_distance=thumb_middle_distance,
-            )
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-        return GestureState(
-            gesture=GestureType.MOVE_CURSOR,
-            thumb_index_distance=thumb_index_distance,
-            thumb_middle_distance=thumb_middle_distance,
-        )
+    @property
+    def is_dragging(self) -> bool:
+        return self._is_dragging
+
+    def detect(self, landmarks: list[tuple[int, int]] | None) -> GestureResult:
+        """Classify the current gesture from 21-point landmarks. O(1)."""
+        if not landmarks or len(landmarks) < 21:
+            self._reset_all()
+            return _NONE
+
+        now = time.monotonic()
+
+        # --- Pinch distance (thumb ↔ index) ---
+        tx, ty = landmarks[_THUMB]
+        ix, iy = landmarks[_INDEX]
+        dx, dy = tx - ix, ty - iy
+        pinch_dist = (dx * dx + dy * dy) ** 0.5
+
+        enter_thresh = PINCH_DISTANCE_THRESHOLD
+        exit_thresh = PINCH_DISTANCE_THRESHOLD * PINCH_RELEASE_FACTOR
+
+        # Hysteresis: enter at tight threshold, exit at looser threshold
+        if self._is_pinching:
+            is_pinch = pinch_dist < exit_thresh
+        else:
+            is_pinch = pinch_dist < enter_thresh
+
+        # ==============================================================
+        # PRIORITY 1 — DRAG / CLICK (pinch-based)
+        # ==============================================================
+        if is_pinch:
+            if not self._is_pinching:
+                self._is_pinching = True
+                self._pinch_start = now
+                self._click_fired = False
+                self._is_dragging = False
+            self._reset_scroll()
+
+            hold = now - self._pinch_start
+
+            # DRAG: pinch held beyond threshold
+            if hold >= DRAG_HOLD_TIME:
+                self._is_dragging = True
+                self._bump_raw(GestureType.DRAG)
+                return GestureResult(GestureType.DRAG)
+
+            # LEFT_CLICK / DOUBLE_CLICK: pinch stable for N frames
+            self._bump_raw(GestureType.LEFT_CLICK)
+            if self._raw_frames >= GESTURE_STABILITY_FRAMES and not self._click_fired:
+                self._click_fired = True
+                if now - self._last_click_time < DOUBLE_CLICK_WINDOW:
+                    self._last_click_time = now
+                    return GestureResult(GestureType.DOUBLE_CLICK)
+                self._last_click_time = now
+                return GestureResult(GestureType.LEFT_CLICK)
+
+            # Still pinching but not yet stable → keep moving cursor
+            return _MOVE
+
+        # Pinch just released
+        if self._is_pinching:
+            was_drag = self._is_dragging
+            self._is_pinching = False
+            self._is_dragging = False
+            if was_drag:
+                # Return NONE so caller can detect drag→non-drag transition
+                self._bump_raw(GestureType.NONE)
+                return _NONE
+
+        # ==============================================================
+        # FINGER-PATTERN GESTURES (no pinch active)
+        # ==============================================================
+        fingers = get_finger_states(landmarks)
+
+        # PAUSE — closed fist (4 fingers down, ignore thumb)
+        if not fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
+            self._reset_scroll()
+            self._bump_raw(GestureType.PAUSE)
+            return _PAUSE
+
+        # OPEN PALM — all 5 up
+        if fingers.thumb and fingers.index and fingers.middle and fingers.ring and fingers.pinky:
+            self._reset_scroll()
+            self._bump_raw(GestureType.OPEN_PALM)
+            return _OPEN_PALM
+
+        # VOLUME — 4 fingers up, thumb down
+        if not fingers.thumb and fingers.index and fingers.middle and fingers.ring and fingers.pinky:
+            self._reset_scroll()
+            self._bump_raw(GestureType.VOLUME)
+            return _VOLUME
+
+        # SWITCH WINDOW — index + middle + ring up, pinky down
+        if fingers.index and fingers.middle and fingers.ring and not fingers.pinky:
+            self._reset_scroll()
+            self._bump_raw(GestureType.SWITCH_WINDOW)
+            return _SWITCH
+
+        # TWO FINGERS (RIGHT_CLICK / SCROLL) — index + middle up, ring + pinky down
+        if fingers.index and fingers.middle and not fingers.ring and not fingers.pinky:
+            return self._handle_two_finger(landmarks, now)
+
+        # MOVE — index up only
+        if fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
+            self._reset_scroll()
+            self._bump_raw(GestureType.MOVE)
+            return _MOVE
+
+        # Fallback
+        self._reset_scroll()
+        self._bump_raw(GestureType.NONE)
+        return _NONE
+
+    # ------------------------------------------------------------------
+    # Two-finger handler (RIGHT_CLICK vs SCROLL discrimination)
+    # ------------------------------------------------------------------
+
+    def _handle_two_finger(self, landmarks: list[tuple[int, int]], now: float) -> GestureResult:
+        iy = landmarks[_INDEX][1]
+        my = landmarks[_MIDDLE][1]
+        current_y = (iy + my) * 0.5
+
+        if self._two_finger_frames == 0:
+            # Just entered two-finger mode
+            self._prev_scroll_y = current_y
+            self._two_finger_y_accum = 0.0
+            self._rclick_fired = False
+            self._in_scroll_mode = False
+            self._smooth_scroll = 0.0
+
+        self._two_finger_frames += 1
+        y_delta = current_y - self._prev_scroll_y
+        self._two_finger_y_accum += abs(y_delta)
+        self._prev_scroll_y = current_y
+
+        # Decision phase: wait STABILITY_FRAMES frames then decide
+        if not self._in_scroll_mode and self._two_finger_frames >= GESTURE_STABILITY_FRAMES:
+            if self._two_finger_y_accum > SCROLL_THRESHOLD:
+                # Significant movement → scroll (no right click)
+                self._in_scroll_mode = True
+            else:
+                # Stable hold → right click (once, then enter scroll standby)
+                if not self._rclick_fired and now - self._last_rclick_time >= CLICK_COOLDOWN:
+                    self._rclick_fired = True
+                    self._last_rclick_time = now
+                    self._bump_raw(GestureType.RIGHT_CLICK)
+                    return GestureResult(GestureType.RIGHT_CLICK)
+                self._in_scroll_mode = True
+
+        if self._in_scroll_mode:
+            # Smooth the scroll delta (EMA)
+            raw = -y_delta * SCROLL_SENSITIVITY
+            self._smooth_scroll = 0.6 * self._smooth_scroll + 0.4 * raw
+            amount = int(self._smooth_scroll)
+            self._bump_raw(GestureType.SCROLL)
+            return GestureResult(GestureType.SCROLL, scroll_delta=amount)
+
+        # Waiting for decision
+        self._bump_raw(GestureType.NONE)
+        return _NONE
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _bump_raw(self, raw: GestureType) -> None:
+        if raw == self._prev_raw:
+            self._raw_frames += 1
+        else:
+            self._prev_raw = raw
+            self._raw_frames = 1
+
+    def _reset_scroll(self) -> None:
+        self._two_finger_frames = 0
+        self._two_finger_y_accum = 0.0
+        self._prev_scroll_y = -1.0
+        self._in_scroll_mode = False
+        self._smooth_scroll = 0.0
+
+    def _reset_all(self) -> None:
+        if self._is_dragging:
+            self._is_dragging = False
+        self._is_pinching = False
+        self._reset_scroll()
+        self._prev_raw = GestureType.NONE
+        self._raw_frames = 0
 
 ===== FILE: src/gestures/gesture_types.py =====
 """Gesture labels used across the application."""
@@ -543,420 +785,902 @@ from enum import Enum
 
 class GestureType(str, Enum):
     NONE = "NONE"
-    MOVE_CURSOR = "MOVE_CURSOR"
+    MOVE = "MOVE"
     LEFT_CLICK = "LEFT_CLICK"
+    DOUBLE_CLICK = "DOUBLE_CLICK"
     RIGHT_CLICK = "RIGHT_CLICK"
+    SCROLL = "SCROLL"
+    DRAG = "DRAG"
+    PAUSE = "PAUSE"
+    VOLUME = "VOLUME"
+    SWITCH_WINDOW = "SWITCH_WINDOW"
+    OPEN_PALM = "OPEN_PALM"
 
-===== FILE: src/main.py =====
-"""Entry point for AI-HollowGraphic-Like-Touch."""
+===== FILE: src/gui/gesture_help_panel.py =====
+"""Gesture guide panel for the GUI."""
 
-import platform
+import customtkinter as ctk
+
+_GESTURES = [
+    ("☝️  Index finger up", "Move cursor"),
+    ("🤏  Thumb + index pinch", "Left click"),
+    ("🤏🤏  Two pinches (fast)", "Double click"),
+    ("✌️  Index + middle up", "Right click"),
+    ("✌️↕  Two fingers + move", "Scroll"),
+    ("🤏⏳  Pinch hold >0.3s", "Drag"),
+    ("✊  Closed fist", "Pause"),
+]
+
+
+class GestureHelpPanel(ctk.CTkFrame):
+    """Scrollable gesture reference panel."""
+
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, **kwargs)
+
+        ctk.CTkLabel(self, text="Gesture Guide",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(8, 4))
+
+        for gesture, action in _GESTURES:
+            row = ctk.CTkFrame(self, fg_color="transparent")
+            row.pack(fill="x", padx=8, pady=2)
+            ctk.CTkLabel(row, text=gesture, font=ctk.CTkFont(size=12),
+                         anchor="w", width=170).pack(side="left")
+            ctk.CTkLabel(row, text=f"→ {action}", font=ctk.CTkFont(size=12),
+                         text_color="#888888", anchor="w").pack(side="left")
+
+===== FILE: src/gui/main_window.py =====
+"""Main application window — customtkinter GUI with threaded processing."""
+
+import threading
+import time
+import traceback
 
 import cv2
+import customtkinter as ctk
+import numpy as np
 import pyautogui
+from PIL import Image, ImageTk
 
-from config import (
-    CAMERA_HEIGHT,
-    CAMERA_INDEX,
-    CAMERA_INDEXES,
-    CAMERA_WIDTH,
-    SMOOTHING_ALPHA,
-    SMOOTHING_WINDOW,
-    WINDOW_NAME,
-)
+from config import PROCESS_HEIGHT, PROCESS_WIDTH, TARGET_FPS
 from controller.cursor_mapper import CursorMapper
 from controller.mouse_controller import MouseController
 from gestures.gesture_detector import GestureDetector
 from gestures.gesture_types import GestureType
+from gui.gesture_help_panel import GestureHelpPanel
 from tracking.hand_tracker import HandTracker
-from tracking.landmark_processor import get_index_tip
+from utils.camera_thread import CameraThread
 from utils.fps_counter import FPSCounter
-from utils.smoothing import CursorSmoother
+from utils.smoothing import AdaptiveSmoother
+
+_PREVIEW_W, _PREVIEW_H = 640, 480
+_PAUSE_GESTURES = frozenset({GestureType.PAUSE, GestureType.NONE})
+
+# Overlay display names (shorter, user-friendly)
+_OVERLAY_LABELS = {
+    GestureType.NONE: "",
+    GestureType.MOVE: "MOVE",
+    GestureType.LEFT_CLICK: "LEFT CLICK",
+    GestureType.DOUBLE_CLICK: "DOUBLE CLICK",
+    GestureType.RIGHT_CLICK: "RIGHT CLICK",
+    GestureType.SCROLL: "SCROLL",
+    GestureType.DRAG: "DRAG",
+    GestureType.PAUSE: "PAUSED",
+    GestureType.VOLUME: "VOLUME",
+    GestureType.SWITCH_WINDOW: "SWITCH",
+    GestureType.OPEN_PALM: "OPEN PALM",
+}
 
 
-def _get_capture_backends() -> list[int]:
-    """Return preferred OpenCV capture backends for this operating system."""
-    system_name = platform.system().lower()
-    if system_name == "darwin":
-        backends = [getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY), cv2.CAP_ANY]
-    elif system_name == "windows":
-        backends = [getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY), cv2.CAP_ANY]
-    else:
-        backends = [getattr(cv2, "CAP_V4L2", cv2.CAP_ANY), cv2.CAP_ANY]
+class MainWindow(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+        self.title("AI Holographic Touch")
+        self.geometry("1060x640")
+        self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    unique_backends: list[int] = []
-    for backend in backends:
-        if backend not in unique_backends:
-            unique_backends.append(backend)
-    return unique_backends
+        # --- Components ---
+        self._camera = CameraThread()
+        self._tracker = HandTracker()
+        self._detector = GestureDetector()
+        self._smoother = AdaptiveSmoother()
+        self._fps = FPSCounter(target_fps=TARGET_FPS)
+        try:
+            sw, sh = pyautogui.size()
+        except Exception:
+            sw, sh = 1920, 1080
+        self._mapper = CursorMapper(PROCESS_WIDTH, PROCESS_HEIGHT, sw, sh)
+        self._mouse = MouseController()
+
+        # --- Runtime state ---
+        self._processing = False
+        self._proc_thread = None
+        self._mouse_enabled = False
+        self._debug_mode = False
+        self._perf_mode = False
+        self._was_dragging = False
+        self._closing = False
+
+        # --- Thread-safe results ---
+        self._lock = threading.Lock()
+        self._disp_frame = None
+        self._gesture = GestureType.NONE
+        self._hand_ok = False
+        self._fps_val = 0.0
+        self._error_msg = ""
+
+        self._tk_img = None
+        self._prev_overlay_text = ""
+        self._build_ui()
+
+    # ==================================================================
+    # UI construction
+    # ==================================================================
+
+    def _build_ui(self):
+        # --- Top bar ---
+        top = ctk.CTkFrame(self, height=44, corner_radius=0)
+        top.pack(fill="x")
+        ctk.CTkLabel(top, text="  🖐️ AI Holographic Touch",
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(side="left", padx=8)
+        self._fps_lbl = ctk.CTkLabel(top, text="FPS: —", font=ctk.CTkFont(size=13))
+        self._fps_lbl.pack(side="right", padx=14)
+
+        # --- Body ---
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=6, pady=(4, 0))
+
+        # Preview
+        pf = ctk.CTkFrame(body)
+        pf.pack(side="left", fill="both", expand=True, padx=(0, 4))
+        self._preview = ctk.CTkLabel(pf, text="Camera Off\n\nPress  ▶ Start Camera",
+                                     font=ctk.CTkFont(size=15))
+        self._preview.pack(expand=True, fill="both")
+
+        # Right panel
+        rp = ctk.CTkFrame(body, width=270)
+        rp.pack(side="right", fill="y")
+        rp.pack_propagate(False)
+
+        # Status section
+        sf = ctk.CTkFrame(rp)
+        sf.pack(fill="x", padx=8, pady=(8, 4))
+        ctk.CTkLabel(sf, text="Status", font=ctk.CTkFont(size=13, weight="bold")).pack(pady=(6, 2))
+        self._gest_lbl = ctk.CTkLabel(sf, text="NONE", font=ctk.CTkFont(size=16, weight="bold"),
+                                      text_color="#3B8ED0")
+        self._gest_lbl.pack(pady=2)
+        self._hand_lbl = ctk.CTkLabel(sf, text="Hand: —", font=ctk.CTkFont(size=11))
+        self._hand_lbl.pack(pady=1)
+        self._mouse_lbl = ctk.CTkLabel(sf, text="Mouse: OFF", font=ctk.CTkFont(size=11))
+        self._mouse_lbl.pack(pady=(1, 6))
+
+        # Gesture guide
+        GestureHelpPanel(rp).pack(fill="both", expand=True, padx=8, pady=4)
+
+        # --- Bottom bar ---
+        bot = ctk.CTkFrame(self, height=52, corner_radius=0)
+        bot.pack(fill="x", pady=(2, 0))
+        bc = {"height": 32, "width": 130, "font": ctk.CTkFont(size=12)}
+
+        self._btn_start = ctk.CTkButton(bot, text="▶  Start", command=self._start, **bc)
+        self._btn_start.pack(side="left", padx=4, pady=8)
+        self._btn_stop = ctk.CTkButton(bot, text="⬛  Stop", command=self._stop,
+                                       state="disabled", **bc)
+        self._btn_stop.pack(side="left", padx=4, pady=8)
+        self._btn_mouse = ctk.CTkButton(bot, text="🖱  Mouse ON", command=self._toggle_mouse, **bc)
+        self._btn_mouse.pack(side="left", padx=4, pady=8)
+        self._btn_perf = ctk.CTkButton(bot, text="⚡ Perf", command=self._toggle_perf, **bc)
+        self._btn_perf.pack(side="left", padx=4, pady=8)
+        self._btn_debug = ctk.CTkButton(bot, text="🔧 Debug", command=self._toggle_debug, **bc)
+        self._btn_debug.pack(side="left", padx=4, pady=8)
+
+    # ==================================================================
+    # Button handlers
+    # ==================================================================
+
+    def _start(self):
+        if not self._camera.start():
+            self._preview.configure(text="❌ Cannot open camera\nCheck permissions")
+            return
+        self._processing = True
+        self._proc_thread = threading.Thread(target=self._process_loop, daemon=True)
+        self._proc_thread.start()
+        self._btn_start.configure(state="disabled")
+        self._btn_stop.configure(state="normal")
+        self._update_gui()
+
+    def _stop(self):
+        self._processing = False
+        if self._proc_thread:
+            self._proc_thread.join(timeout=2.0)
+            self._proc_thread = None
+        self._camera.stop()
+        if self._mouse.is_dragging:
+            self._mouse.end_drag()
+        self._was_dragging = False
+        self._smoother.reset()
+        self._btn_start.configure(state="normal")
+        self._btn_stop.configure(state="disabled")
+        self._tk_img = None
+        self._preview.configure(image=None, text="Camera Off")
+
+    def _toggle_mouse(self):
+        self._mouse_enabled = not self._mouse_enabled
+        t = "🖱  Mouse OFF" if self._mouse_enabled else "🖱  Mouse ON"
+        self._btn_mouse.configure(text=t)
+
+    def _toggle_perf(self):
+        self._perf_mode = not self._perf_mode
+        c = "#2FA572" if self._perf_mode else "#3B8ED0"
+        self._btn_perf.configure(fg_color=c)
+
+    def _toggle_debug(self):
+        self._debug_mode = not self._debug_mode
+        c = "#2FA572" if self._debug_mode else "#3B8ED0"
+        self._btn_debug.configure(fg_color=c)
+
+    def _on_close(self):
+        self._closing = True
+        self._stop()
+        self._tracker.close()
+        self.destroy()
+
+    # ==================================================================
+    # Processing thread
+    # ==================================================================
+
+    def _process_loop(self):
+        skip = False
+        while self._processing:
+            # Camera disconnected?
+            if not self._camera.is_running:
+                with self._lock:
+                    self._error_msg = "Camera disconnected"
+                self._processing = False
+                break
+
+            frame = self._camera.get_frame()
+            if frame is None:
+                time.sleep(0.005)
+                continue
+
+            frame = cv2.flip(frame, 1)
+
+            # Frame skipping in performance mode
+            if skip and self._perf_mode:
+                skip = False
+                # Use motion prediction during skipped frames
+                if self._mouse_enabled:
+                    px, py = self._smoother.predict()
+                    if px >= 0:
+                        self._mouse.move_cursor(px, py)
+                with self._lock:
+                    self._disp_frame = frame
+                continue
+
+            try:
+                landmarks = self._tracker.process_frame(frame)
+                result = self._detector.detect(landmarks)
+            except Exception:
+                landmarks = None
+                result = self._detector.detect(None)
+
+            gesture = result.gesture
+
+            # Mouse control
+            if self._mouse_enabled and landmarks and gesture not in _PAUSE_GESTURES:
+                tip = landmarks[8]
+                tx, ty = self._mapper.map_to_screen(tip[0], tip[1])
+                sx, sy = self._smoother.smooth(tx, ty)
+
+                if gesture == GestureType.MOVE:
+                    self._mouse.move_cursor(sx, sy)
+                elif gesture == GestureType.LEFT_CLICK:
+                    self._mouse.move_cursor(sx, sy)
+                    self._mouse.left_click()
+                elif gesture == GestureType.DOUBLE_CLICK:
+                    self._mouse.move_cursor(sx, sy)
+                    self._mouse.double_click()
+                elif gesture == GestureType.RIGHT_CLICK:
+                    self._mouse.right_click()
+                elif gesture == GestureType.SCROLL:
+                    if result.scroll_delta != 0:
+                        self._mouse.scroll(result.scroll_delta)
+                elif gesture == GestureType.DRAG:
+                    self._mouse.move_cursor(sx, sy)
+                    if not self._was_dragging:
+                        self._mouse.start_drag()
+
+                if self._was_dragging and gesture != GestureType.DRAG:
+                    self._mouse.end_drag()
+                self._was_dragging = gesture == GestureType.DRAG
+
+            elif self._was_dragging:
+                self._mouse.end_drag()
+                self._was_dragging = False
+
+            # Debug overlay (landmarks)
+            if self._debug_mode and landmarks:
+                self._tracker.draw_debug(frame, landmarks)
+
+            # Gesture action overlay (always shown)
+            _draw_action_overlay(frame, gesture)
+
+            fps_v = self._fps.update()
+            with self._lock:
+                self._disp_frame = frame
+                self._gesture = gesture
+                self._hand_ok = landmarks is not None
+                self._fps_val = fps_v
+
+            if self._fps.should_skip():
+                skip = True
+
+    # ==================================================================
+    # GUI update (runs on main thread via after())
+    # ==================================================================
+
+    def _update_gui(self):
+        if self._closing or not self._processing:
+            # Check for error to display
+            with self._lock:
+                err = self._error_msg
+            if err:
+                try:
+                    self._preview.configure(image=None, text=f"⚠ {err}")
+                    self._btn_start.configure(state="normal")
+                    self._btn_stop.configure(state="disabled")
+                except Exception:
+                    pass
+            return
+
+        with self._lock:
+            frame = self._disp_frame
+            gesture = self._gesture
+            hand = self._hand_ok
+            fps = self._fps_val
+
+        if frame is not None:
+            try:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil = Image.fromarray(rgb).resize((_PREVIEW_W, _PREVIEW_H), Image.NEAREST)
+                self._tk_img = ImageTk.PhotoImage(image=pil)
+                self._preview.configure(image=self._tk_img, text="")
+            except Exception:
+                pass
+
+        self._fps_lbl.configure(text=f"FPS: {fps:.0f}")
+        self._gest_lbl.configure(text=gesture.value)
+        hc = "#2FA572" if hand else "#E74C3C"
+        self._hand_lbl.configure(text=f"Hand: {'Detected ✓' if hand else 'Not Found'}",
+                                 text_color=hc)
+        mc = "#2FA572" if self._mouse_enabled else "#888888"
+        self._mouse_lbl.configure(text=f"Mouse: {'ON' if self._mouse_enabled else 'OFF'}",
+                                  text_color=mc)
+
+        self.after(33, self._update_gui)
 
 
-def _open_camera_with_fallback() -> tuple[cv2.VideoCapture | None, int | None, int | None]:
-    """Try multiple camera indexes/backends and return the first working capture."""
-    indexes = [CAMERA_INDEX]
-    for extra_index in CAMERA_INDEXES:
-        if extra_index not in indexes:
-            indexes.append(extra_index)
+def _draw_action_overlay(frame, gesture: GestureType) -> None:
+    """Draw a semi-transparent action badge near the top-right of the frame."""
+    label = _OVERLAY_LABELS.get(gesture, "")
+    if not label:
+        return
 
-    for backend in _get_capture_backends():
-        for index in indexes:
-            cap = cv2.VideoCapture(index, backend)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale = 0.65
+    thickness = 2
+    (tw, th), baseline = cv2.getTextSize(label, font, scale, thickness)
 
-            if cap.isOpened():
-                return cap, index, backend
-            cap.release()
+    pad_x, pad_y = 14, 10
+    box_w = tw + pad_x * 2
+    box_h = th + baseline + pad_y * 2
 
-    return None, None, None
+    fh, fw = frame.shape[:2]
+    margin = 16
+    x1 = fw - box_w - margin
+    y1 = margin
+    x2 = x1 + box_w
+    y2 = y1 + box_h
+
+    # Clamp to frame bounds
+    x1, y1 = max(x1, 0), max(y1, 0)
+    x2, y2 = min(x2, fw), min(y2, fh)
+
+    # Semi-transparent dark background (~65% opacity)
+    roi = frame[y1:y2, x1:x2]
+    overlay = np.zeros_like(roi, dtype=np.uint8)
+    overlay[:] = (30, 30, 30)
+    cv2.addWeighted(overlay, 0.65, roi, 0.35, 0, roi)
+
+    # Text (white)
+    text_x = x1 + pad_x
+    text_y = y1 + pad_y + th
+    cv2.putText(frame, label, (text_x, text_y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
+===== FILE: src/main.py =====
+"""Entry point for AI-HollowGraphic-Like-Touch desktop application."""
+
+from gui.main_window import MainWindow
 
 
 def run() -> None:
-    """Run the webcam loop and control the mouse from hand gestures."""
-    cap, active_camera_index, active_backend = _open_camera_with_fallback()
-
-    if cap is None:
-        print("Error: Could not open webcam with any configured camera index.")
-        print(f"Tried indexes: {[CAMERA_INDEX] + [i for i in CAMERA_INDEXES if i != CAMERA_INDEX]}")
-        if platform.system().lower() == "darwin":
-            print("On macOS, allow Camera access for Terminal/IDE in System Settings > Privacy & Security > Camera.")
-        return
-
-    mouse_init_warning = ""
-    try:
-        screen_width, screen_height = pyautogui.size()
-    except Exception as error:
-        # Keep app running for preview/debug even when OS blocks automation APIs.
-        screen_width, screen_height = 1920, 1080
-        mouse_init_warning = f"Mouse API warning: {error}"
-
-    hand_tracker = HandTracker()
-    gesture_detector = GestureDetector()
-    mouse_controller = MouseController()
-    if mouse_init_warning:
-        mouse_controller.is_available = False
-        mouse_controller.last_error_message = mouse_init_warning
-    cursor_mapper = CursorMapper(CAMERA_WIDTH, CAMERA_HEIGHT, screen_width, screen_height)
-    smoother = CursorSmoother(window_size=SMOOTHING_WINDOW, alpha=SMOOTHING_ALPHA)
-    fps_counter = FPSCounter()
-
-    while True:
-        success, frame = cap.read()
-        if not success:
-            break
-
-        frame = cv2.flip(frame, 1)
-        tracking_result = hand_tracker.process_frame(frame)
-        hand_tracker.draw_landmarks(frame, tracking_result.mp_result)
-
-        gesture_state_text = GestureType.NONE.value
-        if tracking_result.landmarks:
-            index_tip = get_index_tip(tracking_result.landmarks)
-            if index_tip:
-                target_x, target_y = cursor_mapper.map_to_screen(index_tip[0], index_tip[1])
-                smooth_x, smooth_y = smoother.smooth(target_x, target_y)
-                mouse_controller.move_cursor(smooth_x, smooth_y)
-                cv2.circle(frame, index_tip, 10, (255, 0, 0), cv2.FILLED)
-
-            gesture_state = gesture_detector.detect(tracking_result.landmarks)
-            gesture_state_text = gesture_state.gesture.value
-
-            if gesture_state.gesture == GestureType.LEFT_CLICK:
-                clicked = mouse_controller.left_click()
-                if clicked:
-                    cv2.putText(frame, "LEFT CLICK", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-            elif gesture_state.gesture == GestureType.RIGHT_CLICK:
-                clicked = mouse_controller.right_click()
-                if clicked:
-                    cv2.putText(frame, "RIGHT CLICK", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
-
-            if gesture_state.thumb_index_distance is not None:
-                cv2.putText(
-                    frame,
-                    f"Thumb-Index: {gesture_state.thumb_index_distance:.1f}",
-                    (10, 140),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2,
-                )
-            if gesture_state.thumb_middle_distance is not None:
-                cv2.putText(
-                    frame,
-                    f"Thumb-Middle: {gesture_state.thumb_middle_distance:.1f}",
-                    (10, 165),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2,
-                )
-
-        fps = fps_counter.update()
-        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        cv2.putText(
-            frame,
-            f"Camera: idx={active_camera_index} backend={active_backend}",
-            (10, 55),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (180, 180, 180),
-            1,
-        )
-        cv2.putText(frame, f"Gesture: {gesture_state_text}", (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-        cv2.putText(frame, "Press q to quit", (10, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
-
-        if not mouse_controller.is_available:
-            cv2.putText(
-                frame,
-                "Mouse control unavailable: grant Accessibility permission",
-                (10, 190),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (0, 0, 255),
-                2,
-            )
-
-        cv2.imshow(WINDOW_NAME, frame)
-
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-
-    hand_tracker.close()
-    cap.release()
-    cv2.destroyAllWindows()
+    app = MainWindow()
+    app.mainloop()
 
 
 if __name__ == "__main__":
     run()
 
 ===== FILE: src/tracking/hand_tracker.py =====
-"""MediaPipe hand tracker wrapper."""
-
-from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+"""MediaPipe hand tracker — optimized with error handling and debug overlay."""
 
 import cv2
 import mediapipe as mp
-
 from config import (
     MAX_NUM_HANDS,
     MIN_DETECTION_CONFIDENCE,
     MIN_TRACKING_CONFIDENCE,
+    PROCESS_HEIGHT,
+    PROCESS_WIDTH,
 )
 
+_CONNECTIONS = [
+    (0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),
+    (5,9),(9,10),(10,11),(11,12),(9,13),(13,14),(14,15),(15,16),
+    (13,17),(17,18),(18,19),(19,20),(0,17),
+]
 
-@dataclass
-class HandTrackingResult:
-    """Contains image-space landmarks and MediaPipe output for drawing."""
-
-    landmarks: Optional[List[Tuple[int, int]]]
-    mp_result: Any
+# Pre-compute target size tuple once
+_PROC_SIZE = (PROCESS_WIDTH, PROCESS_HEIGHT)
 
 
 class HandTracker:
-    """Detect one hand and convert landmarks to pixel coordinates."""
-
-    def __init__(self) -> None:
-        self.mp_hands = mp.solutions.hands
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.hands = self.mp_hands.Hands(
+    def __init__(self):
+        self._mp_hands = mp.solutions.hands
+        self._hands = self._mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=MAX_NUM_HANDS,
             min_detection_confidence=MIN_DETECTION_CONFIDENCE,
             min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
         )
+        self._pw = PROCESS_WIDTH
+        self._ph = PROCESS_HEIGHT
 
-    def process_frame(self, frame_bgr) -> HandTrackingResult:
-        """Return 21 (x, y) landmarks for first detected hand."""
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        result = self.hands.process(frame_rgb)
+    def process_frame(self, frame_bgr):
+        """Resize to 320×240, run MediaPipe, return 21 landmarks or None."""
+        try:
+            small = cv2.resize(frame_bgr, _PROC_SIZE, interpolation=cv2.INTER_NEAREST)
+            rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+            result = self._hands.process(rgb)
+        except Exception:
+            return None
+        if not result.multi_hand_landmarks:
+            return None
+        hand = result.multi_hand_landmarks[0]
+        pw, ph = self._pw, self._ph
+        return [(int(lm.x * pw), int(lm.y * ph)) for lm in hand.landmark]
 
-        landmarks: Optional[List[Tuple[int, int]]] = None
-        if result.multi_hand_landmarks:
-            h, w = frame_bgr.shape[:2]
-            first_hand = result.multi_hand_landmarks[0]
-            landmarks = [
-                (int(lm.x * w), int(lm.y * h))
-                for lm in first_hand.landmark
-            ]
-
-        return HandTrackingResult(landmarks=landmarks, mp_result=result)
-
-    def draw_landmarks(self, frame_bgr, mp_result: Any) -> None:
-        """Draw MediaPipe hand landmarks on frame for debug visualization."""
-        if not mp_result or not mp_result.multi_hand_landmarks:
+    def draw_debug(self, frame_bgr, landmarks):
+        """Draw landmark overlay on full frame from cached coords. No reprocessing."""
+        if not landmarks:
             return
+        h, w = frame_bgr.shape[:2]
+        sx, sy = w / self._pw, h / self._ph
+        pts = [(int(lm[0] * sx), int(lm[1] * sy)) for lm in landmarks]
+        for i, j in _CONNECTIONS:
+            if i < len(pts) and j < len(pts):
+                cv2.line(frame_bgr, pts[i], pts[j], (0, 255, 0), 1)
+        for pt in pts:
+            cv2.circle(frame_bgr, pt, 3, (0, 255, 0), -1)
 
-        for hand_lms in mp_result.multi_hand_landmarks:
-            self.mp_drawing.draw_landmarks(
-                frame_bgr,
-                hand_lms,
-                self.mp_hands.HAND_CONNECTIONS,
-            )
-
-    def close(self) -> None:
-        """Release MediaPipe resources."""
-        self.hands.close()
+    def close(self):
+        try:
+            self._hands.close()
+        except Exception:
+            pass
 
 ===== FILE: src/tracking/landmark_processor.py =====
-"""Helpers to extract specific landmarks from 21-point hand data."""
+"""Finger state detection and landmark helpers — O(1) per frame."""
 
-from typing import List, Optional, Tuple
+# Landmark indices
+THUMB_TIP = 4
+THUMB_IP = 3
+INDEX_MCP = 5
+INDEX_PIP = 6
+INDEX_TIP = 8
+MIDDLE_PIP = 10
+MIDDLE_TIP = 12
+RING_PIP = 14
+RING_TIP = 16
+PINKY_PIP = 18
+PINKY_TIP = 20
 
 
-Landmark = Tuple[int, int]
+class FingerStates:
+    """Boolean up/down state for each finger."""
+    __slots__ = ("thumb", "index", "middle", "ring", "pinky")
 
-THUMB_TIP_ID = 4
-INDEX_TIP_ID = 8
-MIDDLE_TIP_ID = 12
+    def __init__(self, thumb: bool, index: bool, middle: bool, ring: bool, pinky: bool) -> None:
+        self.thumb = thumb
+        self.index = index
+        self.middle = middle
+        self.ring = ring
+        self.pinky = pinky
+
+    @property
+    def count(self) -> int:
+        return self.thumb + self.index + self.middle + self.ring + self.pinky
 
 
-def get_landmark(landmarks: Optional[List[Landmark]], index: int) -> Optional[Landmark]:
-    """Safely fetch a landmark by index."""
-    if landmarks is None:
+def get_finger_states(landmarks: list[tuple[int, int]]) -> FingerStates:
+    """Determine up/down state for each finger. O(1)."""
+    # Thumb: extended when tip is farther from index_mcp than IP is
+    # (orientation-independent, works for both hands)
+    tt = landmarks[THUMB_TIP]
+    ti = landmarks[THUMB_IP]
+    im = landmarks[INDEX_MCP]
+    dx1, dy1 = tt[0] - im[0], tt[1] - im[1]
+    dx2, dy2 = ti[0] - im[0], ti[1] - im[1]
+    thumb = (dx1 * dx1 + dy1 * dy1) > (dx2 * dx2 + dy2 * dy2)
+
+    # Other fingers: tip.y < pip.y means extended (y increases downward)
+    index = landmarks[INDEX_TIP][1] < landmarks[INDEX_PIP][1]
+    middle = landmarks[MIDDLE_TIP][1] < landmarks[MIDDLE_PIP][1]
+    ring = landmarks[RING_TIP][1] < landmarks[RING_PIP][1]
+    pinky = landmarks[PINKY_TIP][1] < landmarks[PINKY_PIP][1]
+
+    return FingerStates(thumb, index, middle, ring, pinky)
+
+
+def get_index_tip(landmarks: list[tuple[int, int]]) -> tuple[int, int]:
+    return landmarks[INDEX_TIP]
+
+
+def get_thumb_tip(landmarks: list[tuple[int, int]]) -> tuple[int, int]:
+    return landmarks[THUMB_TIP]
+
+
+def get_middle_tip(landmarks: list[tuple[int, int]]) -> tuple[int, int]:
+    return landmarks[MIDDLE_TIP]
+
+===== FILE: src/utils/camera_thread.py =====
+"""Thread-safe camera capture with automatic backend selection."""
+
+import platform
+import threading
+import time
+import cv2
+from config import CAMERA_HEIGHT, CAMERA_INDEX, CAMERA_INDEXES, CAMERA_WIDTH
+
+
+class CameraThread:
+    def __init__(self):
+        self._cap = None
+        self._frame = None
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread = None
+
+    def start(self):
+        if self._running:
+            return True
+        self._cap = self._open()
+        if self._cap is None:
+            return False
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+        return True
+
+    def stop(self):
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        if self._cap:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+            self._cap = None
+        with self._lock:
+            self._frame = None
+
+    def get_frame(self):
+        with self._lock:
+            return self._frame.copy() if self._frame is not None else None
+
+    @property
+    def is_running(self):
+        return self._running
+
+    def _loop(self):
+        consecutive_fails = 0
+        while self._running:
+            try:
+                ok, frame = self._cap.read()
+            except Exception:
+                ok = False
+                frame = None
+            if ok and frame is not None:
+                consecutive_fails = 0
+                with self._lock:
+                    self._frame = frame
+            else:
+                consecutive_fails += 1
+                if consecutive_fails > 30:
+                    # Camera likely disconnected
+                    self._running = False
+                    break
+                time.sleep(0.01)
+
+    @staticmethod
+    def _open():
+        sys_name = platform.system().lower()
+        if sys_name == "darwin":
+            backends = [getattr(cv2, "CAP_AVFOUNDATION", cv2.CAP_ANY), cv2.CAP_ANY]
+        elif sys_name == "windows":
+            backends = [getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY), cv2.CAP_ANY]
+        else:
+            backends = [getattr(cv2, "CAP_V4L2", cv2.CAP_ANY), cv2.CAP_ANY]
+        idxs = [CAMERA_INDEX] + [i for i in CAMERA_INDEXES if i != CAMERA_INDEX]
+        for be in backends:
+            for idx in idxs:
+                try:
+                    cap = cv2.VideoCapture(idx, be)
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    if cap.isOpened():
+                        return cap
+                    cap.release()
+                except Exception:
+                    continue
         return None
-    if index < 0 or index >= len(landmarks):
-        return None
-    return landmarks[index]
-
-
-def get_index_tip(landmarks: Optional[List[Landmark]]) -> Optional[Landmark]:
-    return get_landmark(landmarks, INDEX_TIP_ID)
-
-
-def get_thumb_tip(landmarks: Optional[List[Landmark]]) -> Optional[Landmark]:
-    return get_landmark(landmarks, THUMB_TIP_ID)
-
-
-def get_middle_tip(landmarks: Optional[List[Landmark]]) -> Optional[Landmark]:
-    return get_landmark(landmarks, MIDDLE_TIP_ID)
 
 ===== FILE: src/utils/fps_counter.py =====
-"""Simple FPS counter utility."""
+"""Lightweight FPS counter with frame-skip advisory."""
 
 import time
 
 
 class FPSCounter:
-    """Track frames-per-second with a lightweight moving estimate."""
+    """Track FPS and advise whether to skip processing to maintain target."""
 
-    def __init__(self) -> None:
-        self.prev_time = time.time()
+    __slots__ = ("prev_time", "fps", "target_fps")
+
+    def __init__(self, target_fps: float = 60.0) -> None:
+        self.prev_time = time.monotonic()
         self.fps = 0.0
+        self.target_fps = target_fps
 
     def update(self) -> float:
-        """Update and return the current FPS estimate."""
-        current_time = time.time()
-        delta = current_time - self.prev_time
-        self.prev_time = current_time
-
-        if delta > 0:
-            instant_fps = 1.0 / delta
-            if self.fps == 0.0:
-                self.fps = instant_fps
-            else:
-                self.fps = (0.9 * self.fps) + (0.1 * instant_fps)
-
+        now = time.monotonic()
+        delta = now - self.prev_time
+        self.prev_time = now
+        if delta > 0.0:
+            instant = 1.0 / delta
+            self.fps = instant if self.fps == 0.0 else 0.9 * self.fps + 0.1 * instant
         return self.fps
 
+    def should_skip(self) -> bool:
+        """Return True when FPS is significantly below target."""
+        return 0.0 < self.fps < self.target_fps * 0.75
+
 ===== FILE: src/utils/math_utils.py =====
-"""Math helpers for landmark geometry."""
-
-from typing import Tuple
+"""Math helpers for landmark geometry (pure Python, no numpy)."""
 
 
-Point = Tuple[float, float]
-
-
-def distance_between_points(point_a: Point, point_b: Point) -> float:
-    """Return Euclidean distance between two 2D points."""
-    dx = point_a[0] - point_b[0]
-    dy = point_a[1] - point_b[1]
+def distance_between_points(a: tuple[int, int], b: tuple[int, int]) -> float:
+    dx = a[0] - b[0]
+    dy = a[1] - b[1]
     return (dx * dx + dy * dy) ** 0.5
 
 
-def clamp(value: float, min_value: float, max_value: float) -> float:
-    """Clamp value into the inclusive [min_value, max_value] range."""
-    return max(min_value, min(value, max_value))
+def clamp(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(value, hi))
 
 ===== FILE: src/utils/smoothing.py =====
-"""Cursor smoothing utilities to reduce jitter."""
+"""Adaptive cursor smoothing with motion prediction and acceleration curve."""
 
-from collections import deque
-from typing import Deque, Tuple
+from config import ALPHA_SLOW, ALPHA_FAST, SPEED_THRESHOLD
 
 
-class CursorSmoother:
-    """Smooth cursor coordinates using moving average + linear interpolation."""
+class AdaptiveSmoother:
+    """Speed-adaptive exponential smoothing with optional acceleration.
 
-    def __init__(self, window_size: int = 5, alpha: float = 0.35) -> None:
-        self.window_size = max(1, window_size)
-        self.alpha = min(max(alpha, 0.0), 1.0)
-        self.history_x: Deque[float] = deque(maxlen=self.window_size)
-        self.history_y: Deque[float] = deque(maxlen=self.window_size)
-        self.prev_x: float | None = None
-        self.prev_y: float | None = None
+    Slow movement → strong smoothing (jitter removal)
+    Fast movement → light smoothing (responsiveness)
+    Optional acceleration curve for large, fast movements.
+    """
+    __slots__ = ("a_slow", "a_fast", "speed_t", "px", "py", "vx", "vy",
+                 "accel_factor", "accel_thresh")
 
-    def smooth(self, x: float, y: float) -> Tuple[int, int]:
-        """Return smoothed integer cursor coordinates."""
-        self.history_x.append(x)
-        self.history_y.append(y)
+    def __init__(self, alpha_slow=ALPHA_SLOW, alpha_fast=ALPHA_FAST,
+                 speed_threshold=SPEED_THRESHOLD,
+                 accel_factor=1.3, accel_threshold=80.0):
+        self.a_slow = alpha_slow
+        self.a_fast = alpha_fast
+        self.speed_t = speed_threshold
+        self.accel_factor = accel_factor    # multiplier for fast large moves
+        self.accel_thresh = accel_threshold  # speed above which acceleration kicks in
+        self.px = -1.0
+        self.py = -1.0
+        self.vx = 0.0
+        self.vy = 0.0
 
-        avg_x = sum(self.history_x) / len(self.history_x)
-        avg_y = sum(self.history_y) / len(self.history_y)
+    def smooth(self, x: float, y: float) -> tuple[int, int]:
+        if self.px < 0:
+            self.px, self.py = x, y
+            self.vx = self.vy = 0.0
+            return int(x), int(y)
 
-        if self.prev_x is None or self.prev_y is None:
-            self.prev_x, self.prev_y = avg_x, avg_y
+        dx, dy = x - self.px, y - self.py
+        speed = (dx * dx + dy * dy) ** 0.5
+
+        # Adaptive alpha
+        if speed >= self.speed_t:
+            a = self.a_fast
         else:
-            self.prev_x = self.prev_x + self.alpha * (avg_x - self.prev_x)
-            self.prev_y = self.prev_y + self.alpha * (avg_y - self.prev_y)
+            t = speed / self.speed_t if self.speed_t > 0 else 1.0
+            a = self.a_slow + t * (self.a_fast - self.a_slow)
 
-        return int(self.prev_x), int(self.prev_y)
+        # Acceleration curve: boost large fast movements
+        if speed > self.accel_thresh:
+            overshoot = (speed - self.accel_thresh) / self.accel_thresh
+            boost = 1.0 + overshoot * (self.accel_factor - 1.0)
+            dx *= boost
+            dy *= boost
+
+        ox, oy = self.px, self.py
+        self.px += a * dx
+        self.py += a * dy
+        self.vx = self.px - ox
+        self.vy = self.py - oy
+        return int(self.px), int(self.py)
+
+    def predict(self, factor: float = 0.5) -> tuple[int, int]:
+        """Predict next position using current velocity."""
+        if self.px < 0:
+            return -1, -1
+        return int(self.px + self.vx * factor), int(self.py + self.vy * factor)
+
+    def reset(self):
+        self.px = self.py = -1.0
+        self.vx = self.vy = 0.0
+
+
+# Backward-compatible alias
+CursorSmoother = AdaptiveSmoother
 
 ===== FILE: tests/test_gestures.py =====
-"""Basic tests for pinch gesture detection."""
+"""Tests for the gesture detection engine."""
 
 from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-from gestures.gesture_detector import GestureDetector
+from gestures.gesture_detector import GestureDetector, GestureResult
 from gestures.gesture_types import GestureType
+from tracking.landmark_processor import get_finger_states
 
 
-def _build_landmarks(thumb=(100, 100), index=(160, 100), middle=(220, 100)):
-    # Build a 21-landmark list with only needed landmarks set.
-    landmarks = [(0, 0)] * 21
-    landmarks[4] = thumb
-    landmarks[8] = index
-    landmarks[12] = middle
-    return landmarks
+def _landmarks(thumb=(100, 100), index=(160, 60), middle=(220, 60),
+               ring=(250, 100), pinky=(270, 100),
+               thumb_ip=(90, 110), index_pip=(160, 100),
+               middle_pip=(220, 100), ring_pip=(250, 110),
+               pinky_pip=(270, 110), index_mcp=(150, 130)):
+    """Build a 21-landmark list with key landmarks positioned as given."""
+    lm = [(0, 0)] * 21
+    lm[0] = (130, 200)     # wrist
+    lm[3] = thumb_ip        # thumb IP
+    lm[4] = thumb            # thumb tip
+    lm[5] = index_mcp        # index MCP
+    lm[6] = index_pip        # index PIP
+    lm[8] = index            # index tip
+    lm[10] = middle_pip      # middle PIP
+    lm[12] = middle          # middle tip
+    lm[14] = ring_pip        # ring PIP
+    lm[16] = ring            # ring tip
+    lm[18] = pinky_pip       # pinky PIP
+    lm[20] = pinky           # pinky tip
+    return lm
 
 
-def test_detect_left_click_pinch() -> None:
-    detector = GestureDetector(left_pinch_threshold=40, right_pinch_threshold=40)
-    landmarks = _build_landmarks(thumb=(100, 100), index=(120, 100), middle=(200, 100))
+# ---- Finger state detection ----
 
-    result = detector.detect(landmarks)
+def test_finger_states_all_up() -> None:
+    lm = _landmarks(
+        thumb=(50, 80), thumb_ip=(90, 110), index_mcp=(150, 130),
+        index=(160, 50), index_pip=(160, 100),
+        middle=(220, 50), middle_pip=(220, 100),
+        ring=(250, 50), ring_pip=(250, 100),
+        pinky=(270, 50), pinky_pip=(270, 100),
+    )
+    fs = get_finger_states(lm)
+    assert fs.index and fs.middle and fs.ring and fs.pinky
 
-    assert result.gesture == GestureType.LEFT_CLICK
+
+def test_finger_states_all_down() -> None:
+    lm = _landmarks(
+        thumb=(100, 130), thumb_ip=(90, 110), index_mcp=(150, 130),
+        index=(160, 150), index_pip=(160, 100),
+        middle=(220, 150), middle_pip=(220, 100),
+        ring=(250, 150), ring_pip=(250, 100),
+        pinky=(270, 150), pinky_pip=(270, 100),
+    )
+    fs = get_finger_states(lm)
+    assert not fs.index and not fs.middle and not fs.ring and not fs.pinky
 
 
-def test_detect_right_click_pinch() -> None:
-    detector = GestureDetector(left_pinch_threshold=30, right_pinch_threshold=40)
-    landmarks = _build_landmarks(thumb=(100, 100), index=(170, 100), middle=(130, 100))
+# ---- Gesture detection ----
 
-    result = detector.detect(landmarks)
+def test_move_gesture() -> None:
+    """Index up, others down → MOVE."""
+    detector = GestureDetector()
+    lm = _landmarks(
+        index=(160, 50), index_pip=(160, 100),      # index UP
+        middle=(220, 150), middle_pip=(220, 100),    # middle DOWN
+        ring=(250, 150), ring_pip=(250, 100),        # ring DOWN
+        pinky=(270, 150), pinky_pip=(270, 100),      # pinky DOWN
+        thumb=(100, 130), thumb_ip=(90, 110),        # thumb (don't care)
+    )
+    result = detector.detect(lm)
+    assert result.gesture == GestureType.MOVE
 
+
+def test_pause_gesture() -> None:
+    """All fingers down → PAUSE."""
+    detector = GestureDetector()
+    lm = _landmarks(
+        index=(160, 150), index_pip=(160, 100),
+        middle=(220, 150), middle_pip=(220, 100),
+        ring=(250, 150), ring_pip=(250, 100),
+        pinky=(270, 150), pinky_pip=(270, 100),
+        thumb=(100, 130), thumb_ip=(90, 110),
+    )
+    result = detector.detect(lm)
+    assert result.gesture == GestureType.PAUSE
+
+
+def test_left_click_requires_stability() -> None:
+    """Pinch must persist for GESTURE_STABILITY_FRAMES before firing click."""
+    detector = GestureDetector()
+    # Thumb and index very close = pinch
+    lm = _landmarks(
+        thumb=(100, 100), index=(105, 100),
+        index_pip=(160, 120), middle=(220, 150), middle_pip=(220, 100),
+        ring=(250, 150), ring_pip=(250, 100),
+        pinky=(270, 150), pinky_pip=(270, 100),
+        thumb_ip=(90, 110), index_mcp=(150, 130),
+    )
+    # First call — not yet stable
+    r1 = detector.detect(lm)
+    # Second call — should trigger click (stability_frames=2)
+    r2 = detector.detect(lm)
+    assert r2.gesture == GestureType.LEFT_CLICK
+
+
+def test_right_click_two_fingers() -> None:
+    """Index + middle up, ring + pinky down → RIGHT_CLICK after stability."""
+    detector = GestureDetector()
+    lm = _landmarks(
+        index=(160, 50), index_pip=(160, 100),       # UP
+        middle=(220, 50), middle_pip=(220, 100),      # UP
+        ring=(250, 150), ring_pip=(250, 100),         # DOWN
+        pinky=(270, 150), pinky_pip=(270, 100),       # DOWN
+        thumb=(100, 130), thumb_ip=(90, 110),
+    )
+    # Call enough times for stability + decision
+    result = None
+    for _ in range(5):
+        result = detector.detect(lm)
+        if result.gesture == GestureType.RIGHT_CLICK:
+            break
     assert result.gesture == GestureType.RIGHT_CLICK
-
-
-def test_detect_move_cursor_when_no_pinch() -> None:
-    detector = GestureDetector(left_pinch_threshold=30, right_pinch_threshold=30)
-    landmarks = _build_landmarks(thumb=(100, 100), index=(180, 100), middle=(220, 100))
-
-    result = detector.detect(landmarks)
-
-    assert result.gesture == GestureType.MOVE_CURSOR
 

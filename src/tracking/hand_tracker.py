@@ -33,31 +33,31 @@ class HandTracker:
         self._ph = PROCESS_HEIGHT
 
     def process_frame(self, frame_bgr):
-        """Resize to 320×240, run MediaPipe, return 21 landmarks or None."""
+        """Resize to 320x240, run MediaPipe, return (landmarks_list, hand_landmarks_proto)."""
         try:
             small = cv2.resize(frame_bgr, _PROC_SIZE, interpolation=cv2.INTER_NEAREST)
             rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
             result = self._hands.process(rgb)
         except Exception:
-            return None
+            return None, None
         if not result.multi_hand_landmarks:
-            return None
+            return None, None
         hand = result.multi_hand_landmarks[0]
         pw, ph = self._pw, self._ph
-        return [(int(lm.x * pw), int(lm.y * ph)) for lm in hand.landmark]
+        pts = [(int(lm.x * pw), int(lm.y * ph)) for lm in hand.landmark]
+        return pts, hand
 
-    def draw_debug(self, frame_bgr, landmarks):
-        """Draw landmark overlay on full frame from cached coords. No reprocessing."""
-        if not landmarks:
+    def draw_landmarks(self, frame_bgr, hand_landmarks):
+        """Draw landmarks and connections onto full frame using mp.drawing_utils."""
+        if not hand_landmarks:
             return
-        h, w = frame_bgr.shape[:2]
-        sx, sy = w / self._pw, h / self._ph
-        pts = [(int(lm[0] * sx), int(lm[1] * sy)) for lm in landmarks]
-        for i, j in _CONNECTIONS:
-            if i < len(pts) and j < len(pts):
-                cv2.line(frame_bgr, pts[i], pts[j], (0, 255, 0), 1)
-        for pt in pts:
-            cv2.circle(frame_bgr, pt, 3, (0, 255, 0), -1)
+        mp.solutions.drawing_utils.draw_landmarks(
+            frame_bgr,
+            hand_landmarks,
+            self._mp_hands.HAND_CONNECTIONS,
+            mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
+            mp.solutions.drawing_styles.get_default_hand_connections_style()
+        )
 
     def close(self):
         try:
