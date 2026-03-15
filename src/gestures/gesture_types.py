@@ -16,6 +16,13 @@ class GestureType(str, Enum):
     VOLUME = "VOLUME"
     SWITCH_WINDOW = "SWITCH_WINDOW"
     OPEN_PALM = "OPEN_PALM"
+    KEYBOARD = "KEYBOARD"
+    
+    # Left-hand Media Controls
+    MEDIA_VOL_UP = "MEDIA_VOL_UP"
+    MEDIA_VOL_DOWN = "MEDIA_VOL_DOWN"
+    MEDIA_NEXT = "MEDIA_NEXT"
+    MEDIA_PREV = "MEDIA_PREV"
 
 
 STATE_MACHINE_GESTURES = (
@@ -25,4 +32,9 @@ STATE_MACHINE_GESTURES = (
     GestureType.SCROLL,
     GestureType.DRAG,
     GestureType.PAUSE,
+    GestureType.KEYBOARD,
+    GestureType.MEDIA_VOL_UP,
+    GestureType.MEDIA_VOL_DOWN,
+    GestureType.MEDIA_NEXT,
+    GestureType.MEDIA_PREV,
 )

@@ -74,13 +74,14 @@ class HandTracker:
             result = self._hands.process(rgb)
         except Exception:
             return None, None
-        if not result.multi_hand_landmarks:
+        if not result.multi_hand_landmarks or not result.multi_handedness:
             return None, None
         hand = result.multi_hand_landmarks[0]
+        label = result.multi_handedness[0].classification[0].label
         pw, ph = self._pw, self._ph
         xy = [(int(lm.x * pw), int(lm.y * ph)) for lm in hand.landmark]
         z = [float(lm.z) for lm in hand.landmark]
-        return {"xy": xy, "z": z}, hand
+        return {"xy": xy, "z": z, "label": label}, hand
 
     def draw_landmarks(self, frame_bgr, hand_landmarks):
         """Draw landmarks and connections onto full frame using mp.drawing_utils."""
@@ -96,6 +97,8 @@ class HandTracker:
 
     def close(self):
         try:
-            self._hands.close()
+            if hasattr(self, "_hands") and self._hands:
+                self._hands.close()
+                del self._hands
         except Exception:
             pass

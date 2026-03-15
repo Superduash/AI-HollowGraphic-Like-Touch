@@ -102,12 +102,27 @@ class CursorMapper:
                 return int(clamp(px, 0.0, float(self.scr_w))), int(clamp(py, 0.0, float(self.scr_h)))
             return int(self.scr_w // 2), int(self.scr_h // 2)
 
-        x3 = self._interp(float(cam_x), x1, x2, 0.0, float(self.scr_w))
-        y3 = self._interp(float(cam_y), y1, y2, 0.0, float(self.scr_h))
+        OVERSHOOT_FACTOR = 0.85
+        box_w = x2 - x1
+        box_h = y2 - y1
+        
+        # Shrink the logical mapped box so 85% of movement equals 100% of the screen
+        cx = x1 + box_w / 2.0
+        cy = y1 + box_h / 2.0
+        new_w = box_w * OVERSHOOT_FACTOR
+        new_h = box_h * OVERSHOOT_FACTOR
+        
+        map_x1 = cx - new_w / 2.0
+        map_x2 = cx + new_w / 2.0
+        map_y1 = cy - new_h / 2.0
+        map_y2 = cy + new_h / 2.0
+
+        x3 = self._interp(float(cam_x), map_x1, map_x2, 0.0, float(self.scr_w))
+        y3 = self._interp(float(cam_y), map_y1, map_y2, 0.0, float(self.scr_h))
 
         if hand_center is not None:
-            cx3 = self._interp(float(hand_center[0]), x1, x2, 0.0, float(self.scr_w))
-            cy3 = self._interp(float(hand_center[1]), y1, y2, 0.0, float(self.scr_h))
+            cx3 = self._interp(float(hand_center[0]), map_x1, map_x2, 0.0, float(self.scr_w))
+            cy3 = self._interp(float(hand_center[1]), map_y1, map_y2, 0.0, float(self.scr_h))
             target_x = 0.78 * x3 + 0.22 * cx3
             target_y = 0.78 * y3 + 0.22 * cy3
         else:

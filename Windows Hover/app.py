@@ -118,6 +118,11 @@ class GestureType(str, Enum):
     DRAG = "DRAG"
     TASK_VIEW = "TASK VIEW"
     PAUSE = "PAUSED"
+    KEYBOARD = "KEYBOARD"
+    MEDIA_VOL_UP = "MEDIA_VOL_UP"
+    MEDIA_VOL_DOWN = "MEDIA_VOL_DOWN"
+    MEDIA_NEXT = "MEDIA_NEXT"
+    MEDIA_PREV = "MEDIA_PREV"
 
 
 @dataclass
@@ -145,6 +150,11 @@ _OVERLAY_LABELS = {
     GestureType.DRAG: "DRAG",
     GestureType.TASK_VIEW: "TASK VIEW",
     GestureType.PAUSE: "PAUSED",
+    GestureType.KEYBOARD: "KEYBOARD",
+    GestureType.MEDIA_VOL_UP: "VOL UP",
+    GestureType.MEDIA_VOL_DOWN: "VOL DOWN",
+    GestureType.MEDIA_NEXT: "NEXT TRACK",
+    GestureType.MEDIA_PREV: "PREV TRACK",
 }
 
 
@@ -157,6 +167,11 @@ _BADGE_COLORS = {
     GestureType.DRAG: "#A78BFA",
     GestureType.TASK_VIEW: "#A78BFA",
     GestureType.PAUSE: "#F87171",
+    GestureType.KEYBOARD: "#FBBF24",
+    GestureType.MEDIA_VOL_UP: "#F472B6",
+    GestureType.MEDIA_VOL_DOWN: "#F472B6",
+    GestureType.MEDIA_NEXT: "#F472B6",
+    GestureType.MEDIA_PREV: "#F472B6",
     GestureType.NONE: "#64748B",
 }
 
@@ -263,13 +278,14 @@ class HandTracker:
         rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         result = self._hands.process(rgb)
 
-        if not result.multi_hand_landmarks:
+        if not result.multi_hand_landmarks or not result.multi_handedness:
             return None, None
 
         hand = result.multi_hand_landmarks[0]
+        label = result.multi_handedness[0].classification[0].label
         xy = [(int(lm.x * self.process_w), int(lm.y * self.process_h)) for lm in hand.landmark]
         z = [float(lm.z) for lm in hand.landmark]
-        return {"xy": xy, "z": z}, hand
+        return {"xy": xy, "z": z, "label": label}, hand
 
     def draw(self, frame_rgb, hand_proto):
         if hand_proto is None:
@@ -284,7 +300,9 @@ class HandTracker:
 
     def close(self):
         try:
-            self._hands.close()
+            if hasattr(self, "_hands") and self._hands:
+                self._hands.close()
+                del self._hands
         except Exception:
             pass
 
@@ -344,8 +362,16 @@ class CursorMapper:
                 return int(self._kalman_x), int(self._kalman_y)
             return int(self.scr_w // 2), int(self.scr_h // 2)
 
-        x3 = self._interp(cam_x, x1, x2, 0.0, float(self.scr_w))
-        y3 = self._interp(cam_y, y1, y2, 0.0, float(self.scr_h))
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        hw, hh = (x2 - x1) * 0.425, (y2 - y1) * 0.425
+        map_x1, map_x2 = cx - hw, cx + hw
+        map_y1, map_y2 = cy - hh, cy + hh
+
+        x3 = self._interp(cam_x, map_x1, map_x2, 0.0, float(self.scr_w))
+        y3 = self._interp(cam_y, map_y1, map_y2, 0.0, float(self.scr_h))
+        
+        x3 = max(0.0, min(float(self.scr_w), x3))
+        y3 = max(0.0, min(float(self.scr_h), y3))
 
         if self._ploc_x < 0:
             self._ploc_x, self._ploc_y = x3, y3
@@ -487,58 +513,30 @@ class StatusOverlay(QWidget):
 
 class MouseController:
     def __init__(self) -> None:
-        pyautogui.FAILSAFE = False
-        pyautogui.PAUSE = 0
-
         self._move_interval = 1.0 / 240.0
         self._last_move = 0.0
         self._last_x = -1
         self._last_y = -1
         self._dragging = False
 
-        self._pdi = None
+        self._user32 = None
         if platform.system() == "Windows":
             try:
-                import pydirectinput  # type: ignore[import-not-found]
-
-                pydirectinput.FAILSAFE = False
-                pydirectinput.PAUSE = 0
-                self._pdi = pydirectinput
+                import ctypes
+                self._user32 = ctypes.windll.user32
             except Exception:
-                self._pdi = None
+                pass
 
-    @staticmethod
-    def _native_scroll_windows(amount: int) -> bool:
-        if platform.system() != "Windows":
-            return False
-        try:
-            import ctypes
-
-            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-            MOUSEEVENTF_WHEEL = 0x0800
-            WHEEL_DELTA = 120
-
-            clicks = int(amount)
-            if clicks == 0:
-                return True
-
-            # Clamp to avoid extreme values.
-            clicks = max(-50, min(50, clicks))
-            delta = int(clicks * WHEEL_DELTA)
-            user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
-            return True
-        except Exception:
-            return False
+        self._MOUSEEVENTF_LEFTDOWN = 0x0002
+        self._MOUSEEVENTF_LEFTUP = 0x0004
+        self._MOUSEEVENTF_RIGHTDOWN = 0x0008
+        self._MOUSEEVENTF_RIGHTUP = 0x0010
+        self._MOUSEEVENTF_WHEEL = 0x0800
+        self._WHEEL_DELTA = 120
 
     @property
     def is_dragging(self) -> bool:
         return self._dragging
-
-    def _move_to(self, x: int, y: int) -> None:
-        if self._pdi is not None:
-            self._pdi.moveTo(x, y)
-        else:
-            pyautogui.moveTo(x, y)
 
     def move(self, x: int, y: int) -> None:
         now = time.monotonic()
@@ -550,59 +548,45 @@ class MouseController:
         if dx * dx + dy * dy < 4:
             return
 
-        self._move_to(x, y)
+        if self._user32:
+            self._user32.SetCursorPos(x, y)
         self._last_x, self._last_y = x, y
         self._last_move = now
 
     def left_click(self) -> None:
-        if self._pdi is not None:
-            self._pdi.click(button="left")
-        else:
-            pyautogui.click(button="left")
+        if self._user32:
+            self._user32.mouse_event(self._MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            self._user32.mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
     def right_click(self) -> None:
-        if self._pdi is not None:
-            self._pdi.click(button="right")
-        else:
-            pyautogui.click(button="right")
+        if self._user32:
+            self._user32.mouse_event(self._MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+            self._user32.mouse_event(self._MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+
+    def double_click(self) -> None:
+        if self._user32:
+            self.left_click()
+            time.sleep(0.04)
+            self.left_click()
 
     def scroll(self, amount: int) -> None:
-        if amount == 0:
+        if amount == 0 or not self._user32:
             return
-
-        pdi = self._pdi
-        if pdi is not None and hasattr(pdi, "scroll"):
-            try:
-                pdi.scroll(int(amount))
-                return
-            except Exception:
-                pass
-
-        if hasattr(pyautogui, "scroll"):
-            try:
-                pyautogui.scroll(int(amount))
-                return
-            except Exception:
-                pass
-
-        # Last resort: Windows-native wheel event.
-        self._native_scroll_windows(int(amount))
+        clicks = max(-50, min(50, int(amount)))
+        delta = int(clicks * self._WHEEL_DELTA)
+        self._user32.mouse_event(self._MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
 
     def start_drag(self) -> None:
         if not self._dragging:
             self._dragging = True
-            if self._pdi is not None:
-                self._pdi.mouseDown(button="left")
-            else:
-                pyautogui.mouseDown(button="left")
+            if self._user32:
+                self._user32.mouse_event(self._MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
 
     def end_drag(self) -> None:
         if self._dragging:
             self._dragging = False
-            if self._pdi is not None:
-                self._pdi.mouseUp(button="left")
-            else:
-                pyautogui.mouseUp(button="left")
+            if self._user32:
+                self._user32.mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
 
 class GestureEngine:
@@ -612,7 +596,6 @@ class GestureEngine:
         self._confirmed = GestureType.NONE
         self._dragging = False
 
-        # Higher confirmation reduces flicker/spam on Windows.
         self._confirm_required = 4
 
         self._left_pinch_active = False
@@ -628,11 +611,12 @@ class GestureEngine:
         self._last_right = 0.0
         self._last_task_view = 0.0
         self._task_view_frames = 0
+        self._task_view_anchor = (0, 0)
+        self._last_media_track = 0.0
 
         self._prev_scroll_y = None
         self._smooth_scroll = 0.0
 
-        # Less sensitive pinches to avoid accidental clicks.
         self._pinch_enter = 0.20
         self._pinch_exit = 0.28
         self._right_pinch_enter_factor = 0.86
@@ -709,9 +693,11 @@ class GestureEngine:
 
             self._prev_scroll_y = None
             self._smooth_scroll = 0.0
+            self._task_view_frames = 0
             return GestureResult(GestureType.PAUSE)
 
         xy = hand_data["xy"]
+        label = hand_data.get("label", "Right")
         now = time.monotonic()
 
         fs = self._finger_states(xy)
@@ -732,6 +718,13 @@ class GestureEngine:
             self._prev_scroll_y = None
             self._smooth_scroll = 0.0
 
+            if self._task_view_frames == 0:
+                self._task_view_anchor = xy[0]
+            else:
+                if self._distance(xy[0], self._task_view_anchor) > 25.0:
+                    self._task_view_anchor = xy[0]
+                    self._task_view_frames = 0
+
             self._task_view_frames += 1
             if self._task_view_frames >= self._task_view_confirm_frames and now - self._last_task_view >= self._task_view_cooldown:
                 self._last_task_view = now
@@ -743,7 +736,6 @@ class GestureEngine:
         else:
             self._task_view_frames = 0
 
-        # Pinch distances (scale-invariant).
         thumb = xy[4]
         index_tip = xy[8]
         middle_tip = xy[12]
@@ -779,6 +771,44 @@ class GestureEngine:
             else:
                 if right_click_pose and right_dist < right_enter:
                     self._right_pinch_active = True
+
+        # Left hand dominance logic
+        if label == "Left":
+            if self._left_pinch_active:
+                self._left_pinch_frames += 1
+                if self._left_pinch_frames >= 2:
+                    y = xy[4][1]
+                    if self._prev_scroll_y is None:
+                        self._prev_scroll_y = y
+                        return self._confirm(GestureType.PAUSE, 0)
+                    dy = y - self._prev_scroll_y
+                    if abs(dy) > self._scroll_motion_threshold:
+                        self._prev_scroll_y = y
+                        raw = int(abs(dy) - self._scroll_motion_threshold)
+                        if dy < 0:
+                            return self._confirm(GestureType.MEDIA_VOL_UP, raw)
+                        else:
+                            return self._confirm(GestureType.MEDIA_VOL_DOWN, raw)
+                return self._confirm(GestureType.PAUSE, 0)
+
+            if fs.index and fs.middle and not fs.ring and not fs.pinky:
+                y = 0.5 * (xy[8][1] + xy[12][1])
+                if self._prev_scroll_y is None:
+                    self._prev_scroll_y = y
+                    return self._confirm(GestureType.PAUSE, 0)
+                dy = y - self._prev_scroll_y
+                if abs(dy) > 30.0 and now - self._last_media_track >= 0.8:
+                    self._prev_scroll_y = y
+                    self._last_media_track = now
+                    if dy < 0:
+                        return self._confirm(GestureType.MEDIA_PREV, 0, edge_trigger=True)
+                    else:
+                        return self._confirm(GestureType.MEDIA_NEXT, 0, edge_trigger=True)
+                return self._confirm(GestureType.PAUSE, 0)
+
+            self._prev_scroll_y = None
+            return self._confirm(GestureType.PAUSE, 0)
+
 
         # Right click: thumb + middle pinch.
         if self._right_pinch_active and not self._left_pinch_active:
@@ -847,6 +877,10 @@ class GestureEngine:
 
         self._prev_scroll_y = None
         self._smooth_scroll = 0.0
+        
+        # Keyboard toggle: Three fingers up.
+        if (not fs.thumb) and fs.index and fs.middle and fs.ring and not fs.pinky:
+            return self._confirm(GestureType.KEYBOARD, 0, edge_trigger=True)
 
         # Move: index finger only.
         if fs.index and not fs.middle and not fs.ring and not fs.pinky:
@@ -861,7 +895,7 @@ class GestureEngine:
             self._candidate = raw
             self._candidate_frames = 1
 
-        if raw in {GestureType.PAUSE, GestureType.SCROLL}:
+        if raw in {GestureType.PAUSE, GestureType.SCROLL, GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN}:
             self._confirmed = raw
         elif edge_trigger:
             self._confirmed = raw
@@ -871,7 +905,7 @@ class GestureEngine:
             elif self._candidate_frames >= self._confirm_required:
                 self._confirmed = raw
 
-        if self._confirmed == GestureType.SCROLL:
+        if self._confirmed in {GestureType.SCROLL, GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN}:
             return GestureResult(self._confirmed, scroll_delta)
         return GestureResult(self._confirmed, 0)
 
@@ -930,6 +964,27 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._render)
         self.timer.start(16)
+
+        self._last_esc_time = 0.0
+        try:
+            import keyboard  # type: ignore
+            keyboard.on_press_key("esc", self._on_esc_press)
+        except Exception:
+            pass
+
+    def _on_esc_press(self, event=None) -> None:
+        now = time.monotonic()
+        if now - self._last_esc_time < 0.5:
+            self._last_esc_time = 0.0
+            QTimer.singleShot(0, self._execute_panic)
+        else:
+            self._last_esc_time = now
+
+    def _execute_panic(self) -> None:
+        if self.mouse_enabled:
+            self.toggle_mouse()
+        if self.mouse.is_dragging:
+            self.mouse.end_drag()
 
     def _icon(self, name: str) -> QIcon:
         p = self._icons_dir / name
@@ -1312,7 +1367,14 @@ class MainWindow(QMainWindow):
                 fs = self.gestures._finger_states(hand_data["xy"])
                 fingers = int(fs.thumb) + int(fs.index) + int(fs.middle) + int(fs.ring) + int(fs.pinky)
 
-            if self.mouse_enabled and hand_data and gesture not in {GestureType.NONE, GestureType.PAUSE, GestureType.TASK_VIEW}:
+            if self.mouse_enabled and gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN, GestureType.MEDIA_NEXT, GestureType.MEDIA_PREV):
+                if gesture_changed or gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN):
+                    if gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN) and result.scroll_delta == 0:
+                        pass
+                    else:
+                        self._execute_media(gesture, result.scroll_delta)
+
+            if self.mouse_enabled and hand_data and gesture not in {GestureType.NONE, GestureType.PAUSE, GestureType.TASK_VIEW, GestureType.KEYBOARD}:
                 tip = hand_data["xy"][8]
                 cam_x = int((tip[0] / float(tracker.process_w)) * w)
                 cam_y = int((tip[1] / float(tracker.process_h)) * h)
@@ -1439,6 +1501,25 @@ class MainWindow(QMainWindow):
                 Qt.TransformationMode.FastTransformation,
             )
         )
+
+    def _execute_media(self, gesture: GestureType, delta: int) -> None:
+        def _run():
+            try:
+                import ctypes
+                user32 = ctypes.windll.user32
+                vk = 0
+                if gesture == GestureType.MEDIA_VOL_UP: vk = 0xAF
+                elif gesture == GestureType.MEDIA_VOL_DOWN: vk = 0xAE
+                elif gesture == GestureType.MEDIA_NEXT: vk = 0xB0
+                elif gesture == GestureType.MEDIA_PREV: vk = 0xB1
+                if vk:
+                    count = max(1, delta) if gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN) else 1
+                    for _ in range(count):
+                        user32.keybd_event(vk, 0, 0, 0)
+                        user32.keybd_event(vk, 0, 2, 0)
+            except Exception:
+                pass
+        threading.Thread(target=_run, daemon=True).start()
 
 
 def main() -> None:

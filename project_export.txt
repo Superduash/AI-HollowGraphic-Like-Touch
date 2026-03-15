@@ -1921,7 +1921,7 @@ from config import (
     SPEED_THRESHOLD,
 )
 from utils.math_utils import clamp
-from utils.smoothing import AdaptiveExponentialSmoother2D, DeadzoneFilter2D, Kalman2D, MotionPredictor2D
+from utils.smoothing import AdaptiveExponentialSmoother2D, DeadzoneFilter2D
 
 
 class CursorMapper:
@@ -1944,10 +1944,7 @@ class CursorMapper:
         "_vel_y",
         "_deadzone_filter",
         "_exp_smoother",
-        "_kalman",
-        "_predictor",
         "_stationary_threshold_sq",
-        "_prediction_t",
     )
 
     def __init__(self, cam_width: int, cam_height: int, screen_width: int, screen_height: int) -> None:
@@ -1971,10 +1968,7 @@ class CursorMapper:
             alpha_fast=ALPHA_FAST,
             speed_threshold=SPEED_THRESHOLD,
         )
-        self._kalman = Kalman2D(process_noise=0.02, measurement_noise=2.5)
-        self._predictor = MotionPredictor2D()
         self._stationary_threshold_sq = float(max(3, int(CURSOR_MOVE_THRESHOLD)) ** 2)
-        self._prediction_t = float(CURSOR_PREDICTION_SECONDS)
 
     def set_camera_size(self, cam_width: int, cam_height: int) -> None:
         """Update source frame size for accurate runtime mapping."""
@@ -2000,8 +1994,6 @@ class CursorMapper:
         self._vel_x = 0.0
         self._vel_y = 0.0
         self._exp_smoother.reset()
-        self._kalman.reset()
-        self._predictor.reset()
 
     def _interp(self, value: float, in_min: float, in_max: float, out_min: float, out_max: float) -> float:
         if in_max <= in_min:
@@ -2015,17 +2007,32 @@ class CursorMapper:
 
         if cam_x < x1 or cam_x > x2 or cam_y < y1 or cam_y > y2:
             if self._out_x >= 0:
-                px = self._out_x + self._vel_x * self._prediction_t
-                py = self._out_y + self._vel_y * self._prediction_t
+                py = self._out_y
+                px = self._out_x
                 return int(clamp(px, 0.0, float(self.scr_w))), int(clamp(py, 0.0, float(self.scr_h)))
             return int(self.scr_w // 2), int(self.scr_h // 2)
 
-        x3 = self._interp(float(cam_x), x1, x2, 0.0, float(self.scr_w))
-        y3 = self._interp(float(cam_y), y1, y2, 0.0, float(self.scr_h))
+        OVERSHOOT_FACTOR = 0.85
+        box_w = x2 - x1
+        box_h = y2 - y1
+
+        # Shrink the logical mapped box so 85% of movement equals 100% of the screen
+        cx = x1 + box_w / 2.0
+        cy = y1 + box_h / 2.0
+        new_w = box_w * OVERSHOOT_FACTOR
+        new_h = box_h * OVERSHOOT_FACTOR
+
+        map_x1 = cx - new_w / 2.0
+        map_x2 = cx + new_w / 2.0
+        map_y1 = cy - new_h / 2.0
+        map_y2 = cy + new_h / 2.0
+
+        x3 = self._interp(float(cam_x), map_x1, map_x2, 0.0, float(self.scr_w))
+        y3 = self._interp(float(cam_y), map_y1, map_y2, 0.0, float(self.scr_h))
 
         if hand_center is not None:
-            cx3 = self._interp(float(hand_center[0]), x1, x2, 0.0, float(self.scr_w))
-            cy3 = self._interp(float(hand_center[1]), y1, y2, 0.0, float(self.scr_h))
+            cx3 = self._interp(float(hand_center[0]), map_x1, map_x2, 0.0, float(self.scr_w))
+            cy3 = self._interp(float(hand_center[1]), map_y1, map_y2, 0.0, float(self.scr_h))
             target_x = 0.78 * x3 + 0.22 * cx3
             target_y = 0.78 * y3 + 0.22 * cy3
         else:
@@ -2047,19 +2054,11 @@ class CursorMapper:
             return int(self._out_x), int(self._out_y)
 
         # Stage 2: adaptive exponential smoothing.
-        speed = math.sqrt(dx_raw * dx_raw + dy_raw * dy_raw)
-        sx, sy = self._exp_smoother.filter(target_x, target_y, speed)
+        speed_sq = dx_raw * dx_raw + dy_raw * dy_raw
+        sx, sy = self._exp_smoother.filter(target_x, target_y, speed_sq)
 
-        # Stage 3: lightweight Kalman filter.
-        kx, ky = self._kalman.filter(sx, sy)
-
-        # Velocity prediction to prevent micro-pauses.
-        px, py, vx, vy = self._predictor.predict(kx, ky, factor=self._prediction_t)
-        self._vel_x = vx
-        self._vel_y = vy
-
-        nx = clamp(px, 0.0, float(self.scr_w))
-        ny = clamp(py, 0.0, float(self.scr_h))
+        nx = clamp(sx, 0.0, float(self.scr_w))
+        ny = clamp(sy, 0.0, float(self.scr_h))
 
         # Additional stationary threshold to suppress residual jitter.
         ddx = nx - self._out_x
@@ -2068,6 +2067,9 @@ class CursorMapper:
             self._ploc_x = target_x
             self._ploc_y = target_y
             return int(self._out_x), int(self._out_y)
+
+        self._vel_x = ddx
+        self._vel_y = ddy
 
         self._ploc_x = target_x
         self._ploc_y = target_y
@@ -2079,33 +2081,10 @@ class CursorMapper:
         return self._vel_x, self._vel_y
 
 ===== FILE: src/controller/mouse_controller.py =====
-"""Mouse control: move, click, double-click, scroll, drag. Supports pydirectinput on Windows."""
+"""Mouse control: move, click, double-click, scroll, drag. Synchronous with macOS Quartz optimization."""
 
 import platform
-import threading
 import time
-import pyautogui
-from config import (
-    CLICK_COOLDOWN,
-    CURSOR_DEADZONE_PX,
-    CURSOR_PREDICTION_SECONDS,
-    CURSOR_THREAD_HZ,
-    CURSOR_MOVE_THRESHOLD,
-)
-
-pyautogui.FAILSAFE = False
-pyautogui.PAUSE = 0
-
-# On Windows, prefer pydirectinput for lower-latency cursor updates.
-_pdi = None
-if platform.system() == "Windows":
-    try:
-        import pydirectinput
-        pydirectinput.FAILSAFE = False
-        pydirectinput.PAUSE = 0
-        _pdi = pydirectinput
-    except ImportError:
-        pass
 
 _quartz = None
 if platform.system() == "Darwin":
@@ -2114,157 +2093,118 @@ if platform.system() == "Darwin":
     except Exception:
         _quartz = None
 
-
-def _move_mac_quartz(x: int, y: int) -> None:
-    if _quartz is None:
-        raise RuntimeError("Quartz CoreGraphics is unavailable for cursor movement")
-    event = _quartz.CGEventCreateMouseEvent(
-        None,
-        _quartz.kCGEventMouseMoved,
-        (float(x), float(y)),
-        _quartz.kCGMouseButtonLeft,
-    )
-    _quartz.CGEventPost(_quartz.kCGHIDEventTap, event)
-
-
-def _move(x: int, y: int) -> None:
-    if platform.system() == "Darwin":
-        _move_mac_quartz(x, y)
-        return
-    if _pdi:
-        _pdi.moveTo(x, y)
-        return
-    pyautogui.moveTo(x, y)
-
-
 class MouseController:
-    def __init__(self, cooldown=CLICK_COOLDOWN, threshold=CURSOR_MOVE_THRESHOLD):
-        threshold = max(3.0, float(threshold))
-        self.thresh_sq = threshold * threshold
-        self._lx = -1
-        self._ly = -1
-        self._last_move_time = 0.0
-        self._move_interval = 1.0 / max(1.0, float(CURSOR_THREAD_HZ))
+    def __init__(self, cooldown=0.0, threshold=0.0):
         self._dragging = False
         self.is_available = True
         self.last_error_message = ""
-
-        self._lock = threading.Lock()
-        self._running = True
-        self._target_x = -1.0
-        self._target_y = -1.0
-        self._vel_x = 0.0
-        self._vel_y = 0.0
-        self._last_target_t = 0.0
         self._cursor_x = -1.0
         self._cursor_y = -1.0
-        self._predict_t = float(CURSOR_PREDICTION_SECONDS)
-        self._thread = threading.Thread(target=self._cursor_loop, daemon=True)
-        self._thread.start()
 
-    def _safe(self, fn, *a, **kw):
-        if not self.is_available:
-            return False
-        try:
-            fn(*a, **kw)
-            return True
-        except Exception as e:
+        if platform.system() == "Darwin" and _quartz is None:
             self.is_available = False
-            self.last_error_message = str(e)
-            return False
+            self.last_error_message = "Quartz CoreGraphics is unavailable for syncing"
 
-    def move_cursor(self, x, y):
+    def move_cursor(self, x: float, y: float) -> None:
         if not self.is_available:
             return
-        now = time.monotonic()
-        tx = float(x)
-        ty = float(y)
-        with self._lock:
-            if self._target_x >= 0.0:
-                dt = max(1e-4, now - self._last_target_t)
-                self._vel_x = (tx - self._target_x) / dt
-                self._vel_y = (ty - self._target_y) / dt
-            self._target_x = tx
-            self._target_y = ty
-            self._last_target_t = now
 
-    def _cursor_loop(self) -> None:
-        while self._running:
-            start = time.monotonic()
-            with self._lock:
-                tx = self._target_x
-                ty = self._target_y
-                vx = self._vel_x
-                vy = self._vel_y
-                last_t = self._last_target_t
+        self._cursor_x = float(x)
+        self._cursor_y = float(y)
 
-            if tx >= 0.0 and ty >= 0.0 and self.is_available:
-                age = start - last_t if last_t > 0.0 else 0.0
-                if age > self._move_interval:
-                    # Keep motion continuous when fresh camera points are delayed.
-                    tx = tx + vx * self._predict_t
-                    ty = ty + vy * self._predict_t
-
-                if self._cursor_x < 0.0:
-                    self._cursor_x = tx
-                    self._cursor_y = ty
-
-                dx = tx - self._cursor_x
-                dy = ty - self._cursor_y
-                dist_sq = dx * dx + dy * dy
-                if dist_sq >= self.thresh_sq:
-                    dist = dist_sq ** 0.5
-                    scale = min(1.0, max(0.24, dist / 24.0))
-                    self._cursor_x += dx * scale
-                    self._cursor_y += dy * scale
-
-                    mx = int(round(self._cursor_x))
-                    my = int(round(self._cursor_y))
-                    if mx != self._lx or my != self._ly:
-                        if self._safe(_move, mx, my):
-                            self._lx, self._ly = mx, my
-                            self._last_move_time = start
-
-            elapsed = time.monotonic() - start
-            time.sleep(max(0.0, self._move_interval - elapsed))
+        if _quartz:
+            event_type = _quartz.kCGEventLeftMouseDragged if self._dragging else _quartz.kCGEventMouseMoved
+            event = _quartz.CGEventCreateMouseEvent(
+                None,
+                event_type,
+                (self._cursor_x, self._cursor_y),
+                _quartz.kCGMouseButtonLeft,
+            )
+            _quartz.CGEventPost(_quartz.kCGHIDEventTap, event)
 
     def stop(self) -> None:
-        self._running = False
-        if self._thread.is_alive():
-            self._thread.join(timeout=1.0)
+        pass
 
     def __del__(self):
+        pass
+
+    def left_click(self) -> bool:
+        if not self.is_available or not _quartz:
+            return False
+
+        pos = (self._cursor_x, self._cursor_y)
+        event_down = _quartz.CGEventCreateMouseEvent(None, _quartz.kCGEventLeftMouseDown, pos, _quartz.kCGMouseButtonLeft)
+        event_up = _quartz.CGEventCreateMouseEvent(None, _quartz.kCGEventLeftMouseUp, pos, _quartz.kCGMouseButtonLeft)
+
+        _quartz.CGEventPost(_quartz.kCGHIDEventTap, event_down)
+        _quartz.CGEventPost(_quartz.kCGHIDEventTap, event_up)
+        return True
+
+    def right_click(self) -> bool:
+        if not self.is_available or not _quartz:
+            return False
+
+        pos = (self._cursor_x, self._cursor_y)
+        event_down = _quartz.CGEventCreateMouseEvent(None, _quartz.kCGEventRightMouseDown, pos, _quartz.kCGMouseButtonRight)
+        event_up = _quartz.CGEventCreateMouseEvent(None, _quartz.kCGEventRightMouseUp, pos, _quartz.kCGMouseButtonRight)
+
+        _quartz.CGEventPost(_quartz.kCGHIDEventTap, event_down)
+        _quartz.CGEventPost(_quartz.kCGHIDEventTap, event_up)
+        return True
+
+    def double_click(self) -> bool:
+        if not self.is_available or not _quartz:
+            return False
+
+        pos = (self._cursor_x, self._cursor_y)
+
+        event_down1 = _quartz.CGEventCreateMouseEvent(None, _quartz.kCGEventLeftMouseDown, pos, _quartz.kCGMouseButtonLeft)
+        event_up1 = _quartz.CGEventCreateMouseEvent(None, _quartz.kCGEventLeftMouseUp, pos, _quartz.kCGMouseButtonLeft)
+        _quartz.CGEventSetIntegerValueField(event_down1, _quartz.kCGMouseEventClickState, 1)
+        _quartz.CGEventSetIntegerValueField(event_up1, _quartz.kCGMouseEventClickState, 1)
+
+        event_down2 = _quartz.CGEventCreateMouseEvent(None, _quartz.kCGEventLeftMouseDown, pos, _quartz.kCGMouseButtonLeft)
+        event_up2 = _quartz.CGEventCreateMouseEvent(None, _quartz.kCGEventLeftMouseUp, pos, _quartz.kCGMouseButtonLeft)
+        _quartz.CGEventSetIntegerValueField(event_down2, _quartz.kCGMouseEventClickState, 2)
+        _quartz.CGEventSetIntegerValueField(event_up2, _quartz.kCGMouseEventClickState, 2)
+
+        _quartz.CGEventPost(_quartz.kCGHIDEventTap, event_down1)
+        _quartz.CGEventPost(_quartz.kCGHIDEventTap, event_up1)
+        # Small delay often needed for macOS to register the double click state properly
+        time.sleep(0.01)
+        _quartz.CGEventPost(_quartz.kCGHIDEventTap, event_down2)
+        _quartz.CGEventPost(_quartz.kCGHIDEventTap, event_up2)
+        return True
+
+    def scroll(self, amount: int) -> None:
+        if not self.is_available or not _quartz or amount == 0:
+            return
+
         try:
-            self.stop()
-        except Exception:
+            # param 0 is lines, 1 is pixels. We'll send standard pixel events.
+            event = _quartz.CGEventCreateScrollWheelEvent(None, 0, 1, int(amount))
+            _quartz.CGEventPost(_quartz.kCGHIDEventTap, event)
+        except Exception as e:
             pass
 
-    def left_click(self):
-        return self._safe(pyautogui.click, button="left")
-
-    def right_click(self):
-        return self._safe(pyautogui.click, button="right")
-
-    def double_click(self):
-        return self._safe(pyautogui.doubleClick)
-
-    def scroll(self, amount):
-        if amount != 0:
-            self._safe(pyautogui.scroll, amount)
-
-    def start_drag(self):
-        if not self._dragging:
+    def start_drag(self) -> None:
+        if not self._dragging and self.is_available and _quartz:
             self._dragging = True
-            self._safe(pyautogui.mouseDown, button="left")
+            pos = (self._cursor_x, self._cursor_y)
+            event = _quartz.CGEventCreateMouseEvent(None, _quartz.kCGEventLeftMouseDown, pos, _quartz.kCGMouseButtonLeft)
+            _quartz.CGEventPost(_quartz.kCGHIDEventTap, event)
 
-    def end_drag(self):
-        if self._dragging:
+    def end_drag(self) -> None:
+        if self._dragging and self.is_available and _quartz:
             self._dragging = False
-            self._safe(pyautogui.mouseUp, button="left")
+            pos = (self._cursor_x, self._cursor_y)
+            event = _quartz.CGEventCreateMouseEvent(None, _quartz.kCGEventLeftMouseUp, pos, _quartz.kCGMouseButtonLeft)
+            _quartz.CGEventPost(_quartz.kCGHIDEventTap, event)
 
     @property
-    def is_dragging(self):
+    def is_dragging(self) -> bool:
         return self._dragging
+
 
 ===== FILE: src/gestures/gesture_detector.py =====
 """Stable state-machine gesture detector for hand interactions."""
@@ -2297,9 +2237,9 @@ class GestureDetector:
     """Gesture detector with confirmation, locking, hysteresis, and priority."""
 
     def __init__(self) -> None:
-        self._confirm_frames_required: int = 4
+        self._confirm_duration: float = 0.12
         self._candidate_gesture: GestureType = GestureType.PAUSE
-        self._candidate_frames: int = 0
+        self._candidate_start: float = 0.0
         self._active_gesture: GestureType = GestureType.PAUSE
 
         self._lock_ms: float = 0.2
@@ -2322,13 +2262,11 @@ class GestureDetector:
 
         self._scroll_anchor_y: float | None = None
         self._prev_scroll_y: float | None = None
-        self._smooth_scroll_velocity = 0.0
-        self._smooth_scroll_output = 0.0
 
         self._task_view_cooldown = 1.0
-        self._task_view_confirm_frames = 6
+        self._task_view_confirm_duration = 0.2
         self._last_task_view = 0.0
-        self._task_view_frames = 0
+        self._task_view_start = 0.0
 
     def _is_open_palm(self, xy: list[tuple[int, int]], fingers, hand_scale: float) -> bool:
         # Require all fingers extended and a wide finger spread to prevent
@@ -2354,8 +2292,8 @@ class GestureDetector:
     def is_dragging(self) -> bool:
         return self._is_dragging
 
-    def set_confirm_frames(self, frames: int) -> None:
-        self._confirm_frames_required = max(1, int(frames))
+    def set_confirm_duration(self, duration: float) -> None:
+        self._confirm_duration = max(0.0, float(duration))
 
     def detect(self, hand_data) -> GestureResult:
         if not hand_data:
@@ -2374,16 +2312,17 @@ class GestureDetector:
         # Keep Task View behavior as explicit edge-trigger path.
         hand_scale = self._hand_scale(landmarks_xy)
         if self._is_open_palm(landmarks_xy, fingers, hand_scale):
-            self._task_view_frames += 1
-            if self._task_view_frames >= self._task_view_confirm_frames and now - self._last_task_view >= self._task_view_cooldown:
+            if self._task_view_start == 0.0:
+                self._task_view_start = now
+            elif now - self._task_view_start >= self._task_view_confirm_duration and now - self._last_task_view >= self._task_view_cooldown:
                 self._last_task_view = now
-                self._task_view_frames = 0
+                self._task_view_start = 0.0
                 self._active_gesture = GestureType.TASK_VIEW
                 self._locked_until = now + self._lock_ms
                 return GestureResult(GestureType.TASK_VIEW, 0)
             return self._commit_gesture(GestureType.PAUSE, now, 0)
         else:
-            self._task_view_frames = 0
+            self._task_view_start = 0.0
 
         thumb = landmarks_xy[_THUMB_TIP]
         index_tip = landmarks_xy[_INDEX_TIP]
@@ -2433,27 +2372,22 @@ class GestureDetector:
             if self._scroll_anchor_y is None:
                 self._scroll_anchor_y = y
                 self._prev_scroll_y = y
-                self._smooth_scroll_velocity = 0.0
-                self._smooth_scroll_output = 0.0
             else:
-                if self._prev_scroll_y is None:
-                    self._prev_scroll_y = y
-                velocity = y - self._prev_scroll_y
-                self._prev_scroll_y = y
-                self._smooth_scroll_velocity = 0.7 * self._smooth_scroll_velocity + 0.3 * velocity
-
                 rel = y - self._scroll_anchor_y
-                signal = 0.75 * rel + 3.25 * self._smooth_scroll_velocity
-                self._smooth_scroll_output = 0.7 * self._smooth_scroll_output + 0.3 * signal
-                scroll_delta = int(-self._smooth_scroll_output * SCROLL_SENSITIVITY)
+                if abs(rel) > 15.0:
+                    sign = 1 if rel > 0 else -1
+                    scroll_delta = int(-sign * ((abs(rel) - 15.0) * SCROLL_SENSITIVITY * 2.0))
+                    # Reset anchor to smoothly chain scrolls
+                    self._scroll_anchor_y = y
         else:
             self._scroll_anchor_y = None
             self._prev_scroll_y = None
-            self._smooth_scroll_velocity = 0.0
-            self._smooth_scroll_output = 0.0
 
-        # Priority: DRAG > CLICK > SCROLL > MOVE > PAUSE
+        # Priority: DRAG > CLICK > SCROLL > KEYBOARD > MOVE > PAUSE
         intent = GestureType.PAUSE
+
+        keyboard_pose = (not fingers.thumb) and fingers.index and fingers.middle and fingers.ring and (not fingers.pinky)
+
         if self._left_pinch_active and self._left_pinch_start > 0.0 and (now - self._left_pinch_start) >= self._drag_hold_time:
             intent = GestureType.DRAG
             if not self._is_dragging:
@@ -2465,6 +2399,8 @@ class GestureDetector:
             intent = GestureType.RIGHT_CLICK
         elif in_scroll_pose and (self._scroll_anchor_y is not None):
             intent = GestureType.SCROLL
+        elif keyboard_pose and not self._left_pinch_active and not self._right_pinch_active:
+            intent = GestureType.KEYBOARD
         elif fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
             intent = GestureType.MOVE
         else:
@@ -2480,20 +2416,18 @@ class GestureDetector:
             return GestureResult(self._active_gesture, 0)
 
         if intent == self._candidate_gesture:
-            self._candidate_frames += 1
+            if now - self._candidate_start >= self._confirm_duration and intent != self._active_gesture:
+                self._active_gesture = intent
+                self._locked_until = now + self._lock_ms
+                if intent == GestureType.LEFT_CLICK:
+                    self._left_click_pending = False
+                    self._last_left_click = now
+                elif intent == GestureType.RIGHT_CLICK:
+                    self._right_click_pending = False
+                    self._last_right_click = now
         else:
             self._candidate_gesture = intent
-            self._candidate_frames = 1
-
-        if self._candidate_frames >= self._confirm_frames_required and intent != self._active_gesture:
-            self._active_gesture = intent
-            self._locked_until = now + self._lock_ms
-            if intent == GestureType.LEFT_CLICK:
-                self._left_click_pending = False
-                self._last_left_click = now
-            elif intent == GestureType.RIGHT_CLICK:
-                self._right_click_pending = False
-                self._last_right_click = now
+            self._candidate_start = now
 
         if self._active_gesture == GestureType.SCROLL:
             return GestureResult(GestureType.SCROLL, scroll_delta)
@@ -2515,11 +2449,10 @@ class GestureDetector:
 
         self._scroll_anchor_y = None
         self._prev_scroll_y = None
-        self._smooth_scroll_velocity = 0.0
-        self._smooth_scroll_output = 0.0
 
         self._candidate_gesture = GestureType.PAUSE
-        self._candidate_frames = 0
+        self._candidate_start = 0.0
+        self._task_view_start = 0.0
         self._active_gesture = GestureType.PAUSE
         self._locked_until = 0.0
 
@@ -2527,10 +2460,7 @@ class GestureDetector:
         try:
             return max(40.0, point_distance(xy[_INDEX_MCP], xy[_PINKY_MCP]))
         except Exception:
-            # Fallback: use bounding box size.
-            xs = [p[0] for p in xy]
-            ys = [p[1] for p in xy]
-            return max(40.0, float(max(max(xs) - min(xs), max(ys) - min(ys))))
+            return 40.0
 
 ===== FILE: src/gestures/gesture_types.py =====
 """Gesture labels used across the application."""
@@ -2551,6 +2481,7 @@ class GestureType(str, Enum):
     VOLUME = "VOLUME"
     SWITCH_WINDOW = "SWITCH_WINDOW"
     OPEN_PALM = "OPEN_PALM"
+    KEYBOARD = "KEYBOARD"
 
 
 STATE_MACHINE_GESTURES = (
@@ -2560,6 +2491,7 @@ STATE_MACHINE_GESTURES = (
     GestureType.SCROLL,
     GestureType.DRAG,
     GestureType.PAUSE,
+    GestureType.KEYBOARD,
 )
 
 ===== FILE: src/gui/gesture_help_panel.py =====
@@ -2606,6 +2538,7 @@ from __future__ import annotations
 import threading
 import time
 import sys
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -2645,6 +2578,7 @@ _OVERLAY_LABELS = {
     GestureType.DRAG: "DRAG",
     GestureType.PAUSE: "PAUSED",
     GestureType.TASK_VIEW: "TASK VIEW",
+    GestureType.KEYBOARD: "KEYBOARD",
 }
 
 _BADGE_COLORS = {
@@ -2656,6 +2590,7 @@ _BADGE_COLORS = {
     GestureType.DRAG: "#A78BFA",
     GestureType.PAUSE: "#F87171",
     GestureType.TASK_VIEW: "#A78BFA",
+    GestureType.KEYBOARD: "#FBBF24",
     GestureType.NONE: "#64748B",
 }
 
@@ -2672,7 +2607,7 @@ class MainWindow(QMainWindow):
         self._camera = CameraThread()
         self._tracker = HandTracker()
         self._detector = GestureDetector()
-        self._detector.set_confirm_frames(3)
+        self._detector.set_confirm_duration(0.12)
         self._fps = FPSCounter(target_fps=TARGET_FPS)
 
         try:
@@ -2702,6 +2637,7 @@ class MainWindow(QMainWindow):
         self._last_ui_gesture = GestureType.NONE
         self._last_preview_frame_id = -1
         self._last_preview_render = 0.0
+        self._ui_frame_counter = 0
 
         self._icons_dir = Path(__file__).resolve().parents[2] / "assets" / "icons"
 
@@ -2827,6 +2763,7 @@ class MainWindow(QMainWindow):
             ("click.svg", "Index down + Thumb + Middle pinch", "Right click"),
             ("scroll.svg", "Peace sign + up/down", "Scroll"),
             ("settings.svg", "Open palm", "Task View (Win+Tab)"),
+            ("settings.svg", "Three fingers up", "Keyboard Toggle"),
             ("pause.svg", "No gesture / hand down", "Pause"),
         ]
         for i, (ico, a, b) in enumerate(guide_rows, start=1):
@@ -2970,7 +2907,7 @@ class MainWindow(QMainWindow):
             self._preview.setText(str(exc))
             return
         self._detector = GestureDetector()
-        self._detector.set_confirm_frames(3)
+        self._detector.set_confirm_duration(0.12)
 
         if not self._camera.start():
             self._status_text.setText("Camera Error")
@@ -3071,6 +3008,16 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
 
+            if self._mouse_enabled and gesture == GestureType.KEYBOARD and gesture_changed:
+                if sys.platform == "darwin":
+                    # Spawn AppleScript toggle in a background thread so vision pipeline doesn't freeze.
+                    def toggle_kb():
+                        cmd = ["osascript", "-e", 'tell application "System Events" to key code 53']
+                        # Or 'open -a "Accessibility Keyboard"' depending on user setup; we'll invoke the macOS native Accessibility keyboard action
+                        # However, AppleScript for standard toggle is tricky. Opening the app is reliable.
+                        subprocess.run(["open", "-a", "Accessibility Keyboard"], capture_output=True)
+                    threading.Thread(target=toggle_kb, daemon=True).start()
+
             fingers_count = 0
             if hand_data and isinstance(hand_data, dict):
                 xy = hand_data.get("xy")
@@ -3078,7 +3025,7 @@ class MainWindow(QMainWindow):
                     fs = get_finger_states(xy)
                     fingers_count = int(fs.thumb) + int(fs.index) + int(fs.middle) + int(fs.ring) + int(fs.pinky)
 
-            if self._mouse_enabled and hand_data and gesture not in {GestureType.PAUSE, GestureType.NONE, GestureType.TASK_VIEW}:
+            if self._mouse_enabled and hand_data and gesture not in {GestureType.PAUSE, GestureType.NONE, GestureType.TASK_VIEW, GestureType.KEYBOARD}:
                 xy = hand_data.get("xy")
                 if xy and len(xy) > 8:
                     tip_x, tip_y = xy[8]
@@ -3163,6 +3110,10 @@ class MainWindow(QMainWindow):
             return
         self._last_preview_frame_id = frame_id
         self._last_preview_render = now
+
+        self._ui_frame_counter += 1
+        if self._ui_frame_counter % 3 != 0:
+            return
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -3619,30 +3570,32 @@ class DeadzoneFilter2D:
 class AdaptiveExponentialSmoother2D:
     """Adaptive exponential smoothing with velocity-based alpha."""
 
-    __slots__ = ("alpha_slow", "alpha_fast", "speed_threshold", "x", "y", "initialized")
+    __slots__ = ("alpha_slow", "alpha_fast", "speed_threshold_sq", "x", "y", "initialized")
 
     def __init__(self, alpha_slow: float = 0.25, alpha_fast: float = 0.70, speed_threshold: float = 50.0) -> None:
         self.alpha_slow = float(alpha_slow)
         self.alpha_fast = float(alpha_fast)
-        self.speed_threshold = max(1e-6, float(speed_threshold))
+        self.speed_threshold_sq = max(1e-12, float(speed_threshold) ** 2)
         self.x = 0.0
         self.y = 0.0
         self.initialized = False
 
-    def _alpha(self, speed: float) -> float:
-        if speed <= 0.0:
+    def _alpha(self, speed_sq: float) -> float:
+        if speed_sq <= 0.0:
             return self.alpha_slow
-        t = min(1.0, speed / self.speed_threshold)
+        t = min(1.0, speed_sq / self.speed_threshold_sq)
+        # Using sqrt here would undo the optimization, but to approximate t linearly with speed_sq:
+        # Actually it's better to just interpolate with speed_sq directly for speed.
         return self.alpha_slow + (self.alpha_fast - self.alpha_slow) * t
 
-    def filter(self, x: float, y: float, speed: float) -> tuple[float, float]:
+    def filter(self, x: float, y: float, speed_sq: float) -> tuple[float, float]:
         if not self.initialized:
             self.initialized = True
             self.x = float(x)
             self.y = float(y)
             return self.x, self.y
 
-        a = self._alpha(speed)
+        a = self._alpha(speed_sq)
         self.x += a * (float(x) - self.x)
         self.y += a * (float(y) - self.y)
         return self.x, self.y
@@ -3651,80 +3604,6 @@ class AdaptiveExponentialSmoother2D:
         self.initialized = False
         self.x = 0.0
         self.y = 0.0
-
-
-class Kalman1D:
-    __slots__ = ("q", "r", "x", "p", "initialized")
-
-    def __init__(self, process_noise: float = 0.02, measurement_noise: float = 2.5) -> None:
-        self.q = float(process_noise)
-        self.r = float(measurement_noise)
-        self.x = 0.0
-        self.p = 1.0
-        self.initialized = False
-
-    def filter(self, measurement: float) -> float:
-        z = float(measurement)
-        if not self.initialized:
-            self.initialized = True
-            self.x = z
-            self.p = 1.0
-            return self.x
-
-        self.p = self.p + self.q
-        k = self.p / (self.p + self.r)
-        self.x = self.x + k * (z - self.x)
-        self.p = (1.0 - k) * self.p
-        return self.x
-
-    def reset(self) -> None:
-        self.initialized = False
-        self.x = 0.0
-        self.p = 1.0
-
-
-class Kalman2D:
-    __slots__ = ("_kx", "_ky")
-
-    def __init__(self, process_noise: float = 0.02, measurement_noise: float = 2.5) -> None:
-        self._kx = Kalman1D(process_noise=process_noise, measurement_noise=measurement_noise)
-        self._ky = Kalman1D(process_noise=process_noise, measurement_noise=measurement_noise)
-
-    def filter(self, x: float, y: float) -> tuple[float, float]:
-        return self._kx.filter(x), self._ky.filter(y)
-
-    def reset(self) -> None:
-        self._kx.reset()
-        self._ky.reset()
-
-
-class MotionPredictor2D:
-    __slots__ = ("_prev_x", "_prev_y", "_has_prev")
-
-    def __init__(self) -> None:
-        self._prev_x = 0.0
-        self._prev_y = 0.0
-        self._has_prev = False
-
-    def predict(self, x: float, y: float, factor: float = 0.1) -> tuple[float, float, float, float]:
-        fx = float(x)
-        fy = float(y)
-        if not self._has_prev:
-            self._has_prev = True
-            self._prev_x = fx
-            self._prev_y = fy
-            return fx, fy, 0.0, 0.0
-
-        vx = fx - self._prev_x
-        vy = fy - self._prev_y
-        self._prev_x = fx
-        self._prev_y = fy
-        return fx + vx * factor, fy + vy * factor, vx, vy
-
-    def reset(self) -> None:
-        self._has_prev = False
-        self._prev_x = 0.0
-        self._prev_y = 0.0
 
 
 # Backward-compatible alias.

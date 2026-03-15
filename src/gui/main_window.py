@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 import sys
+import subprocess
 from pathlib import Path
 
 import cv2
@@ -44,6 +45,11 @@ _OVERLAY_LABELS = {
     GestureType.DRAG: "DRAG",
     GestureType.PAUSE: "PAUSED",
     GestureType.TASK_VIEW: "TASK VIEW",
+    GestureType.KEYBOARD: "KEYBOARD",
+    GestureType.MEDIA_VOL_UP: "VOL UP",
+    GestureType.MEDIA_VOL_DOWN: "VOL DOWN",
+    GestureType.MEDIA_NEXT: "NEXT TRACK",
+    GestureType.MEDIA_PREV: "PREV TRACK",
 }
 
 _BADGE_COLORS = {
@@ -55,6 +61,11 @@ _BADGE_COLORS = {
     GestureType.DRAG: "#A78BFA",
     GestureType.PAUSE: "#F87171",
     GestureType.TASK_VIEW: "#A78BFA",
+    GestureType.KEYBOARD: "#FBBF24",
+    GestureType.MEDIA_VOL_UP: "#F472B6",
+    GestureType.MEDIA_VOL_DOWN: "#F472B6",
+    GestureType.MEDIA_NEXT: "#F472B6",
+    GestureType.MEDIA_PREV: "#F472B6",
     GestureType.NONE: "#64748B",
 }
 
@@ -109,6 +120,28 @@ class MainWindow(QMainWindow):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_gui)
         self._timer.start(33)
+        
+        self._last_esc_time = 0.0
+        try:
+            import keyboard # type: ignore
+            keyboard.on_press_key("esc", self._on_esc_press)
+        except Exception:
+            pass
+
+    def _on_esc_press(self, event=None) -> None:
+        now = time.monotonic()
+        if now - self._last_esc_time < 0.5:
+            self._last_esc_time = 0.0
+            QTimer.singleShot(0, self._execute_panic)
+        else:
+            self._last_esc_time = now
+
+    def _execute_panic(self) -> None:
+        if self._mouse_enabled:
+            self._toggle_mouse()
+        if self._mouse.is_dragging:
+            self._mouse.end_drag()
+        self._was_dragging = False
 
     def mainloop(self) -> None:
         app = QApplication.instance()
@@ -227,6 +260,7 @@ class MainWindow(QMainWindow):
             ("click.svg", "Index down + Thumb + Middle pinch", "Right click"),
             ("scroll.svg", "Peace sign + up/down", "Scroll"),
             ("settings.svg", "Open palm", "Task View (Win+Tab)"),
+            ("settings.svg", "Three fingers up", "Keyboard Toggle"),
             ("pause.svg", "No gesture / hand down", "Pause"),
         ]
         for i, (ico, a, b) in enumerate(guide_rows, start=1):
@@ -356,10 +390,14 @@ class MainWindow(QMainWindow):
     def _start_camera(self) -> None:
         if self._processing:
             return
-        try:
-            self._tracker.close()
-        except Exception:
-            pass
+            
+        if hasattr(self, "_tracker") and self._tracker is not None:
+            try:
+                self._tracker.close()
+            except Exception:
+                pass
+            self._tracker = None
+
         try:
             self._tracker = HandTracker()
         except Exception as exc:
@@ -470,6 +508,20 @@ class MainWindow(QMainWindow):
                             pyautogui.hotkey("ctrl", "up")
                     except Exception:
                         pass
+                        
+            if self._mouse_enabled and gesture == GestureType.KEYBOARD and gesture_changed:
+                if sys.platform == "darwin":
+                    def toggle_kb():
+                        subprocess.run(["open", "-a", "Accessibility Keyboard"], capture_output=True)
+                    threading.Thread(target=toggle_kb, daemon=True).start()
+
+            if self._mouse_enabled and gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN, GestureType.MEDIA_NEXT, GestureType.MEDIA_PREV):
+                # Vol relies on scroll_delta scaling, Next/Prev uses trigger
+                if gesture_changed or gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN):
+                    if gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN) and result.scroll_delta == 0:
+                        pass
+                    else:
+                        self._execute_media(gesture, result.scroll_delta)
 
             fingers_count = 0
             if hand_data and isinstance(hand_data, dict):
@@ -478,7 +530,7 @@ class MainWindow(QMainWindow):
                     fs = get_finger_states(xy)
                     fingers_count = int(fs.thumb) + int(fs.index) + int(fs.middle) + int(fs.ring) + int(fs.pinky)
 
-            if self._mouse_enabled and hand_data and gesture not in {GestureType.PAUSE, GestureType.NONE, GestureType.TASK_VIEW}:
+            if self._mouse_enabled and hand_data and gesture not in {GestureType.PAUSE, GestureType.NONE, GestureType.TASK_VIEW, GestureType.KEYBOARD}:
                 xy = hand_data.get("xy")
                 if xy and len(xy) > 8:
                     tip_x, tip_y = xy[8]
@@ -618,3 +670,31 @@ class MainWindow(QMainWindow):
                 Qt.TransformationMode.FastTransformation,
             )
         )
+
+    def _execute_media(self, gesture: GestureType, delta: int) -> None:
+        def _run():
+            if sys.platform.startswith("win"):
+                try:
+                    import ctypes
+                    user32 = ctypes.windll.user32
+                    vk = 0
+                    if gesture == GestureType.MEDIA_VOL_UP: vk = 0xAF
+                    elif gesture == GestureType.MEDIA_VOL_DOWN: vk = 0xAE
+                    elif gesture == GestureType.MEDIA_NEXT: vk = 0xB0
+                    elif gesture == GestureType.MEDIA_PREV: vk = 0xB1
+                    if vk:
+                        count = max(1, delta) if gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN) else 1
+                        for _ in range(count):
+                            user32.keybd_event(vk, 0, 0, 0)
+                            user32.keybd_event(vk, 0, 2, 0)
+                except Exception:
+                    pass
+            elif sys.platform == "darwin":
+                try:
+                    if gesture == GestureType.MEDIA_VOL_UP:
+                        subprocess.run(["osascript", "-e", f"set volume output volume (output volume of (get volume settings) + {max(1, delta)})"], capture_output=True)
+                    elif gesture == GestureType.MEDIA_VOL_DOWN:
+                        subprocess.run(["osascript", "-e", f"set volume output volume (output volume of (get volume settings) - {max(1, delta)})"], capture_output=True)
+                except Exception:
+                    pass
+        threading.Thread(target=_run, daemon=True).start()
