@@ -6,7 +6,17 @@ import time
 
 import cv2
 
-from config import CAMERA_HEIGHT, CAMERA_INDEX, CAMERA_INDEXES, CAMERA_WIDTH
+from config import (
+    CAMERA_HEIGHT,
+    CAMERA_INDEX,
+    CAMERA_INDEXES,
+    CAMERA_WIDTH,
+    CV2_NUM_THREADS,
+    CV2_USE_OPTIMIZED,
+)
+
+cv2.setUseOptimized(bool(CV2_USE_OPTIMIZED))
+cv2.setNumThreads(int(CV2_NUM_THREADS))
 
 
 class CameraThread:
@@ -47,7 +57,7 @@ class CameraThread:
 
     def get_frame(self):
         with self._lock:
-            return self._frame.copy() if self._frame is not None else None
+            return self._frame
 
     @property
     def is_running(self):

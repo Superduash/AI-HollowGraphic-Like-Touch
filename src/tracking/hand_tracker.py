@@ -6,9 +6,14 @@ from config import (
     MAX_NUM_HANDS,
     MIN_DETECTION_CONFIDENCE,
     MIN_TRACKING_CONFIDENCE,
+    CV2_NUM_THREADS,
+    CV2_USE_OPTIMIZED,
     PROCESS_HEIGHT,
     PROCESS_WIDTH,
 )
+
+cv2.setUseOptimized(bool(CV2_USE_OPTIMIZED))
+cv2.setNumThreads(int(CV2_NUM_THREADS))
 
 _CONNECTIONS = [
     (0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),
@@ -51,9 +56,10 @@ class HandTracker:
         self._draw_styles = mp.solutions.drawing_styles
         self._hands = self._mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,
-            min_detection_confidence=0.6,
-            min_tracking_confidence=0.6,
+            max_num_hands=MAX_NUM_HANDS,
+            model_complexity=0,
+            min_detection_confidence=MIN_DETECTION_CONFIDENCE,
+            min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
         )
         self._pw = PROCESS_WIDTH
         self._ph = PROCESS_HEIGHT

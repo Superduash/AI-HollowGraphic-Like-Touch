@@ -83,7 +83,7 @@ class MainWindow(QMainWindow):
 
         self._lock = threading.Lock()
         self._processing = False
-        self._proc_thread = None
+        self._tracking_thread = None
         self._closing = False
         self._mouse_enabled = False
         self._perf_mode = False
@@ -97,13 +97,17 @@ class MainWindow(QMainWindow):
         self._fps_val = 0.0
         self._overlay_text = ""
         self._fingers_count = 0
+        self._raw_hand = None
+        self._last_ui_gesture = GestureType.NONE
+        self._last_preview_frame_id = -1
+        self._last_preview_render = 0.0
 
         self._icons_dir = Path(__file__).resolve().parents[2] / "assets" / "icons"
 
         self._build_ui()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._update_gui)
-        self._timer.start(16)
+        self._timer.start(33)
 
     def mainloop(self) -> None:
         app = QApplication.instance()
@@ -121,6 +125,10 @@ class MainWindow(QMainWindow):
         self._stop_camera()
         try:
             self._tracker.close()
+        except Exception:
+            pass
+        try:
+            self._mouse.stop()
         except Exception:
             pass
         event.accept()
@@ -372,8 +380,8 @@ class MainWindow(QMainWindow):
             return
 
         self._processing = True
-        self._proc_thread = threading.Thread(target=self._process_loop, daemon=True)
-        self._proc_thread.start()
+        self._tracking_thread = threading.Thread(target=self._tracking_loop, daemon=True)
+        self._tracking_thread.start()
 
         self._status_text.setText("Camera Active")
         self._status_dot.setObjectName("statusOnline")
@@ -384,9 +392,9 @@ class MainWindow(QMainWindow):
 
     def _stop_camera(self) -> None:
         self._processing = False
-        if self._proc_thread and self._proc_thread.is_alive():
-            self._proc_thread.join(timeout=2.0)
-        self._proc_thread = None
+        if self._tracking_thread and self._tracking_thread.is_alive():
+            self._tracking_thread.join(timeout=2.0)
+        self._tracking_thread = None
 
         self._camera.stop()
         if self._mouse.is_dragging:
@@ -419,9 +427,10 @@ class MainWindow(QMainWindow):
             self._mouse_btn.setText("Enable Mouse")
             self._mouse_label.setText("Mouse: OFF")
 
-    def _process_loop(self) -> None:
+    def _tracking_loop(self) -> None:
         last_overlay_gesture = GestureType.NONE
         last_action_gesture = GestureType.NONE
+        last_frame_id = -1
 
         while self._processing:
             if not self._camera.is_running:
@@ -430,8 +439,14 @@ class MainWindow(QMainWindow):
 
             frame = self._camera.get_frame()
             if frame is None:
-                time.sleep(0.004)
+                time.sleep(0.001)
                 continue
+
+            frame_id = id(frame)
+            if frame_id == last_frame_id:
+                time.sleep(0.001)
+                continue
+            last_frame_id = frame_id
 
             frame = cv2.flip(frame, 1)
             fh, fw = frame.shape[:2]
@@ -466,9 +481,13 @@ class MainWindow(QMainWindow):
                 xy = hand_data.get("xy")
                 if xy and len(xy) > 8:
                     tip_x, tip_y = xy[8]
+                    center_x = int(sum(p[0] for p in xy) / len(xy))
+                    center_y = int(sum(p[1] for p in xy) / len(xy))
                     cam_x = int((tip_x / PROCESS_WIDTH) * fw)
                     cam_y = int((tip_y / PROCESS_HEIGHT) * fh)
-                    sx, sy = self._mapper.map_to_screen(cam_x, cam_y)
+                    cam_cx = int((center_x / PROCESS_WIDTH) * fw)
+                    cam_cy = int((center_y / PROCESS_HEIGHT) * fh)
+                    sx, sy = self._mapper.map_to_screen(cam_x, cam_y, hand_center=(cam_cx, cam_cy))
 
                     if gesture == GestureType.MOVE:
                         self._mouse.move_cursor(sx, sy)
@@ -525,15 +544,24 @@ class MainWindow(QMainWindow):
             raw_hand = getattr(self, "_raw_hand", None)
 
         self._fps_label.setText(f"FPS {fps_v:.0f}")
-        self._gesture_badge.setText(gesture.value)
-        self._gesture_badge.setStyleSheet(
-            f"border-radius: 12px; padding: 6px 10px; font-weight: 700; background: {_BADGE_COLORS.get(gesture, '#64748B')}; color: #0B1118;"
-        )
+        if gesture != self._last_ui_gesture:
+            self._gesture_badge.setText(gesture.value)
+            self._gesture_badge.setStyleSheet(
+                f"border-radius: 12px; padding: 6px 10px; font-weight: 700; background: {_BADGE_COLORS.get(gesture, '#64748B')}; color: #0B1118;"
+            )
+            self._last_ui_gesture = gesture
         self._hand_label.setText(f"Hand: {'Detected' if hand_ok else 'Not Detected'}")
         self._fingers_label.setText(f"Fingers: {fingers_count}")
 
         if frame is None:
             return
+
+        now = time.monotonic()
+        frame_id = id(frame)
+        if frame_id == self._last_preview_frame_id and (now - self._last_preview_render) < 0.03:
+            return
+        self._last_preview_frame_id = frame_id
+        self._last_preview_render = now
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
@@ -582,6 +610,6 @@ class MainWindow(QMainWindow):
             pix.scaled(
                 self._preview.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
+                Qt.TransformationMode.FastTransformation,
             )
         )

@@ -23,8 +23,12 @@ PROCESS_HEIGHT = 240
 # MediaPipe Hands
 # ---------------------------------------------------------------------------
 MAX_NUM_HANDS = 1
-MIN_DETECTION_CONFIDENCE = 0.7
-MIN_TRACKING_CONFIDENCE = 0.7
+MIN_DETECTION_CONFIDENCE = 0.45
+MIN_TRACKING_CONFIDENCE = 0.45
+
+# OpenCV runtime tuning for low-end CPUs.
+CV2_USE_OPTIMIZED = True
+CV2_NUM_THREADS = 4
 
 # ---------------------------------------------------------------------------
 # Adaptive smoothing
@@ -45,6 +49,18 @@ DRAG_HOLD_TIME = 0.30
 SCROLL_SENSITIVITY = 2.0
 SCROLL_THRESHOLD = 10
 CURSOR_MOVE_THRESHOLD = 3
+
+# Cursor latency and stability tuning.
+CURSOR_THREAD_HZ = 240
+CURSOR_DEADZONE_PX = 2.0
+CURSOR_PREDICTION_SECONDS = 0.1
+CURSOR_MAX_BOOST = 2.0
+CURSOR_SPEED_FOR_MAX_BOOST = 1800.0
+
+# One Euro filter (required low-latency parameters).
+ONE_EURO_MIN_CUTOFF = 1.0
+ONE_EURO_BETA = 0.3
+ONE_EURO_D_CUTOFF = 1.0
 
 # ---------------------------------------------------------------------------
 # Performance

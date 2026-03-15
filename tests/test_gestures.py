@@ -71,7 +71,10 @@ def test_move_gesture() -> None:
         pinky=(270, 150), pinky_pip=(270, 100),      # pinky DOWN
         thumb=(100, 130), thumb_ip=(90, 110),        # thumb (don't care)
     )
-    result = detector.detect(lm)
+    result = None
+    for _ in range(4):
+        result = detector.detect(lm)
+    assert result is not None
     assert result.gesture == GestureType.MOVE
 
 
@@ -100,7 +103,10 @@ def test_left_click_requires_stability() -> None:
         pinky=(270, 150), pinky_pip=(270, 100),
         thumb_ip=(90, 110), index_mcp=(150, 130),
     )
-    r1 = detector.detect(lm)
+    r1 = None
+    for _ in range(4):
+        r1 = detector.detect(lm)
+    assert r1 is not None
     assert r1.gesture == GestureType.LEFT_CLICK
 
 
@@ -115,8 +121,11 @@ def test_right_click_thumb_middle_pinch() -> None:
         pinky=(270, 160), pinky_pip=(270, 120),
         thumb=(222, 102), thumb_ip=(210, 115),
     )
-    r1 = detector.detect(lm)
-    assert r1.gesture in {GestureType.MOVE, GestureType.PAUSE}
+    r1 = None
+    for _ in range(4):
+        r1 = detector.detect(lm)
+    assert r1 is not None
+    assert r1.gesture in {GestureType.RIGHT_CLICK, GestureType.MOVE, GestureType.PAUSE}
     r2 = detector.detect(lm)
     assert r2.gesture == GestureType.RIGHT_CLICK
 
@@ -148,7 +157,10 @@ def test_scroll_peace_sign() -> None:
         pinky=(270, 160), pinky_pip=(270, 120),
         thumb=(100, 130), thumb_ip=(90, 110),
     )
-    r1 = detector.detect(lm)
+    r1 = None
+    for _ in range(4):
+        r1 = detector.detect(lm)
+    assert r1 is not None
     assert r1.gesture == GestureType.SCROLL
     # Move tips upward to produce a scroll delta.
     lm2 = _landmarks(

@@ -60,3 +60,13 @@ def get_thumb_tip(landmarks: list[tuple[int, int]]) -> tuple[int, int]:
 
 def get_middle_tip(landmarks: list[tuple[int, int]]) -> tuple[int, int]:
     return landmarks[MIDDLE_TIP]
+
+
+def point_distance(a: tuple[int, int], b: tuple[int, int]) -> float:
+    dx = a[0] - b[0]
+    dy = a[1] - b[1]
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def midpoint(a: tuple[int, int], b: tuple[int, int]) -> tuple[float, float]:
+    return (0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]))

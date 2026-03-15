@@ -16,3 +16,13 @@ class GestureType(str, Enum):
     VOLUME = "VOLUME"
     SWITCH_WINDOW = "SWITCH_WINDOW"
     OPEN_PALM = "OPEN_PALM"
+
+
+STATE_MACHINE_GESTURES = (
+    GestureType.MOVE,
+    GestureType.LEFT_CLICK,
+    GestureType.RIGHT_CLICK,
+    GestureType.SCROLL,
+    GestureType.DRAG,
+    GestureType.PAUSE,
+)

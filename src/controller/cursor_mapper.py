@@ -2,7 +2,16 @@
 
 import math
 
+from config import (
+    ALPHA_FAST,
+    ALPHA_SLOW,
+    CURSOR_DEADZONE_PX,
+    CURSOR_PREDICTION_SECONDS,
+    CURSOR_MOVE_THRESHOLD,
+    SPEED_THRESHOLD,
+)
 from utils.math_utils import clamp
+from utils.smoothing import AdaptiveExponentialSmoother2D, DeadzoneFilter2D, Kalman2D, MotionPredictor2D
 
 
 class CursorMapper:
@@ -19,9 +28,16 @@ class CursorMapper:
         "_ploc_y",
         "_cloc_x",
         "_cloc_y",
-        "_kalman_x",
-        "_kalman_y",
-        "_kalman_gain",
+        "_out_x",
+        "_out_y",
+        "_vel_x",
+        "_vel_y",
+        "_deadzone_filter",
+        "_exp_smoother",
+        "_kalman",
+        "_predictor",
+        "_stationary_threshold_sq",
+        "_prediction_t",
     )
 
     def __init__(self, cam_width: int, cam_height: int, screen_width: int, screen_height: int) -> None:
@@ -30,14 +46,25 @@ class CursorMapper:
         self.scr_w = screen_width - 1
         self.scr_h = screen_height - 1
         self.frame_r = 100
-        self.smoothening = 7.0
+        self.smoothening = 3.0
         self._ploc_x = -1.0
         self._ploc_y = -1.0
         self._cloc_x = -1.0
         self._cloc_y = -1.0
-        self._kalman_x = -1.0
-        self._kalman_y = -1.0
-        self._kalman_gain = 0.45
+        self._out_x = -1.0
+        self._out_y = -1.0
+        self._vel_x = 0.0
+        self._vel_y = 0.0
+        self._deadzone_filter = DeadzoneFilter2D(radius=float(CURSOR_DEADZONE_PX))
+        self._exp_smoother = AdaptiveExponentialSmoother2D(
+            alpha_slow=ALPHA_SLOW,
+            alpha_fast=ALPHA_FAST,
+            speed_threshold=SPEED_THRESHOLD,
+        )
+        self._kalman = Kalman2D(process_noise=0.02, measurement_noise=2.5)
+        self._predictor = MotionPredictor2D()
+        self._stationary_threshold_sq = float(max(3, int(CURSOR_MOVE_THRESHOLD)) ** 2)
+        self._prediction_t = float(CURSOR_PREDICTION_SECONDS)
 
     def set_camera_size(self, cam_width: int, cam_height: int) -> None:
         """Update source frame size for accurate runtime mapping."""
@@ -58,8 +85,13 @@ class CursorMapper:
         self._ploc_y = -1.0
         self._cloc_x = -1.0
         self._cloc_y = -1.0
-        self._kalman_x = -1.0
-        self._kalman_y = -1.0
+        self._out_x = -1.0
+        self._out_y = -1.0
+        self._vel_x = 0.0
+        self._vel_y = 0.0
+        self._exp_smoother.reset()
+        self._kalman.reset()
+        self._predictor.reset()
 
     def _interp(self, value: float, in_min: float, in_max: float, out_min: float, out_max: float) -> float:
         if in_max <= in_min:
@@ -68,48 +100,70 @@ class CursorMapper:
         t = clamp(t, 0.0, 1.0)
         return out_min + t * (out_max - out_min)
 
-    def map_to_screen(self, cam_x: int, cam_y: int) -> tuple[int, int]:
+    def map_to_screen(self, cam_x: int, cam_y: int, hand_center: tuple[int, int] | None = None) -> tuple[int, int]:
         x1, y1, x2, y2 = self.control_region()
 
         if cam_x < x1 or cam_x > x2 or cam_y < y1 or cam_y > y2:
-            if self._kalman_x >= 0:
-                return int(self._kalman_x), int(self._kalman_y)
+            if self._out_x >= 0:
+                px = self._out_x + self._vel_x * self._prediction_t
+                py = self._out_y + self._vel_y * self._prediction_t
+                return int(clamp(px, 0.0, float(self.scr_w))), int(clamp(py, 0.0, float(self.scr_h)))
             return int(self.scr_w // 2), int(self.scr_h // 2)
 
-        x3 = self._interp(cam_x, x1, x2, 0.0, float(self.scr_w))
-        y3 = self._interp(cam_y, y1, y2, 0.0, float(self.scr_h))
+        x3 = self._interp(float(cam_x), x1, x2, 0.0, float(self.scr_w))
+        y3 = self._interp(float(cam_y), y1, y2, 0.0, float(self.scr_h))
 
-        if self._ploc_x < 0:
-            self._ploc_x, self._ploc_y = x3, y3
-            self._cloc_x, self._cloc_y = x3, y3
-            self._kalman_x, self._kalman_y = x3, y3
-            return int(x3), int(y3)
-
-        # Movement dampening for tiny motions.
-        if abs(x3 - self._ploc_x) < 2.0 and abs(y3 - self._ploc_y) < 2.0:
-            return int(self._kalman_x), int(self._kalman_y)
-
-        # Reference-style smoothing.
-        self._cloc_x = self._ploc_x + (x3 - self._ploc_x) / self.smoothening
-        self._cloc_y = self._ploc_y + (y3 - self._ploc_y) / self.smoothening
-
-        # Piecewise movement dampening/boosting.
-        dx = self._cloc_x - self._ploc_x
-        dy = self._cloc_y - self._ploc_y
-        distsq = dx * dx + dy * dy
-        if distsq <= 25.0:
-            ratio = 0.0
-        elif distsq <= 900.0:
-            ratio = 0.07 * math.sqrt(distsq)
+        if hand_center is not None:
+            cx3 = self._interp(float(hand_center[0]), x1, x2, 0.0, float(self.scr_w))
+            cy3 = self._interp(float(hand_center[1]), y1, y2, 0.0, float(self.scr_h))
+            target_x = 0.78 * x3 + 0.22 * cx3
+            target_y = 0.78 * y3 + 0.22 * cy3
         else:
-            ratio = 2.1
+            target_x, target_y = x3, y3
 
-        damp_x = self._ploc_x + dx * ratio
-        damp_y = self._ploc_y + dy * ratio
+        if self._out_x < 0:
+            self._ploc_x = target_x
+            self._ploc_y = target_y
+            self._cloc_x = target_x
+            self._cloc_y = target_y
+            self._out_x = target_x
+            self._out_y = target_y
+            return int(target_x), int(target_y)
 
-        # Kalman-style single-state filtering stage.
-        self._kalman_x = self._kalman_x + self._kalman_gain * (damp_x - self._kalman_x)
-        self._kalman_y = self._kalman_y + self._kalman_gain * (damp_y - self._kalman_y)
+        # Stage 1: deadzone filter.
+        dx_raw = target_x - self._ploc_x
+        dy_raw = target_y - self._ploc_y
+        if not self._deadzone_filter.apply(dx_raw, dy_raw):
+            return int(self._out_x), int(self._out_y)
 
-        self._ploc_x, self._ploc_y = damp_x, damp_y
-        return int(self._kalman_x), int(self._kalman_y)
+        # Stage 2: adaptive exponential smoothing.
+        speed = math.sqrt(dx_raw * dx_raw + dy_raw * dy_raw)
+        sx, sy = self._exp_smoother.filter(target_x, target_y, speed)
+
+        # Stage 3: lightweight Kalman filter.
+        kx, ky = self._kalman.filter(sx, sy)
+
+        # Velocity prediction to prevent micro-pauses.
+        px, py, vx, vy = self._predictor.predict(kx, ky, factor=self._prediction_t)
+        self._vel_x = vx
+        self._vel_y = vy
+
+        nx = clamp(px, 0.0, float(self.scr_w))
+        ny = clamp(py, 0.0, float(self.scr_h))
+
+        # Additional stationary threshold to suppress residual jitter.
+        ddx = nx - self._out_x
+        ddy = ny - self._out_y
+        if ddx * ddx + ddy * ddy < self._stationary_threshold_sq:
+            self._ploc_x = target_x
+            self._ploc_y = target_y
+            return int(self._out_x), int(self._out_y)
+
+        self._ploc_x = target_x
+        self._ploc_y = target_y
+        self._out_x, self._out_y = nx, ny
+        return int(nx), int(ny)
+
+    @property
+    def velocity(self) -> tuple[float, float]:
+        return self._vel_x, self._vel_y

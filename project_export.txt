@@ -98,7 +98,10 @@ These points allow the system to understand **hand position and finger gestures*
 | Index finger up      | Move cursor     |
 | Thumb + index pinch  | Left click      |
 | Thumb + middle pinch | Right click     |
-| Hand movement        | Cursor movement |
+| Hold thumb+index      | Drag            |
+| Peace sign + up/down  | Scroll          |
+| Open palm             | Task View (Win+Tab) |
+| No gesture / hand down| Pause           |
 
 ---
 
@@ -316,6 +319,1486 @@ This project is a small step toward that future.
 
 ---
 
+===== FILE: Windows Hover/README.txt =====
+Windows Hover (USB build)
+
+Run on Windows:
+1) Double-click run_windows.bat
+
+Notes:
+- Uses the best available Python via the Windows 'py' launcher (prefers 3.11).
+- Creates a local .venv and installs requirements automatically on first run.
+- When you click "Enable Mouse", the main window minimizes and a small always-on-top status overlay stays visible.
+
+This build is optimized for:
+- 640x480 camera capture
+- 320x240 hand processing
+- smoother cursor interpolation + damping
+- gestures: index-only move, thumb+index pinch click/drag, thumb+middle pinch right click, peace-sign scroll, open palm Task View, closed fist pause
+
+===== FILE: Windows Hover/app.py =====
+"""Windows Hover: single-file Windows-optimized holographic touch mouse.
+
+Designed for USB portability: one main Python file with merged camera, tracking,
+gesture, cursor, and UI logic.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+import platform
+import threading
+import time
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+
+import cv2
+try:
+    import mediapipe as mp  # type: ignore
+except Exception:  # ImportError on missing package; also guard weird install states
+    mp = None  # type: ignore[assignment]
+import pyautogui
+from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtGui import QIcon, QImage, QPixmap
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
+
+
+def _mediapipe_diagnostic() -> str:
+    try:
+        if mp is None:
+            return "mediapipe import failed (package not installed or import error)"
+        file_path = getattr(mp, "__file__", None)
+        version = getattr(mp, "__version__", None)
+        has_solutions = hasattr(mp, "solutions")
+        return f"mediapipe version={version} file={file_path} has_solutions={has_solutions}"
+    except Exception:
+        return "mediapipe diagnostic unavailable"
+
+
+def _ensure_mediapipe_solutions() -> None:
+    if mp is None:
+        raise RuntimeError(
+            "MediaPipe is not installed (or failed to import).\n\n"
+            "Fix (inside this app's .venv):\n"
+            "1) Open a terminal in this folder\n"
+            "2) Run: .venv\\Scripts\\python -m pip install -r requirements.txt\n"
+        )
+
+    if hasattr(mp, "solutions"):
+        return
+
+    detail = _mediapipe_diagnostic()
+    raise RuntimeError(
+        "MediaPipe import looks wrong: 'mediapipe' has no attribute 'solutions'.\n"
+        f"{detail}\n\n"
+        "Most common causes:\n"
+        "- A different 'mediapipe' module is being imported (shadowing).\n"
+        "- A broken/partial mediapipe install in the venv.\n\n"
+        "Fix (inside this app's .venv):\n"
+        "1) Open a terminal in this folder\n"
+        "2) Run: .venv\\Scripts\\python -m pip uninstall -y mediapipe\n"
+        "3) Run: .venv\\Scripts\\python -m pip install mediapipe==0.10.21\n"
+    )
+
+
+def _configure_input_latency() -> None:
+    # Reduce pyautogui built-in delays for lower latency.
+    try:
+        pyautogui.PAUSE = 0
+        pyautogui.MINIMUM_DURATION = 0
+        pyautogui.MINIMUM_SLEEP = 0
+        pyautogui.FAILSAFE = False
+    except Exception:
+        pass
+
+
+def _boost_runtime_priority() -> None:
+    # Best-effort: prefer responsiveness on Windows.
+    if platform.system() != "Windows":
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        GetCurrentProcess = kernel32.GetCurrentProcess
+        GetCurrentThread = kernel32.GetCurrentThread
+        SetPriorityClass = kernel32.SetPriorityClass
+        SetThreadPriority = kernel32.SetThreadPriority
+
+        HIGH_PRIORITY_CLASS = 0x00000080
+        THREAD_PRIORITY_HIGHEST = 2
+
+        SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST)
+    except Exception:
+        pass
+
+
+class GestureType(str, Enum):
+    NONE = "NONE"
+    MOVE = "MOVE"
+    LEFT_CLICK = "LEFT CLICK"
+    RIGHT_CLICK = "RIGHT CLICK"
+    DOUBLE_CLICK = "DOUBLE CLICK"
+    SCROLL = "SCROLL"
+    DRAG = "DRAG"
+    TASK_VIEW = "TASK VIEW"
+    PAUSE = "PAUSED"
+
+
+@dataclass
+class GestureResult:
+    gesture: GestureType = GestureType.NONE
+    scroll_delta: int = 0
+
+
+@dataclass
+class FingerStates:
+    thumb: bool
+    index: bool
+    middle: bool
+    ring: bool
+    pinky: bool
+
+
+_OVERLAY_LABELS = {
+    GestureType.NONE: "PAUSED",
+    GestureType.MOVE: "MOVE",
+    GestureType.LEFT_CLICK: "CLICK",
+    GestureType.DOUBLE_CLICK: "DOUBLE",
+    GestureType.RIGHT_CLICK: "RIGHT CLICK",
+    GestureType.SCROLL: "SCROLL",
+    GestureType.DRAG: "DRAG",
+    GestureType.TASK_VIEW: "TASK VIEW",
+    GestureType.PAUSE: "PAUSED",
+}
+
+
+_BADGE_COLORS = {
+    GestureType.MOVE: "#60A5FA",
+    GestureType.LEFT_CLICK: "#4ADE80",
+    GestureType.RIGHT_CLICK: "#4ADE80",
+    GestureType.DOUBLE_CLICK: "#4ADE80",
+    GestureType.SCROLL: "#A78BFA",
+    GestureType.DRAG: "#A78BFA",
+    GestureType.TASK_VIEW: "#A78BFA",
+    GestureType.PAUSE: "#F87171",
+    GestureType.NONE: "#64748B",
+}
+
+
+class CameraSource:
+    def __init__(self, width: int = 640, height: int = 480) -> None:
+        self.width = width
+        self.height = height
+        self._cap: cv2.VideoCapture | None = None
+        self._running = False
+        self._thread = None
+        self._frame = None
+        self._lock = threading.Lock()
+
+    def start(self) -> bool:
+        if self._running:
+            return True
+
+        indexes = [0, 1, 2]
+        backend = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY
+
+        for idx in indexes:
+            cap = cv2.VideoCapture(idx, backend)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+            ok = False
+            for _ in range(10):
+                r, f = cap.read()
+                if r and f is not None:
+                    ok = True
+                    break
+                time.sleep(0.02)
+
+            if ok:
+                self._cap = cap
+                self._running = True
+                self._thread = threading.Thread(target=self._loop, daemon=True)
+                self._thread.start()
+                return True
+
+            cap.release()
+
+        return False
+
+    def _loop(self) -> None:
+        while self._running:
+            cap = self._cap
+            if cap is None:
+                time.sleep(0.005)
+                continue
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                time.sleep(0.005)
+                continue
+            with self._lock:
+                self._frame = frame
+
+    def latest(self):
+        with self._lock:
+            if self._frame is None:
+                return None
+            return self._frame
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.5)
+        self._thread = None
+
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+
+        with self._lock:
+            self._frame = None
+
+
+class HandTracker:
+    def __init__(self, process_w: int = 320, process_h: int = 240) -> None:
+        self.process_w = process_w
+        self.process_h = process_h
+
+        _ensure_mediapipe_solutions()
+
+        self._mp_hands = mp.solutions.hands  # type: ignore[attr-defined]
+        self._draw = mp.solutions.drawing_utils  # type: ignore[attr-defined]
+        self._styles = mp.solutions.drawing_styles  # type: ignore[attr-defined]
+
+        self._hands = self._mp_hands.Hands(
+            static_image_mode=False,
+            max_num_hands=1,
+            model_complexity=0,
+            min_detection_confidence=0.45,
+            min_tracking_confidence=0.45,
+        )
+
+        self._landmark_style = self._styles.get_default_hand_landmarks_style()
+        self._conn_style = self._styles.get_default_hand_connections_style()
+
+    def detect(self, frame_bgr):
+        small = cv2.resize(frame_bgr, (self.process_w, self.process_h), interpolation=cv2.INTER_NEAREST)
+        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        result = self._hands.process(rgb)
+
+        if not result.multi_hand_landmarks:
+            return None, None
+
+        hand = result.multi_hand_landmarks[0]
+        xy = [(int(lm.x * self.process_w), int(lm.y * self.process_h)) for lm in hand.landmark]
+        z = [float(lm.z) for lm in hand.landmark]
+        return {"xy": xy, "z": z}, hand
+
+    def draw(self, frame_rgb, hand_proto):
+        if hand_proto is None:
+            return
+        self._draw.draw_landmarks(
+            frame_rgb,
+            hand_proto,
+            self._mp_hands.HAND_CONNECTIONS,
+            self._landmark_style,
+            self._conn_style,
+        )
+
+    def close(self):
+        try:
+            self._hands.close()
+        except Exception:
+            pass
+
+
+class CursorMapper:
+    def __init__(self, cam_w: int, cam_h: int, scr_w: int, scr_h: int) -> None:
+        self.cam_w = cam_w
+        self.cam_h = cam_h
+        self.scr_w = scr_w - 1
+        self.scr_h = scr_h - 1
+
+        self.frame_r = 90
+        # Lower smoothing => more responsive.
+        self.smoothening = 4.8
+
+        self._ploc_x = -1.0
+        self._ploc_y = -1.0
+        self._cloc_x = -1.0
+        self._cloc_y = -1.0
+
+        self._exp_x = -1.0
+        self._exp_y = -1.0
+
+        self._kalman_x = -1.0
+        self._kalman_y = -1.0
+        self._kalman_gain = 0.52
+
+    def set_camera_size(self, w: int, h: int) -> None:
+        self.cam_w = max(1, w)
+        self.cam_h = max(1, h)
+
+    def control_region(self):
+        x1 = self.frame_r
+        y1 = self.frame_r
+        x2 = max(self.frame_r + 1, self.cam_w - self.frame_r)
+        y2 = max(self.frame_r + 1, self.cam_h - self.frame_r)
+        return x1, y1, x2, y2
+
+    @staticmethod
+    def _interp(v: float, in_min: float, in_max: float, out_min: float, out_max: float) -> float:
+        if in_max <= in_min:
+            return out_min
+        t = max(0.0, min(1.0, (v - in_min) / (in_max - in_min)))
+        return out_min + t * (out_max - out_min)
+
+    def reset(self) -> None:
+        self._ploc_x = self._ploc_y = -1.0
+        self._cloc_x = self._cloc_y = -1.0
+        self._exp_x = self._exp_y = -1.0
+        self._kalman_x = self._kalman_y = -1.0
+
+    def map_point(self, cam_x: int, cam_y: int) -> tuple[int, int]:
+        x1, y1, x2, y2 = self.control_region()
+
+        if cam_x < x1 or cam_x > x2 or cam_y < y1 or cam_y > y2:
+            if self._kalman_x >= 0:
+                return int(self._kalman_x), int(self._kalman_y)
+            return int(self.scr_w // 2), int(self.scr_h // 2)
+
+        x3 = self._interp(cam_x, x1, x2, 0.0, float(self.scr_w))
+        y3 = self._interp(cam_y, y1, y2, 0.0, float(self.scr_h))
+
+        if self._ploc_x < 0:
+            self._ploc_x, self._ploc_y = x3, y3
+            self._cloc_x, self._cloc_y = x3, y3
+            self._exp_x, self._exp_y = x3, y3
+            self._kalman_x, self._kalman_y = x3, y3
+            return int(x3), int(y3)
+
+        if abs(x3 - self._ploc_x) < 2 and abs(y3 - self._ploc_y) < 2:
+            return int(self._kalman_x), int(self._kalman_y)
+
+        self._cloc_x = self._ploc_x + (x3 - self._ploc_x) / self.smoothening
+        self._cloc_y = self._ploc_y + (y3 - self._ploc_y) / self.smoothening
+
+        dx = self._cloc_x - self._ploc_x
+        dy = self._cloc_y - self._ploc_y
+        d2 = dx * dx + dy * dy
+
+        if d2 <= 25:
+            ratio = 0.0
+        elif d2 <= 900:
+            ratio = 0.07 * math.sqrt(d2)
+        else:
+            ratio = 2.1
+
+        damp_x = self._ploc_x + dx * ratio
+        damp_y = self._ploc_y + dy * ratio
+
+        speed = math.sqrt(d2)
+        alpha = 0.25 if speed < 20 else 0.7
+        self._exp_x = self._exp_x + alpha * (damp_x - self._exp_x)
+        self._exp_y = self._exp_y + alpha * (damp_y - self._exp_y)
+
+        self._kalman_x = self._kalman_x + self._kalman_gain * (self._exp_x - self._kalman_x)
+        self._kalman_y = self._kalman_y + self._kalman_gain * (self._exp_y - self._kalman_y)
+
+        self._ploc_x, self._ploc_y = damp_x, damp_y
+        return int(self._kalman_x), int(self._kalman_y)
+
+
+class StatusOverlay(QWidget):
+    def __init__(self) -> None:
+        super().__init__(None)
+        self.setWindowTitle("Windows Hover Status")
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setFixedSize(260, 120)
+
+        root = QFrame(self)
+        root.setObjectName("overlayRoot")
+        root.setGeometry(0, 0, 260, 120)
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        top = QHBoxLayout()
+        top.setSpacing(10)
+        self._dot = QLabel("●")
+        self._dot.setObjectName("statusOnline")
+        self._title = QLabel("Windows Hover")
+        self._title.setObjectName("overlayTitle")
+        top.addWidget(self._dot)
+        top.addWidget(self._title)
+        top.addStretch(1)
+        self._fps = QLabel("FPS 0")
+        self._fps.setObjectName("muted")
+        top.addWidget(self._fps)
+        layout.addLayout(top)
+
+        mid = QHBoxLayout()
+        mid.setSpacing(10)
+        self._badge = QLabel("PAUSED")
+        self._badge.setObjectName("badge")
+        self._hand = QLabel("Hand: -")
+        self._hand.setObjectName("muted")
+        mid.addWidget(self._badge)
+        mid.addWidget(self._hand)
+        mid.addStretch(1)
+        layout.addLayout(mid)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(8)
+        self.open_btn = QPushButton("Open")
+        self.open_btn.setObjectName("ghostButton")
+        self.disable_btn = QPushButton("Disable Mouse")
+        self.disable_btn.setObjectName("redButton")
+        btns.addWidget(self.open_btn)
+        btns.addStretch(1)
+        btns.addWidget(self.disable_btn)
+        layout.addLayout(btns)
+
+        self.setStyleSheet(
+            """
+            #overlayRoot {
+                background: #1A1D24;
+                border: 1px solid #222733;
+                border-radius: 14px;
+            }
+            QLabel { color: #E5E7EB; font-size: 13px; }
+            #overlayTitle { font-weight: 700; }
+            #muted { color: #A3A9B8; }
+            #statusOnline { color: #4ADE80; font-size: 18px; }
+            #badge {
+                border-radius: 12px;
+                padding: 6px 10px;
+                font-weight: 700;
+                background: #334155;
+                color: #F8FAFC;
+                max-width: 160px;
+            }
+            QPushButton {
+                border: 0;
+                border-radius: 12px;
+                color: #F8FAFC;
+                padding: 8px 10px;
+                font-weight: 600;
+                background: #2A3040;
+            }
+            QPushButton:hover { background: #394055; }
+            #ghostButton { background: #252A36; color: #E5E7EB; }
+            #ghostButton:hover { background: #313849; }
+            #redButton { background: #F87171; color: #0B1118; }
+            #redButton:hover { background: #FA8A8A; }
+            """
+        )
+
+    def update_status(self, gesture: GestureType, fps: float, hand_ok: bool) -> None:
+        self._fps.setText(f"FPS {fps:.0f}")
+        self._hand.setText(f"Hand: {'Detected' if hand_ok else 'Not Detected'}")
+        self._badge.setText(gesture.value)
+        self._badge.setStyleSheet(
+            f"border-radius: 12px; padding: 6px 10px; font-weight: 700; background: {_BADGE_COLORS.get(gesture, '#64748B')}; color: #0B1118;"
+        )
+
+
+class MouseController:
+    def __init__(self) -> None:
+        pyautogui.FAILSAFE = False
+        pyautogui.PAUSE = 0
+
+        self._move_interval = 1.0 / 240.0
+        self._last_move = 0.0
+        self._last_x = -1
+        self._last_y = -1
+        self._dragging = False
+
+        self._pdi = None
+        if platform.system() == "Windows":
+            try:
+                import pydirectinput  # type: ignore[import-not-found]
+
+                pydirectinput.FAILSAFE = False
+                pydirectinput.PAUSE = 0
+                self._pdi = pydirectinput
+            except Exception:
+                self._pdi = None
+
+    @staticmethod
+    def _native_scroll_windows(amount: int) -> bool:
+        if platform.system() != "Windows":
+            return False
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+            MOUSEEVENTF_WHEEL = 0x0800
+            WHEEL_DELTA = 120
+
+            clicks = int(amount)
+            if clicks == 0:
+                return True
+
+            # Clamp to avoid extreme values.
+            clicks = max(-50, min(50, clicks))
+            delta = int(clicks * WHEEL_DELTA)
+            user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
+            return True
+        except Exception:
+            return False
+
+    @property
+    def is_dragging(self) -> bool:
+        return self._dragging
+
+    def _move_to(self, x: int, y: int) -> None:
+        if self._pdi is not None:
+            self._pdi.moveTo(x, y)
+        else:
+            pyautogui.moveTo(x, y)
+
+    def move(self, x: int, y: int) -> None:
+        now = time.monotonic()
+        if now - self._last_move < self._move_interval:
+            return
+
+        dx = x - self._last_x
+        dy = y - self._last_y
+        if dx * dx + dy * dy < 4:
+            return
+
+        self._move_to(x, y)
+        self._last_x, self._last_y = x, y
+        self._last_move = now
+
+    def left_click(self) -> None:
+        if self._pdi is not None:
+            self._pdi.click(button="left")
+        else:
+            pyautogui.click(button="left")
+
+    def right_click(self) -> None:
+        if self._pdi is not None:
+            self._pdi.click(button="right")
+        else:
+            pyautogui.click(button="right")
+
+    def scroll(self, amount: int) -> None:
+        if amount == 0:
+            return
+
+        pdi = self._pdi
+        if pdi is not None and hasattr(pdi, "scroll"):
+            try:
+                pdi.scroll(int(amount))
+                return
+            except Exception:
+                pass
+
+        if hasattr(pyautogui, "scroll"):
+            try:
+                pyautogui.scroll(int(amount))
+                return
+            except Exception:
+                pass
+
+        # Last resort: Windows-native wheel event.
+        self._native_scroll_windows(int(amount))
+
+    def start_drag(self) -> None:
+        if not self._dragging:
+            self._dragging = True
+            if self._pdi is not None:
+                self._pdi.mouseDown(button="left")
+            else:
+                pyautogui.mouseDown(button="left")
+
+    def end_drag(self) -> None:
+        if self._dragging:
+            self._dragging = False
+            if self._pdi is not None:
+                self._pdi.mouseUp(button="left")
+            else:
+                pyautogui.mouseUp(button="left")
+
+
+class GestureEngine:
+    def __init__(self) -> None:
+        self._candidate = GestureType.NONE
+        self._candidate_frames = 0
+        self._confirmed = GestureType.NONE
+        self._dragging = False
+
+        # Higher confirmation reduces flicker/spam on Windows.
+        self._confirm_required = 4
+
+        self._left_pinch_active = False
+        self._right_pinch_active = False
+        self._left_pinch_start = 0.0
+        self._left_pinch_frames = 0
+        self._right_pinch_frames = 0
+        self._right_pose_frames = 0
+        self._left_click_fired = False
+        self._right_click_fired = False
+
+        self._last_left = 0.0
+        self._last_right = 0.0
+        self._last_task_view = 0.0
+        self._task_view_frames = 0
+
+        self._prev_scroll_y = None
+        self._smooth_scroll = 0.0
+
+        # Less sensitive pinches to avoid accidental clicks.
+        self._pinch_enter = 0.20
+        self._pinch_exit = 0.28
+        self._right_pinch_enter_factor = 0.86
+        self._right_click_pose_frames = 2
+        self._right_click_pinch_frames = 2
+        self._scroll_motion_threshold = 3.0
+        self._task_view_cooldown = 1.0
+        self._task_view_confirm_frames = 6
+        self._click_cooldown = 0.25
+
+    @property
+    def dragging(self) -> bool:
+        return self._dragging
+
+    @staticmethod
+    def _distance(a, b) -> float:
+        dx = a[0] - b[0]
+        dy = a[1] - b[1]
+        return math.sqrt(dx * dx + dy * dy)
+
+    @staticmethod
+    def _finger_states(landmarks_xy) -> FingerStates:
+        # Thumb: orientation-independent (same as repo main app)
+        tt = landmarks_xy[4]
+        ti = landmarks_xy[3]
+        im = landmarks_xy[5]
+        dx1, dy1 = tt[0] - im[0], tt[1] - im[1]
+        dx2, dy2 = ti[0] - im[0], ti[1] - im[1]
+        thumb = (dx1 * dx1 + dy1 * dy1) > (dx2 * dx2 + dy2 * dy2)
+        index = landmarks_xy[8][1] < landmarks_xy[6][1]
+        middle = landmarks_xy[12][1] < landmarks_xy[10][1]
+        ring = landmarks_xy[16][1] < landmarks_xy[14][1]
+        pinky = landmarks_xy[20][1] < landmarks_xy[18][1]
+        return FingerStates(thumb, index, middle, ring, pinky)
+
+    def _is_open_palm(self, xy, fs: FingerStates, hand_scale: float) -> bool:
+        # Require all fingers extended AND a wide finger spread to prevent
+        # Task View triggering from partial/rotated hands.
+        if not (fs.thumb and fs.index and fs.middle and fs.ring and fs.pinky):
+            return False
+
+        try:
+            wrist_y = xy[0][1]
+            # Fingertips should be above the wrist.
+            if not (xy[8][1] < wrist_y and xy[12][1] < wrist_y and xy[16][1] < wrist_y and xy[20][1] < wrist_y):
+                return False
+
+            spread = self._distance(xy[8], xy[20])  # index tip to pinky tip
+            thumb_sep = self._distance(xy[4], xy[5])  # thumb tip to index MCP
+
+            if spread < hand_scale * 0.85:
+                return False
+            if thumb_sep < hand_scale * 0.35:
+                return False
+            return True
+        except Exception:
+            return False
+
+    def detect(self, hand_data) -> GestureResult:
+        if not hand_data:
+            self._confirmed = GestureType.NONE
+            self._candidate = GestureType.NONE
+            self._candidate_frames = 0
+            self._dragging = False
+
+            self._left_pinch_active = False
+            self._right_pinch_active = False
+            self._left_pinch_start = 0.0
+            self._left_pinch_frames = 0
+            self._right_pinch_frames = 0
+            self._right_pose_frames = 0
+            self._left_click_fired = False
+            self._right_click_fired = False
+
+            self._prev_scroll_y = None
+            self._smooth_scroll = 0.0
+            return GestureResult(GestureType.PAUSE)
+
+        xy = hand_data["xy"]
+        now = time.monotonic()
+
+        fs = self._finger_states(xy)
+
+        # Hand scale used for robust open-palm checks too.
+        hand_scale = max(40.0, self._distance(xy[5], xy[17]))
+
+        # Open palm: Task View.
+        if self._is_open_palm(xy, fs, hand_scale):
+            self._dragging = False
+            self._left_pinch_active = False
+            self._right_pinch_active = False
+            self._left_pinch_start = 0.0
+            self._left_pinch_frames = 0
+            self._right_pinch_frames = 0
+            self._left_click_fired = False
+            self._right_click_fired = False
+            self._prev_scroll_y = None
+            self._smooth_scroll = 0.0
+
+            self._task_view_frames += 1
+            if self._task_view_frames >= self._task_view_confirm_frames and now - self._last_task_view >= self._task_view_cooldown:
+                self._last_task_view = now
+                self._task_view_frames = 0
+                return self._confirm(GestureType.TASK_VIEW, 0, edge_trigger=True)
+
+            # Hold open palm without triggering anything.
+            return self._confirm(GestureType.PAUSE, 0)
+        else:
+            self._task_view_frames = 0
+
+        # Pinch distances (scale-invariant).
+        thumb = xy[4]
+        index_tip = xy[8]
+        middle_tip = xy[12]
+        enter = max(12.0, min(42.0, hand_scale * self._pinch_enter))
+        exit_ = max(enter + 2.0, min(58.0, hand_scale * self._pinch_exit))
+        right_enter = max(10.0, enter * self._right_pinch_enter_factor)
+
+        left_dist = self._distance(thumb, index_tip)
+        right_dist = self._distance(thumb, middle_tip)
+
+        if not fs.index:
+            self._left_pinch_active = False
+        else:
+            if self._left_pinch_active:
+                if left_dist > exit_:
+                    self._left_pinch_active = False
+            else:
+                if left_dist < enter:
+                    self._left_pinch_active = True
+
+        right_click_pose = (not fs.index) and (not fs.ring) and (not fs.pinky)
+        if right_click_pose:
+            self._right_pose_frames += 1
+        else:
+            self._right_pose_frames = 0
+
+        if not fs.middle:
+            self._right_pinch_active = False
+        else:
+            if self._right_pinch_active:
+                if right_dist > exit_ or not right_click_pose:
+                    self._right_pinch_active = False
+            else:
+                if right_click_pose and right_dist < right_enter:
+                    self._right_pinch_active = True
+
+        # Right click: thumb + middle pinch.
+        if self._right_pinch_active and not self._left_pinch_active:
+            self._prev_scroll_y = None
+            self._smooth_scroll = 0.0
+            self._right_pinch_frames += 1
+            if (
+                not self._right_click_fired
+                and self._right_pose_frames >= self._right_click_pose_frames
+                and self._right_pinch_frames >= self._right_click_pinch_frames
+                and now - self._last_right >= self._click_cooldown
+            ):
+                self._right_click_fired = True
+                self._last_right = now
+                return self._confirm(GestureType.RIGHT_CLICK, 0, edge_trigger=True)
+            return self._confirm(GestureType.MOVE, 0)
+        if not self._right_pinch_active:
+            self._right_pinch_frames = 0
+            self._right_click_fired = False
+
+        # Left click/drag: thumb + index pinch.
+        if self._left_pinch_active:
+            self._prev_scroll_y = None
+            self._smooth_scroll = 0.0
+            self._left_pinch_frames += 1
+            if (
+                not self._left_click_fired
+                and self._left_pinch_frames >= 1
+                and now - self._last_left >= self._click_cooldown
+            ):
+                self._left_click_fired = True
+                self._last_left = now
+                self._left_pinch_start = now
+                return self._confirm(GestureType.LEFT_CLICK, 0, edge_trigger=True)
+
+            if self._left_pinch_start == 0.0:
+                self._left_pinch_start = now
+
+            if now - self._left_pinch_start >= 0.30:
+                self._dragging = True
+                return self._confirm(GestureType.DRAG, 0, edge_trigger=True)
+
+            return self._confirm(GestureType.MOVE, 0)
+
+        # Pinch released.
+        self._left_pinch_frames = 0
+        self._left_click_fired = False
+        self._left_pinch_start = 0.0
+        self._dragging = False
+
+        # Scroll: peace sign + vertical motion.
+        if fs.index and fs.middle and not fs.ring and not fs.pinky:
+            y = 0.5 * (xy[8][1] + xy[12][1])
+            if self._prev_scroll_y is None:
+                self._prev_scroll_y = y
+                return self._confirm(GestureType.SCROLL, 0)
+
+            dy = y - self._prev_scroll_y
+            self._prev_scroll_y = y
+            if abs(dy) < self._scroll_motion_threshold:
+                return self._confirm(GestureType.SCROLL, 0)
+
+            raw = -dy * 2.0
+            self._smooth_scroll = 0.6 * self._smooth_scroll + 0.4 * raw
+            return self._confirm(GestureType.SCROLL, int(self._smooth_scroll))
+
+        self._prev_scroll_y = None
+        self._smooth_scroll = 0.0
+
+        # Move: index finger only.
+        if fs.index and not fs.middle and not fs.ring and not fs.pinky:
+            return self._confirm(GestureType.MOVE, 0)
+
+        return self._confirm(GestureType.PAUSE, 0)
+
+    def _confirm(self, raw: GestureType, scroll_delta: int, edge_trigger: bool = False) -> GestureResult:
+        if raw == self._candidate:
+            self._candidate_frames += 1
+        else:
+            self._candidate = raw
+            self._candidate_frames = 1
+
+        if raw in {GestureType.PAUSE, GestureType.SCROLL}:
+            self._confirmed = raw
+        elif edge_trigger:
+            self._confirmed = raw
+        else:
+            if self._confirmed == GestureType.NONE and raw != GestureType.NONE:
+                self._confirmed = raw
+            elif self._candidate_frames >= self._confirm_required:
+                self._confirmed = raw
+
+        if self._confirmed == GestureType.SCROLL:
+            return GestureResult(self._confirmed, scroll_delta)
+        return GestureResult(self._confirmed, 0)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+
+        _configure_input_latency()
+
+        if platform.system() != "Windows":
+            print("Windows Hover is optimized for Windows.")
+
+        self.setWindowTitle("Holographic Touch")
+        self.resize(1280, 820)
+        self.setMinimumSize(1024, 680)
+
+        self.camera = CameraSource(640, 480)
+        self._mediapipe_error: str | None = None
+        try:
+            self.tracker: HandTracker | None = HandTracker(320, 240)
+        except Exception as exc:
+            self.tracker = None
+            self._mediapipe_error = str(exc)
+        self.gestures = GestureEngine()
+        self.fps = 0.0
+        self._fps_prev = time.monotonic()
+
+        sw, sh = pyautogui.size()
+        self.mapper = CursorMapper(640, 480, sw, sh)
+        self.mouse = MouseController()
+
+        self.running = False
+        self.proc_thread = None
+        self.mouse_enabled = False
+        self.debug = True
+        self._overlay: StatusOverlay | None = None
+
+        # Self-contained: only use assets shipped inside the Windows Hover folder.
+        self._icons_dir = Path(__file__).resolve().parent / "assets" / "icons"
+
+        self._lock = threading.Lock()
+        self._frame = None
+        self._hand_proto = None
+        self._gesture = GestureType.PAUSE
+        self._overlay_text = _OVERLAY_LABELS.get(GestureType.PAUSE, "PAUSED")
+        self._fingers = 0
+
+        self._build_ui()
+
+        if self._mediapipe_error:
+            self.cam_status.setText("MediaPipe Error")
+            self.preview.setText(self._mediapipe_error)
+            self.start_btn.setEnabled(False)
+
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._render)
+        self.timer.start(16)
+
+    def _icon(self, name: str) -> QIcon:
+        p = self._icons_dir / name
+        return QIcon(str(p)) if p.exists() else QIcon()
+
+    def _build_ui(self) -> None:
+        root = QWidget(self)
+        self.setCentralWidget(root)
+
+        top = QVBoxLayout(root)
+        top.setContentsMargins(18, 18, 18, 18)
+        top.setSpacing(14)
+
+        header = QFrame()
+        header.setObjectName("headerCard")
+        header_l = QHBoxLayout(header)
+        header_l.setContentsMargins(16, 14, 16, 14)
+        header_l.setSpacing(12)
+
+        icon_label = QLabel()
+        icon_label.setPixmap(self._icon("camera.svg").pixmap(QSize(22, 22)))
+
+        self.title_lbl = QLabel("Holographic Touch")
+        self.title_lbl.setObjectName("title")
+
+        self._status_dot = QLabel("●")
+        self._status_dot.setObjectName("statusOffline")
+        self.cam_status = QLabel("Camera Offline")
+        self.fps_lbl = QLabel("FPS 0")
+
+        header_l.addWidget(icon_label)
+        header_l.addWidget(self.title_lbl)
+        header_l.addStretch(1)
+        header_l.addWidget(self._status_dot)
+        header_l.addWidget(self.cam_status)
+        header_l.addSpacing(10)
+        header_l.addWidget(self.fps_lbl)
+        header_l.addSpacing(10)
+
+        body_l = QHBoxLayout()
+        body_l.setSpacing(14)
+
+        cam_card = QFrame()
+        cam_card.setObjectName("cameraCard")
+        cam_l = QVBoxLayout(cam_card)
+        cam_l.setContentsMargins(12, 12, 12, 12)
+
+        self.preview = QLabel("Camera Offline")
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setObjectName("preview")
+        self.preview.setMinimumSize(760, 520)
+        cam_l.addWidget(self.preview, 1)
+
+        side = QVBoxLayout()
+        side.setSpacing(12)
+
+        status = QFrame()
+        status.setObjectName("sideCard")
+        sl = QVBoxLayout(status)
+        sl.setContentsMargins(14, 14, 14, 14)
+        sl.setSpacing(8)
+        status_title = QLabel("Gesture Status")
+        status_title.setObjectName("cardTitle")
+
+        self.gesture_lbl = QLabel("PAUSED")
+        self.gesture_lbl.setObjectName("badge")
+        self.hand_lbl = QLabel("Hand: Not Detected")
+        self.mouse_lbl = QLabel("Mouse: OFF")
+        self.fingers_lbl = QLabel("Fingers: 0")
+        sl.addWidget(status_title)
+        sl.addWidget(self.gesture_lbl)
+        sl.addWidget(self.hand_lbl)
+        sl.addWidget(self.mouse_lbl)
+        sl.addWidget(self.fingers_lbl)
+
+        guide = QFrame()
+        guide.setObjectName("sideCard")
+        gl = QGridLayout(guide)
+        gl.setContentsMargins(14, 14, 14, 14)
+        gl.setHorizontalSpacing(10)
+        gl.setVerticalSpacing(8)
+
+        guide_title = QLabel("Gesture Guide")
+        guide_title.setObjectName("cardTitle")
+        gl.addWidget(guide_title, 0, 0, 1, 3)
+
+        guide_rows = [
+            ("move.svg", "Index finger", "Move cursor"),
+            ("click.svg", "Thumb + Index pinch", "Left click"),
+            ("drag.svg", "Hold Thumb + Index pinch", "Drag"),
+            ("click.svg", "Index down + Thumb + Middle pinch", "Right click"),
+            ("scroll.svg", "Peace sign + up/down", "Scroll"),
+            ("settings.svg", "Open palm", "Task View (Win+Tab)"),
+            ("pause.svg", "No gesture / hand down", "Pause"),
+        ]
+        for i, (ico, a, b) in enumerate(guide_rows, start=1):
+            il = QLabel()
+            il.setPixmap(self._icon(ico).pixmap(QSize(16, 16)))
+            tl = QLabel(a)
+            dl = QLabel(b)
+            dl.setObjectName("muted")
+            gl.addWidget(il, i, 0)
+            gl.addWidget(tl, i, 1)
+            gl.addWidget(dl, i, 2)
+
+        side.addWidget(status)
+        side.addWidget(guide, 1)
+
+        side_wrap = QWidget()
+        side_wrap.setLayout(side)
+        side_wrap.setMinimumWidth(360)
+
+        body_l.addWidget(cam_card, 1)
+        body_l.addWidget(side_wrap)
+
+        controls = QFrame()
+        controls.setObjectName("controlCard")
+        cl = QHBoxLayout(controls)
+        cl.setContentsMargins(16, 12, 16, 12)
+        cl.setSpacing(10)
+
+        self.start_btn = QPushButton("Start Camera")
+        self.start_btn.setIcon(self._icon("camera.svg"))
+        self.start_btn.setObjectName("greenButton")
+        self.stop_btn = QPushButton("Stop Camera")
+        self.stop_btn.setIcon(self._icon("stop.svg"))
+        self.stop_btn.setObjectName("redButton")
+        self.stop_btn.setEnabled(False)
+        self.mouse_btn = QPushButton("Enable Mouse")
+        self.mouse_btn.setIcon(self._icon("mouse.svg"))
+        self.mouse_btn.setObjectName("blueButton")
+
+        self._region_label = QLabel(f"Control margin: {self.mapper.frame_r}")
+        self._region_label.setObjectName("muted")
+        self._region_slider = QSlider(Qt.Orientation.Horizontal)
+        self._region_slider.setRange(40, 200)
+        self._region_slider.setValue(int(self.mapper.frame_r))
+        self._region_slider.setFixedWidth(180)
+        self._region_slider.valueChanged.connect(self._set_control_margin)
+
+        self.start_btn.clicked.connect(self.start_camera)
+        self.stop_btn.clicked.connect(self.stop_camera)
+        self.mouse_btn.clicked.connect(self.toggle_mouse)
+
+        cl.addWidget(self.start_btn)
+        cl.addWidget(self.stop_btn)
+        cl.addWidget(self.mouse_btn)
+        cl.addSpacing(8)
+        cl.addWidget(self._region_label)
+        cl.addWidget(self._region_slider)
+        cl.addStretch(1)
+
+        top.addWidget(header)
+
+        body_wrap = QWidget()
+        body_wrap.setLayout(body_l)
+        top.addWidget(body_wrap, 1)
+
+        top.addWidget(controls)
+
+        self.setStyleSheet(
+            """
+            QMainWindow { background: #0F1115; color: #E5E7EB; }
+            #headerCard, #cameraCard, #sideCard, #controlCard {
+                background: #1A1D24;
+                border: 1px solid #222733;
+                border-radius: 16px;
+            }
+            #title { font-size: 20px; font-weight: 700; color: #F3F4F6; }
+            #statusOffline { color: #F87171; font-size: 18px; }
+            #statusOnline { color: #4ADE80; font-size: 18px; }
+            #preview {
+                background: #0D1016;
+                border-radius: 14px;
+                border: 1px solid #263041;
+                color: #9CA3AF;
+                font-size: 18px;
+            }
+            #cardTitle { font-size: 14px; font-weight: 700; color: #F3F4F6; }
+            #muted { color: #A3A9B8; }
+            #badge {
+                border-radius: 12px;
+                padding: 6px 10px;
+                font-weight: 700;
+                background: #334155;
+                color: #F8FAFC;
+                max-width: 160px;
+            }
+            QPushButton {
+                border: 0;
+                border-radius: 12px;
+                padding: 10px 14px;
+                color: #F8FAFC;
+                font-weight: 600;
+                background: #2A3040;
+            }
+            QPushButton:hover { background: #394055; }
+            QPushButton:disabled { background: #202532; color: #6B7280; }
+            #greenButton { background: #4ADE80; color: #0B1118; }
+            #greenButton:hover { background: #67E69A; }
+            #redButton { background: #F87171; color: #0B1118; }
+            #redButton:hover { background: #FA8A8A; }
+            #blueButton { background: #60A5FA; color: #0B1118; }
+            #blueButton:hover { background: #79B5FB; }
+            #purpleButton { background: #A78BFA; color: #0B1118; }
+            #purpleButton:hover { background: #B79EFB; }
+            #ghostButton { background: #252A36; color: #E5E7EB; }
+            #ghostButton:hover { background: #313849; }
+            """
+        )
+
+    def _set_control_margin(self, value: int) -> None:
+        v = int(value)
+        self.mapper.frame_r = max(10, min(260, v))
+        self._region_label.setText(f"Control margin: {self.mapper.frame_r}")
+
+    def start_camera(self) -> None:
+        if self.running:
+            return
+
+        if self._mediapipe_error:
+            self.preview.setText(self._mediapipe_error)
+            return
+
+        if self.tracker is not None:
+            self.tracker.close()
+        try:
+            self.tracker = HandTracker(320, 240)
+        except Exception as exc:
+            self.tracker = None
+            self._mediapipe_error = str(exc)
+            self.cam_status.setText("MediaPipe Error")
+            self.preview.setText(self._mediapipe_error)
+            self.start_btn.setEnabled(False)
+            return
+        self.gestures = GestureEngine()
+
+        if not self.camera.start():
+            self.preview.setText("Cannot open camera")
+            return
+
+        self.running = True
+        self.proc_thread = threading.Thread(target=self._process_loop, daemon=True)
+        self.proc_thread.start()
+
+        self.cam_status.setText("Camera Active")
+        self._status_dot.setObjectName("statusOnline")
+        self._status_dot.style().unpolish(self._status_dot)
+        self._status_dot.style().polish(self._status_dot)
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+
+    def stop_camera(self) -> None:
+        self.running = False
+        if self.proc_thread and self.proc_thread.is_alive():
+            self.proc_thread.join(timeout=1.5)
+        self.proc_thread = None
+
+        self.camera.stop()
+        if self.mouse.is_dragging:
+            self.mouse.end_drag()
+
+        self.mapper.reset()
+        with self._lock:
+            self._frame = None
+            self._gesture = GestureType.PAUSE
+            self._overlay_text = _OVERLAY_LABELS.get(GestureType.PAUSE, "PAUSED")
+            self._fingers = 0
+            self._hand_proto = None
+
+        self.preview.setPixmap(QPixmap())
+        self.preview.setText("Camera Offline")
+        self.cam_status.setText("Camera Offline")
+        self._status_dot.setObjectName("statusOffline")
+        self._status_dot.style().unpolish(self._status_dot)
+        self._status_dot.style().polish(self._status_dot)
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+
+        if self._overlay is not None:
+            self._overlay.close()
+            self._overlay = None
+
+    def closeEvent(self, event) -> None:
+        try:
+            self.stop_camera()
+        except Exception:
+            pass
+        try:
+            if self.tracker is not None:
+                self.tracker.close()
+        except Exception:
+            pass
+        try:
+            if self._overlay is not None:
+                self._overlay.close()
+        except Exception:
+            pass
+        event.accept()
+
+    def toggle_mouse(self) -> None:
+        self.mouse_enabled = not self.mouse_enabled
+        if self.mouse_enabled:
+            self.mouse_btn.setText("Disable Mouse")
+            self.mouse_lbl.setText("Mouse: ON")
+
+            if self._overlay is None:
+                self._overlay = StatusOverlay()
+                self._overlay.open_btn.clicked.connect(self._show_main_window)
+                self._overlay.disable_btn.clicked.connect(self._disable_mouse_from_overlay)
+                # Top-right-ish.
+                try:
+                    sw, _ = pyautogui.size()
+                    self._overlay.move(max(10, sw - self._overlay.width() - 20), 20)
+                except Exception:
+                    self._overlay.move(20, 20)
+                self._overlay.show()
+
+            # Minimize the main UI when mouse control is active.
+            self.showMinimized()
+        else:
+            self.mouse_btn.setText("Enable Mouse")
+            self.mouse_lbl.setText("Mouse: OFF")
+
+            if self._overlay is not None:
+                self._overlay.close()
+                self._overlay = None
+            self.showNormal()
+            self.raise_()
+
+    def _show_main_window(self) -> None:
+        self.showNormal()
+        self.raise_()
+
+    def _disable_mouse_from_overlay(self) -> None:
+        if self.mouse_enabled:
+            self.toggle_mouse()
+
+    def _process_loop(self) -> None:
+        last_overlay = GestureType.NONE
+        last_action = GestureType.NONE
+        last_task_view_action = 0.0
+
+        _boost_runtime_priority()
+        try:
+            cv2.setUseOptimized(True)
+        except Exception:
+            pass
+
+        while self.running:
+            frame = self.camera.latest()
+            if frame is None:
+                time.sleep(0.001)
+                continue
+
+            frame = cv2.flip(frame, 1)
+            h, w = frame.shape[:2]
+            self.mapper.set_camera_size(w, h)
+
+            tracker = self.tracker
+            if tracker is None:
+                time.sleep(0.01)
+                continue
+            hand_data, hand_proto = tracker.detect(frame)
+            result = self.gestures.detect(hand_data)
+            gesture = result.gesture
+            gesture_changed = gesture != last_action
+
+            if self.mouse_enabled and gesture == GestureType.TASK_VIEW and gesture_changed:
+                now = time.monotonic()
+                if now - last_task_view_action >= 1.0:
+                    last_task_view_action = now
+                    try:
+                        pyautogui.hotkey("winleft", "tab")
+                    except Exception:
+                        pass
+
+            fingers = 0
+            if hand_data is not None:
+                fs = self.gestures._finger_states(hand_data["xy"])
+                fingers = int(fs.thumb) + int(fs.index) + int(fs.middle) + int(fs.ring) + int(fs.pinky)
+
+            if self.mouse_enabled and hand_data and gesture not in {GestureType.NONE, GestureType.PAUSE, GestureType.TASK_VIEW}:
+                tip = hand_data["xy"][8]
+                cam_x = int((tip[0] / float(tracker.process_w)) * w)
+                cam_y = int((tip[1] / float(tracker.process_h)) * h)
+                sx, sy = self.mapper.map_point(cam_x, cam_y)
+
+                if gesture == GestureType.MOVE:
+                    self.mouse.move(sx, sy)
+                elif gesture == GestureType.LEFT_CLICK and gesture_changed:
+                    self.mouse.move(sx, sy)
+                    self.mouse.left_click()
+                elif gesture == GestureType.RIGHT_CLICK and gesture_changed:
+                    self.mouse.right_click()
+                elif gesture == GestureType.SCROLL:
+                    self.mouse.scroll(result.scroll_delta)
+                elif gesture == GestureType.DRAG:
+                    self.mouse.move(sx, sy)
+                    self.mouse.start_drag()
+
+                if gesture != GestureType.DRAG and self.mouse.is_dragging:
+                    self.mouse.end_drag()
+
+            elif self.mouse.is_dragging:
+                self.mouse.end_drag()
+
+            if gesture != last_overlay:
+                overlay = _OVERLAY_LABELS.get(gesture, "")
+                last_overlay = gesture
+            else:
+                overlay = self._overlay_text
+
+            last_action = gesture
+
+            now = time.monotonic()
+            dt = now - self._fps_prev
+            self._fps_prev = now
+            if dt > 0:
+                fps_i = 1.0 / dt
+                self.fps = fps_i if self.fps == 0 else 0.9 * self.fps + 0.1 * fps_i
+
+            with self._lock:
+                self._frame = frame
+                self._gesture = gesture
+                self._overlay_text = overlay
+                self._fingers = fingers
+                self._hand_proto = hand_proto
+
+    def _render(self) -> None:
+        with self._lock:
+            frame = self._frame
+            gesture = self._gesture
+            overlay = self._overlay_text
+            fingers = self._fingers
+            hand_proto = self._hand_proto
+
+        self.fps_lbl.setText(f"FPS {self.fps:.0f}")
+        self.gesture_lbl.setText(gesture.value)
+        self.gesture_lbl.setStyleSheet(
+            f"border-radius: 12px; padding: 6px 10px; font-weight: 700; background: {_BADGE_COLORS.get(gesture, '#64748B')}; color: #0B1118;"
+        )
+        self.fingers_lbl.setText(f"Fingers: {fingers}")
+        self.hand_lbl.setText("Hand: Detected" if hand_proto is not None else "Hand: Not Detected")
+
+        if self._overlay is not None:
+            try:
+                self._overlay.update_status(gesture, self.fps, hand_proto is not None)
+            except Exception:
+                pass
+
+        # When minimized (mouse control mode), keep the overlay responsive and
+        # avoid spending CPU on preview rendering.
+        if self.isMinimized():
+            return
+
+        if frame is None:
+            return
+
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        x1, y1, x2, y2 = self.mapper.control_region()
+        cv2.rectangle(rgb, (x1, y1), (x2, y2), (96, 165, 250), 2)
+
+        tracker = self.tracker
+        if self.debug and hand_proto is not None and tracker is not None:
+            tracker.draw(rgb, hand_proto)
+
+        cv2.putText(
+            rgb,
+            f"Fingers: {fingers}",
+            (16, 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (110, 220, 190),
+            2,
+            cv2.LINE_AA,
+        )
+
+        if overlay:
+            (tw, th), bl = cv2.getTextSize(overlay, cv2.FONT_HERSHEY_SIMPLEX, 0.85, 2)
+            px = rgb.shape[1] - tw - 48
+            py = 22
+            bw = tw + 28
+            bh = th + bl + 20
+            ov = rgb.copy()
+            cv2.rectangle(ov, (px, py), (px + bw, py + bh), (32, 38, 52), -1)
+            cv2.addWeighted(ov, 0.65, rgb, 0.35, 0, rgb)
+            cv2.putText(
+                rgb,
+                overlay,
+                (px + 14, py + bh - 12),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.85,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+        h, w, _ = rgb.shape
+        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
+        pix = QPixmap.fromImage(qimg)
+        self.preview.setPixmap(
+            pix.scaled(
+                self.preview.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
+        )
+
+
+def main() -> None:
+    app = QApplication.instance() or QApplication([])
+    w = MainWindow()
+    w.show()
+    app.exec()
+
+
+if __name__ == "__main__":
+    main()
+
+===== FILE: Windows Hover/requirements.txt =====
+mediapipe==0.10.21
+opencv-python>=4.10.0.84
+numpy>=1.26.0
+pyautogui>=0.9.54
+PySide6>=6.8.0
+pydirectinput>=1.0.4
+Pillow>=10.0.0
+
 ===== FILE: main.py =====
 """Root launcher so `python main.py` works from project directory."""
 
@@ -337,23 +1820,13 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-===== FILE: patch_main_window.py =====
-import re
-
-with open("src/gui/main_window.py", "r") as f:
-     content = f.read()
-
-# I will just write a new file contents entirely since it's a huge rewrite of UI
-
-===== FILE: replace_main.py =====
-import shutil; shutil.move('src/gui/main_window_new.py', 'src/gui/main_window.py')
-
 ===== FILE: requirements.txt =====
 mediapipe==0.10.21
 opencv-contrib-python==4.10.0.84
 numpy>=1.26.0
 pyautogui==0.9.54
 customtkinter>=5.2.0
+PySide6>=6.8.0
 Pillow>=10.0.0
 pyobjc-core==12.1; platform_system == "Darwin"
 pyobjc-framework-Quartz==12.1; platform_system == "Darwin"
@@ -421,32 +1894,125 @@ WINDOW_NAME = "AI-HollowGraphic-Like-Touch"
 ===== FILE: src/controller/cursor_mapper.py =====
 """Map camera-space coordinates to screen-space (pure Python, no numpy)."""
 
+import math
+
 from utils.math_utils import clamp
 
 
 class CursorMapper:
     """Convert process-frame pixel coordinates to display coordinates."""
 
-    __slots__ = ("cam_w", "cam_h", "scr_w", "scr_h", "scale_x", "scale_y")
+    __slots__ = (
+        "cam_w",
+        "cam_h",
+        "scr_w",
+        "scr_h",
+        "frame_r",
+        "smoothening",
+        "_ploc_x",
+        "_ploc_y",
+        "_cloc_x",
+        "_cloc_y",
+        "_kalman_x",
+        "_kalman_y",
+        "_kalman_gain",
+    )
 
     def __init__(self, cam_width: int, cam_height: int, screen_width: int, screen_height: int) -> None:
         self.cam_w = cam_width
         self.cam_h = cam_height
         self.scr_w = screen_width - 1
         self.scr_h = screen_height - 1
-        # Pre-compute scale factors once
-        self.scale_x = self.scr_w / cam_width if cam_width else 1.0
-        self.scale_y = self.scr_h / cam_height if cam_height else 1.0
+        self.frame_r = 100
+        self.smoothening = 7.0
+        self._ploc_x = -1.0
+        self._ploc_y = -1.0
+        self._cloc_x = -1.0
+        self._cloc_y = -1.0
+        self._kalman_x = -1.0
+        self._kalman_y = -1.0
+        self._kalman_gain = 0.45
+
+    def set_camera_size(self, cam_width: int, cam_height: int) -> None:
+        """Update source frame size for accurate runtime mapping."""
+        if cam_width <= 0 or cam_height <= 0:
+            return
+        self.cam_w = cam_width
+        self.cam_h = cam_height
+
+    def control_region(self) -> tuple[int, int, int, int]:
+        x1 = self.frame_r
+        y1 = self.frame_r
+        x2 = max(self.frame_r + 1, self.cam_w - self.frame_r)
+        y2 = max(self.frame_r + 1, self.cam_h - self.frame_r)
+        return x1, y1, x2, y2
+
+    def reset(self) -> None:
+        self._ploc_x = -1.0
+        self._ploc_y = -1.0
+        self._cloc_x = -1.0
+        self._cloc_y = -1.0
+        self._kalman_x = -1.0
+        self._kalman_y = -1.0
+
+    def _interp(self, value: float, in_min: float, in_max: float, out_min: float, out_max: float) -> float:
+        if in_max <= in_min:
+            return out_min
+        t = (value - in_min) / (in_max - in_min)
+        t = clamp(t, 0.0, 1.0)
+        return out_min + t * (out_max - out_min)
 
     def map_to_screen(self, cam_x: int, cam_y: int) -> tuple[int, int]:
-        sx = clamp(cam_x, 0, self.cam_w) * self.scale_x
-        sy = clamp(cam_y, 0, self.cam_h) * self.scale_y
-        return int(sx), int(sy)
+        x1, y1, x2, y2 = self.control_region()
+
+        if cam_x < x1 or cam_x > x2 or cam_y < y1 or cam_y > y2:
+            if self._kalman_x >= 0:
+                return int(self._kalman_x), int(self._kalman_y)
+            return int(self.scr_w // 2), int(self.scr_h // 2)
+
+        x3 = self._interp(cam_x, x1, x2, 0.0, float(self.scr_w))
+        y3 = self._interp(cam_y, y1, y2, 0.0, float(self.scr_h))
+
+        if self._ploc_x < 0:
+            self._ploc_x, self._ploc_y = x3, y3
+            self._cloc_x, self._cloc_y = x3, y3
+            self._kalman_x, self._kalman_y = x3, y3
+            return int(x3), int(y3)
+
+        # Movement dampening for tiny motions.
+        if abs(x3 - self._ploc_x) < 2.0 and abs(y3 - self._ploc_y) < 2.0:
+            return int(self._kalman_x), int(self._kalman_y)
+
+        # Reference-style smoothing.
+        self._cloc_x = self._ploc_x + (x3 - self._ploc_x) / self.smoothening
+        self._cloc_y = self._ploc_y + (y3 - self._ploc_y) / self.smoothening
+
+        # Piecewise movement dampening/boosting.
+        dx = self._cloc_x - self._ploc_x
+        dy = self._cloc_y - self._ploc_y
+        distsq = dx * dx + dy * dy
+        if distsq <= 25.0:
+            ratio = 0.0
+        elif distsq <= 900.0:
+            ratio = 0.07 * math.sqrt(distsq)
+        else:
+            ratio = 2.1
+
+        damp_x = self._ploc_x + dx * ratio
+        damp_y = self._ploc_y + dy * ratio
+
+        # Kalman-style single-state filtering stage.
+        self._kalman_x = self._kalman_x + self._kalman_gain * (damp_x - self._kalman_x)
+        self._kalman_y = self._kalman_y + self._kalman_gain * (damp_y - self._kalman_y)
+
+        self._ploc_x, self._ploc_y = damp_x, damp_y
+        return int(self._kalman_x), int(self._kalman_y)
 
 ===== FILE: src/controller/mouse_controller.py =====
 """Mouse control: move, click, double-click, scroll, drag. Supports pydirectinput on Windows."""
 
 import platform
+import time
 import pyautogui
 from config import CLICK_COOLDOWN, CURSOR_MOVE_THRESHOLD
 
@@ -474,9 +2040,13 @@ def _move(x, y):
 
 class MouseController:
     def __init__(self, cooldown=CLICK_COOLDOWN, threshold=CURSOR_MOVE_THRESHOLD):
+        # Enforce required deadzone floor for jitter suppression.
+        threshold = max(3, int(threshold))
         self.thresh_sq = threshold * threshold
         self._lx = -1
         self._ly = -1
+        self._last_move_time = 0.0
+        self._move_interval = 1.0 / 100.0
         self._dragging = False
         self.is_available = True
         self.last_error_message = ""
@@ -495,11 +2065,17 @@ class MouseController:
     def move_cursor(self, x, y):
         if not self.is_available:
             return
+
+        now = time.monotonic()
+        if now - self._last_move_time < self._move_interval:
+            return
+
         dx, dy = x - self._lx, y - self._ly
         if dx * dx + dy * dy < self.thresh_sq:
             return
         if self._safe(_move, x, y):
             self._lx, self._ly = x, y
+            self._last_move_time = now
 
     def left_click(self):
         return self._safe(pyautogui.click, button="left")
@@ -529,35 +2105,38 @@ class MouseController:
         return self._dragging
 
 ===== FILE: src/gestures/gesture_detector.py =====
-"""Robust gesture detection engine with state machine and priority system.
+"""Gesture detector implementing pinch + finger-shape gestures.
 
-Priority order: DRAG > CLICK > SCROLL > MOVE
-All detection is O(1) per frame using only required landmark indices.
+Gestures (as requested):
+- Index finger only extended: MOVE
+- Thumb+index pinch: LEFT_CLICK (edge-trigger)
+- Thumb+index pinch hold: DRAG (while held)
+- Thumb+middle pinch: RIGHT_CLICK (edge-trigger)
+- Peace sign (index+middle extended): SCROLL (vertical motion)
+- Open palm: TASK_VIEW (edge-trigger)
+- Closed fist: PAUSE
+
+Designed to be stable and responsive: hysteresis for pinches + confirmation
+for mode-like gestures to avoid rapid switching frame-to-frame.
 """
 
 import time
 
-from config import (
-    CLICK_COOLDOWN,
-    DOUBLE_CLICK_WINDOW,
-    DRAG_HOLD_TIME,
-    GESTURE_STABILITY_FRAMES,
-    PINCH_DISTANCE_THRESHOLD,
-    PINCH_RELEASE_FACTOR,
-    SCROLL_SENSITIVITY,
-    SCROLL_THRESHOLD,
-)
+from config import CLICK_COOLDOWN, DRAG_HOLD_TIME, SCROLL_SENSITIVITY
 from gestures.gesture_types import GestureType
 from tracking.landmark_processor import get_finger_states
 
-# Landmark indices (inlined for zero function-call overhead)
-_THUMB = 4
-_INDEX = 8
-_MIDDLE = 12
+_WRIST = 0
+_THUMB_TIP = 4
+_INDEX_MCP = 5
+_INDEX_TIP = 8
+_MIDDLE_TIP = 12
+_PINKY_MCP = 17
 
 
 class GestureResult:
     """Output of gesture detection for one frame."""
+
     __slots__ = ("gesture", "scroll_delta")
 
     def __init__(self, gesture: GestureType = GestureType.NONE, scroll_delta: int = 0) -> None:
@@ -565,234 +2144,285 @@ class GestureResult:
         self.scroll_delta = scroll_delta
 
 
-_NONE = GestureResult()
-_PAUSE = GestureResult(GestureType.PAUSE)
-_MOVE = GestureResult(GestureType.MOVE)
-_OPEN_PALM = GestureResult(GestureType.OPEN_PALM)
-_VOLUME = GestureResult(GestureType.VOLUME)
-_SWITCH = GestureResult(GestureType.SWITCH_WINDOW)
-
-
 class GestureDetector:
-    """State-machine gesture detector with stability, cooldowns, and hysteresis."""
+    """Stable gesture detector for pinch + finger-shape interactions."""
 
     def __init__(self) -> None:
-        # State machine
-        self._prev_raw: GestureType = GestureType.NONE
-        self._raw_frames: int = 0
+        self._confirm_frames_required: int = 3
+        self._candidate_gesture: GestureType = GestureType.NONE
+        self._candidate_frames: int = 0
+        self._confirmed_gesture: GestureType = GestureType.NONE
 
-        # Pinch tracking
-        self._is_pinching: bool = False
-        self._pinch_start: float = 0.0
-        self._click_fired: bool = False
+        self._is_dragging = False
 
-        # Drag
-        self._is_dragging: bool = False
+        self._left_pinch_active = False
+        self._right_pinch_active = False
+        self._left_pinch_start = 0.0
+        self._left_pinch_frames = 0
+        self._right_pinch_frames = 0
+        self._right_pose_frames = 0
+        self._left_click_fired = False
+        self._right_click_fired = False
 
-        # Click / double-click cooldown
-        self._last_click_time: float = 0.0
+        self._last_left_click = 0.0
+        self._last_right_click = 0.0
+        self._last_task_view = 0.0
 
-        # Right-click cooldown
-        self._last_rclick_time: float = 0.0
-        self._rclick_fired: bool = False
+        self._task_view_frames = 0
 
-        # Two-finger / scroll state
-        self._two_finger_frames: int = 0
-        self._two_finger_y_accum: float = 0.0
-        self._prev_scroll_y: float = -1.0
-        self._in_scroll_mode: bool = False
+        self._scroll_active = False
+        self._prev_scroll_y: float | None = None
         self._smooth_scroll: float = 0.0
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        # Scale-invariant thresholds (fraction of hand scale).
+        # Slightly more sensitive than before for easier real-world pinching.
+        self._pinch_enter = 0.23
+        self._pinch_exit = 0.30
+        self._right_pinch_enter_factor = 0.86
+        self._right_click_pose_frames = 2
+        self._right_click_pinch_frames = 2
+        self._scroll_motion_threshold = 3.0
+        self._task_view_cooldown = 1.0
+        self._task_view_confirm_frames = 6
+
+    def _is_open_palm(self, xy: list[tuple[int, int]], fingers, hand_scale: float) -> bool:
+        # Require all fingers extended and a wide finger spread to prevent
+        # accidental Task View when the hand is rotated or only partially open.
+        if not (fingers.thumb and fingers.index and fingers.middle and fingers.ring and fingers.pinky):
+            return False
+
+        try:
+            wrist_y = xy[_WRIST][1]
+            if not (xy[_INDEX_TIP][1] < wrist_y and xy[_MIDDLE_TIP][1] < wrist_y and xy[16][1] < wrist_y and xy[20][1] < wrist_y):
+                return False
+            spread = self._dist(xy[_INDEX_TIP], xy[20])
+            thumb_sep = self._dist(xy[_THUMB_TIP], xy[_INDEX_MCP])
+            if spread < hand_scale * 0.85:
+                return False
+            if thumb_sep < hand_scale * 0.35:
+                return False
+            return True
+        except Exception:
+            return False
 
     @property
     def is_dragging(self) -> bool:
         return self._is_dragging
 
-    def detect(self, landmarks: list[tuple[int, int]] | None) -> GestureResult:
-        """Classify the current gesture from 21-point landmarks. O(1)."""
-        if not landmarks or len(landmarks) < 21:
-            self._reset_all()
-            return _NONE
+    def set_confirm_frames(self, frames: int) -> None:
+        self._confirm_frames_required = max(1, int(frames))
 
+    def detect(self, hand_data) -> GestureResult:
+        if not hand_data:
+            self._reset_temporal()
+            return self._confirm_result(GestureType.PAUSE)
+
+        landmarks_xy, z_values = self._extract_hand_data(hand_data)
+        if not landmarks_xy or len(landmarks_xy) < 21:
+            self._reset_temporal()
+            return self._confirm_result(GestureType.PAUSE)
+
+        # Ignore z: requested gestures are 2D geometry + finger-shape based.
         now = time.monotonic()
+        fingers = get_finger_states(landmarks_xy)
+        hand_scale = self._hand_scale(landmarks_xy)
 
-        # --- Pinch distance (thumb ↔ index) ---
-        tx, ty = landmarks[_THUMB]
-        ix, iy = landmarks[_INDEX]
-        dx, dy = tx - ix, ty - iy
-        pinch_dist = (dx * dx + dy * dy) ** 0.5
-
-        enter_thresh = PINCH_DISTANCE_THRESHOLD
-        exit_thresh = PINCH_DISTANCE_THRESHOLD * PINCH_RELEASE_FACTOR
-
-        # Hysteresis: enter at tight threshold, exit at looser threshold
-        if self._is_pinching:
-            is_pinch = pinch_dist < exit_thresh
+        # Open palm: Task View (edge-trigger action).
+        if self._is_open_palm(landmarks_xy, fingers, hand_scale):
+            self._reset_non_pause_modes()
+            self._task_view_frames += 1
+            if self._task_view_frames >= self._task_view_confirm_frames and now - self._last_task_view >= self._task_view_cooldown:
+                self._last_task_view = now
+                self._task_view_frames = 0
+                return self._confirm_result(GestureType.TASK_VIEW)
+            return self._confirm_result(GestureType.PAUSE)
         else:
-            is_pinch = pinch_dist < enter_thresh
+            self._task_view_frames = 0
 
-        # ==============================================================
-        # PRIORITY 1 — DRAG / CLICK (pinch-based)
-        # ==============================================================
-        if is_pinch:
-            if not self._is_pinching:
-                self._is_pinching = True
-                self._pinch_start = now
-                self._click_fired = False
-                self._is_dragging = False
-            self._reset_scroll()
+        thumb = landmarks_xy[_THUMB_TIP]
+        index_tip = landmarks_xy[_INDEX_TIP]
+        middle_tip = landmarks_xy[_MIDDLE_TIP]
 
-            hold = now - self._pinch_start
+        left_dist = self._dist(thumb, index_tip)
+        right_dist = self._dist(thumb, middle_tip)
 
-            # DRAG: pinch held beyond threshold
-            if hold >= DRAG_HOLD_TIME:
+        # Clamp thresholds to be robust across camera resolutions.
+        left_enter = max(12.0, min(42.0, hand_scale * self._pinch_enter))
+        left_exit = max(left_enter + 2.0, min(58.0, hand_scale * self._pinch_exit))
+        right_enter = max(10.0, left_enter * self._right_pinch_enter_factor)
+        right_exit = left_exit
+
+        # Update pinch states with hysteresis.
+        if self._left_pinch_active:
+            if left_dist > left_exit:
+                self._left_pinch_active = False
+        else:
+            if left_dist < left_enter:
+                self._left_pinch_active = True
+
+        right_click_pose = (not fingers.index) and (not fingers.ring) and (not fingers.pinky)
+        if right_click_pose:
+            self._right_pose_frames += 1
+        else:
+            self._right_pose_frames = 0
+
+        if self._right_pinch_active:
+            if right_dist > right_exit or not right_click_pose:
+                self._right_pinch_active = False
+        else:
+            if right_click_pose and right_dist < right_enter:
+                self._right_pinch_active = True
+
+        # Right click: middle+thumb pinch (edge-trigger).
+        if self._right_pinch_active and not self._left_pinch_active:
+            self._scroll_active = False
+            self._prev_scroll_y = None
+            self._right_pinch_frames += 1
+            if (
+                not self._right_click_fired
+                and self._right_pose_frames >= self._right_click_pose_frames
+                and self._right_pinch_frames >= self._right_click_pinch_frames
+                and now - self._last_right_click >= CLICK_COOLDOWN
+            ):
+                self._right_click_fired = True
+                self._last_right_click = now
+                return self._confirm_result(GestureType.RIGHT_CLICK)
+            return self._confirm_result(GestureType.MOVE)
+        if not self._right_pinch_active:
+            self._right_pinch_frames = 0
+            self._right_click_fired = False
+
+        # Left click/drag: index+thumb pinch.
+        if self._left_pinch_active:
+            self._scroll_active = False
+            self._prev_scroll_y = None
+            self._left_pinch_frames += 1
+            if not self._left_click_fired and self._left_pinch_frames >= 1 and now - self._last_left_click >= CLICK_COOLDOWN:
+                self._left_click_fired = True
+                self._last_left_click = now
+                self._left_pinch_start = now
+                return self._confirm_result(GestureType.LEFT_CLICK)
+
+            if self._left_pinch_start == 0.0:
+                self._left_pinch_start = now
+
+            if now - self._left_pinch_start >= DRAG_HOLD_TIME:
                 self._is_dragging = True
-                self._bump_raw(GestureType.DRAG)
-                return GestureResult(GestureType.DRAG)
+                return self._confirm_result(GestureType.DRAG)
 
-            # LEFT_CLICK / DOUBLE_CLICK: pinch stable for N frames
-            self._bump_raw(GestureType.LEFT_CLICK)
-            if self._raw_frames >= GESTURE_STABILITY_FRAMES and not self._click_fired:
-                self._click_fired = True
-                if now - self._last_click_time < DOUBLE_CLICK_WINDOW:
-                    self._last_click_time = now
-                    return GestureResult(GestureType.DOUBLE_CLICK)
-                self._last_click_time = now
-                return GestureResult(GestureType.LEFT_CLICK)
+            return self._confirm_result(GestureType.MOVE)
 
-            # Still pinching but not yet stable → keep moving cursor
-            return _MOVE
-
-        # Pinch just released
-        if self._is_pinching:
-            was_drag = self._is_dragging
-            self._is_pinching = False
+        # Pinch released.
+        if not self._left_pinch_active:
+            self._left_pinch_frames = 0
+            self._left_click_fired = False
+            self._left_pinch_start = 0.0
             self._is_dragging = False
-            if was_drag:
-                # Return NONE so caller can detect drag→non-drag transition
-                self._bump_raw(GestureType.NONE)
-                return _NONE
 
-        # ==============================================================
-        # FINGER-PATTERN GESTURES (no pinch active)
-        # ==============================================================
-        fingers = get_finger_states(landmarks)
-
-        # PAUSE — closed fist (4 fingers down, ignore thumb)
-        if not fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
-            self._reset_scroll()
-            self._bump_raw(GestureType.PAUSE)
-            return _PAUSE
-
-        # OPEN PALM — all 5 up
-        if fingers.thumb and fingers.index and fingers.middle and fingers.ring and fingers.pinky:
-            self._reset_scroll()
-            self._bump_raw(GestureType.OPEN_PALM)
-            return _OPEN_PALM
-
-        # VOLUME — 4 fingers up, thumb down
-        if not fingers.thumb and fingers.index and fingers.middle and fingers.ring and fingers.pinky:
-            self._reset_scroll()
-            self._bump_raw(GestureType.VOLUME)
-            return _VOLUME
-
-        # SWITCH WINDOW — index + middle + ring up, pinky down
-        if fingers.index and fingers.middle and fingers.ring and not fingers.pinky:
-            self._reset_scroll()
-            self._bump_raw(GestureType.SWITCH_WINDOW)
-            return _SWITCH
-
-        # TWO FINGERS (RIGHT_CLICK / SCROLL) — index + middle up, ring + pinky down
+        # Scroll mode: peace sign.
         if fingers.index and fingers.middle and not fingers.ring and not fingers.pinky:
-            return self._handle_two_finger(landmarks, now)
+            y = 0.5 * (landmarks_xy[_INDEX_TIP][1] + landmarks_xy[_MIDDLE_TIP][1])
+            if self._prev_scroll_y is None:
+                self._prev_scroll_y = y
+                self._scroll_active = True
+                return self._confirm_result(GestureType.SCROLL, 0)
 
-        # MOVE — index up only
-        if fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
-            self._reset_scroll()
-            self._bump_raw(GestureType.MOVE)
-            return _MOVE
+            dy = y - self._prev_scroll_y
+            self._prev_scroll_y = y
+            self._scroll_active = True
 
-        # Fallback
-        self._reset_scroll()
-        self._bump_raw(GestureType.NONE)
-        return _NONE
+            if abs(dy) < self._scroll_motion_threshold:
+                return self._confirm_result(GestureType.SCROLL, 0)
 
-    # ------------------------------------------------------------------
-    # Two-finger handler (RIGHT_CLICK vs SCROLL discrimination)
-    # ------------------------------------------------------------------
-
-    def _handle_two_finger(self, landmarks: list[tuple[int, int]], now: float) -> GestureResult:
-        iy = landmarks[_INDEX][1]
-        my = landmarks[_MIDDLE][1]
-        current_y = (iy + my) * 0.5
-
-        if self._two_finger_frames == 0:
-            # Just entered two-finger mode
-            self._prev_scroll_y = current_y
-            self._two_finger_y_accum = 0.0
-            self._rclick_fired = False
-            self._in_scroll_mode = False
-            self._smooth_scroll = 0.0
-
-        self._two_finger_frames += 1
-        y_delta = current_y - self._prev_scroll_y
-        self._two_finger_y_accum += abs(y_delta)
-        self._prev_scroll_y = current_y
-
-        # Decision phase: wait STABILITY_FRAMES frames then decide
-        if not self._in_scroll_mode and self._two_finger_frames >= GESTURE_STABILITY_FRAMES:
-            if self._two_finger_y_accum > SCROLL_THRESHOLD:
-                # Significant movement → scroll (no right click)
-                self._in_scroll_mode = True
-            else:
-                # Stable hold → right click (once, then enter scroll standby)
-                if not self._rclick_fired and now - self._last_rclick_time >= CLICK_COOLDOWN:
-                    self._rclick_fired = True
-                    self._last_rclick_time = now
-                    self._bump_raw(GestureType.RIGHT_CLICK)
-                    return GestureResult(GestureType.RIGHT_CLICK)
-                self._in_scroll_mode = True
-
-        if self._in_scroll_mode:
-            # Smooth the scroll delta (EMA)
-            raw = -y_delta * SCROLL_SENSITIVITY
+            raw = -dy * SCROLL_SENSITIVITY
             self._smooth_scroll = 0.6 * self._smooth_scroll + 0.4 * raw
             amount = int(self._smooth_scroll)
-            self._bump_raw(GestureType.SCROLL)
-            return GestureResult(GestureType.SCROLL, scroll_delta=amount)
+            return self._confirm_result(GestureType.SCROLL, amount)
 
-        # Waiting for decision
-        self._bump_raw(GestureType.NONE)
-        return _NONE
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _bump_raw(self, raw: GestureType) -> None:
-        if raw == self._prev_raw:
-            self._raw_frames += 1
-        else:
-            self._prev_raw = raw
-            self._raw_frames = 1
-
-    def _reset_scroll(self) -> None:
-        self._two_finger_frames = 0
-        self._two_finger_y_accum = 0.0
-        self._prev_scroll_y = -1.0
-        self._in_scroll_mode = False
+        self._scroll_active = False
+        self._prev_scroll_y = None
         self._smooth_scroll = 0.0
 
-    def _reset_all(self) -> None:
-        if self._is_dragging:
-            self._is_dragging = False
-        self._is_pinching = False
-        self._reset_scroll()
-        self._prev_raw = GestureType.NONE
-        self._raw_frames = 0
+        # Move: index finger only.
+        if fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
+            return self._confirm_result(GestureType.MOVE)
+
+        return self._confirm_result(GestureType.PAUSE)
+
+    def _extract_hand_data(self, hand_data):
+        if isinstance(hand_data, dict):
+            return hand_data.get("xy"), hand_data.get("z")
+        # Backward compatibility with list[(x,y)] payloads.
+        return hand_data, None
+
+    def _reset_temporal(self) -> None:
+        self._is_dragging = False
+
+        self._left_pinch_active = False
+        self._right_pinch_active = False
+        self._left_pinch_start = 0.0
+        self._left_pinch_frames = 0
+        self._right_pinch_frames = 0
+        self._right_pose_frames = 0
+        self._left_click_fired = False
+        self._right_click_fired = False
+
+        self._scroll_active = False
+        self._prev_scroll_y = None
+        self._smooth_scroll = 0.0
+
+    def _reset_non_pause_modes(self) -> None:
+        self._left_pinch_active = False
+        self._right_pinch_active = False
+        self._left_pinch_start = 0.0
+        self._left_pinch_frames = 0
+        self._right_pinch_frames = 0
+        self._right_pose_frames = 0
+        self._left_click_fired = False
+        self._right_click_fired = False
+        self._is_dragging = False
+        self._scroll_active = False
+        self._prev_scroll_y = None
+        self._smooth_scroll = 0.0
+
+    @staticmethod
+    def _dist(a: tuple[int, int], b: tuple[int, int]) -> float:
+        dx = a[0] - b[0]
+        dy = a[1] - b[1]
+        return (dx * dx + dy * dy) ** 0.5
+
+    def _hand_scale(self, xy: list[tuple[int, int]]) -> float:
+        try:
+            return max(40.0, self._dist(xy[_INDEX_MCP], xy[_PINKY_MCP]))
+        except Exception:
+            # Fallback: use bounding box size.
+            xs = [p[0] for p in xy]
+            ys = [p[1] for p in xy]
+            return max(40.0, float(max(max(xs) - min(xs), max(ys) - min(ys))))
+
+    def _confirm_result(self, raw_gesture: GestureType, scroll_delta: int = 0) -> GestureResult:
+        if raw_gesture == self._candidate_gesture:
+            self._candidate_frames += 1
+        else:
+            self._candidate_gesture = raw_gesture
+            self._candidate_frames = 1
+
+        # Immediate modes: PAUSE/SCROLL should feel instant.
+        if raw_gesture in {GestureType.PAUSE, GestureType.SCROLL}:
+            self._confirmed_gesture = raw_gesture
+        # Edge-trigger actions should not be blocked by confirmation.
+        elif raw_gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK, GestureType.TASK_VIEW}:
+            self._confirmed_gesture = raw_gesture
+        else:
+            # Avoid initial "dead frames" when entering from NONE.
+            if self._confirmed_gesture == GestureType.NONE and raw_gesture != GestureType.NONE:
+                self._confirmed_gesture = raw_gesture
+            elif self._candidate_frames >= self._confirm_frames_required:
+                self._confirmed_gesture = raw_gesture
+
+        if self._confirmed_gesture == GestureType.SCROLL:
+            return GestureResult(self._confirmed_gesture, scroll_delta=scroll_delta)
+        return GestureResult(self._confirmed_gesture, scroll_delta=0)
 
 ===== FILE: src/gestures/gesture_types.py =====
 """Gesture labels used across the application."""
@@ -809,6 +2439,7 @@ class GestureType(str, Enum):
     SCROLL = "SCROLL"
     DRAG = "DRAG"
     PAUSE = "PAUSE"
+    TASK_VIEW = "TASK_VIEW"
     VOLUME = "VOLUME"
     SWITCH_WINDOW = "SWITCH_WINDOW"
     OPEN_PALM = "OPEN_PALM"
@@ -819,13 +2450,13 @@ class GestureType(str, Enum):
 import customtkinter as ctk
 
 _GESTURES = [
-    ("☝️ Index up", "Move"),
-    ("🤏 Pinch", "L-Click"),
-    ("🤏🤏 2x Pinch", "D-Click"),
-    ("✌️ 2 Fingers", "R-Click"),
-    ("🤏⏳ Hold", "Drag"),
-    ("✌️↕ Move Y", "Scroll"),
-    ("✊ Fist", "Pause"),
+    ("☝️ Index only", "Move"),
+    ("🤏 Thumb+Index", "L-Click"),
+    ("🤏⏳ Hold Thumb+Index", "Drag"),
+    ("👇+🤏 Index down + Thumb+Middle", "R-Click"),
+    ("✌️↕ Peace + Y", "Scroll"),
+    ("🖐️ Open palm", "Task View"),
+    ("🛑 No gesture / hand down", "Pause"),
 ]
 
 
@@ -850,464 +2481,607 @@ class GestureHelpPanel(ctk.CTkFrame):
                          text_color="#AAAAAA").pack(side="right")
 
 ===== FILE: src/gui/main_window.py =====
-"""Main application window — customtkinter GUI with threaded processing."""
+"""PySide6 main window for Holographic Touch."""
+
+from __future__ import annotations
 
 import threading
 import time
+import sys
+from pathlib import Path
 
 import cv2
-import customtkinter as ctk
 import pyautogui
-from PIL import Image, ImageDraw, ImageFont
+from PySide6.QtCore import QTimer, Qt, QSize
+from PySide6.QtGui import QIcon, QImage, QPixmap
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
-from config import PROCESS_HEIGHT, PROCESS_WIDTH, TARGET_FPS
+from config import CAMERA_HEIGHT, CAMERA_WIDTH, PROCESS_HEIGHT, PROCESS_WIDTH, TARGET_FPS
 from controller.cursor_mapper import CursorMapper
 from controller.mouse_controller import MouseController
 from gestures.gesture_detector import GestureDetector
 from gestures.gesture_types import GestureType
-from gui.gesture_help_panel import GestureHelpPanel
 from tracking.hand_tracker import HandTracker
+from tracking.landmark_processor import get_finger_states
 from utils.camera_thread import CameraThread
 from utils.fps_counter import FPSCounter
-from utils.smoothing import AdaptiveSmoother
 
-_PREVIEW_W, _PREVIEW_H = 640, 480
-_PAUSE_GESTURES = frozenset({GestureType.PAUSE, GestureType.NONE})
-
-# Overlay display names (shorter, user-friendly)
 _OVERLAY_LABELS = {
-    GestureType.NONE: "",
+    GestureType.NONE: "PAUSED",
     GestureType.MOVE: "MOVE",
-    GestureType.LEFT_CLICK: "LEFT CLICK",
-    GestureType.DOUBLE_CLICK: "DOUBLE CLICK",
+    GestureType.LEFT_CLICK: "CLICK",
+    GestureType.DOUBLE_CLICK: "DOUBLE",
     GestureType.RIGHT_CLICK: "RIGHT CLICK",
     GestureType.SCROLL: "SCROLL",
     GestureType.DRAG: "DRAG",
     GestureType.PAUSE: "PAUSED",
-    GestureType.VOLUME: "VOLUME",
-    GestureType.SWITCH_WINDOW: "SWITCH",
-    GestureType.OPEN_PALM: "OPEN PALM",
+    GestureType.TASK_VIEW: "TASK VIEW",
+}
+
+_BADGE_COLORS = {
+    GestureType.MOVE: "#60A5FA",
+    GestureType.LEFT_CLICK: "#4ADE80",
+    GestureType.RIGHT_CLICK: "#4ADE80",
+    GestureType.DOUBLE_CLICK: "#4ADE80",
+    GestureType.SCROLL: "#A78BFA",
+    GestureType.DRAG: "#A78BFA",
+    GestureType.PAUSE: "#F87171",
+    GestureType.TASK_VIEW: "#A78BFA",
+    GestureType.NONE: "#64748B",
 }
 
 
-def _draw_action_overlay_pil(img: Image.Image, gesture: GestureType) -> None:
-    """Draw a modern rounded semi-transparent overlay inside the preview image."""
-    label = _OVERLAY_LABELS.get(gesture, "")
-    if not label:
-        return
-
-    draw = ImageDraw.Draw(img, "RGBA")
-    font = ImageFont.load_default()
-    try:
-        # For newer pillow
-        bbox = font.getbbox(label)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-    except AttributeError:
-        # Fallback for old pillow
-        tw, th = draw.textsize(label, font=font)
-
-    # Scale up dimensions artificially since default font is small
-    pad_x, pad_y = 16, 12
-    box_w = tw * 2 + pad_x * 2
-    box_h = th * 2 + pad_y * 2
-    margin = 20
-
-    x2 = img.width - margin
-    x1 = x2 - box_w
-    y1 = margin
-    y2 = y1 + box_h
-
-    # Draw rounded dark background with alpha
-    radius = 8
-    draw.rounded_rectangle((x1, y1, x2, y2), radius=radius, fill=(20, 20, 20, 200))
-
-    # Center text in box
-    text_x = x1 + pad_x + (box_w - pad_x * 2 - tw) // 2
-    text_y = y1 + pad_y + (box_h - pad_y * 2 - th) // 2
-    draw.text((text_x, text_y), label, font=font, fill=(255, 255, 255, 255))
-
-
-class MainWindow(ctk.CTk):
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
-        self.title("AI Holographic Touch")
-        # Give enough space for the new layout
-        self.geometry("1100x680")
-        self.resizable(True, True)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # --- Components ---
+        self._app = QApplication.instance()
+        self.setWindowTitle("Holographic Touch")
+        self.resize(1280, 820)
+        self.setMinimumSize(1024, 680)
+
         self._camera = CameraThread()
         self._tracker = HandTracker()
         self._detector = GestureDetector()
-        self._smoother = AdaptiveSmoother()
+        self._detector.set_confirm_frames(3)
         self._fps = FPSCounter(target_fps=TARGET_FPS)
+
         try:
             sw, sh = pyautogui.size()
         except Exception:
             sw, sh = 1920, 1080
-        self._mapper = CursorMapper(PROCESS_WIDTH, PROCESS_HEIGHT, sw, sh)
+        self._mapper = CursorMapper(CAMERA_WIDTH, CAMERA_HEIGHT, sw, sh)
         self._mouse = MouseController()
 
-        # --- Runtime state ---
+        self._lock = threading.Lock()
         self._processing = False
         self._proc_thread = None
+        self._closing = False
         self._mouse_enabled = False
         self._perf_mode = False
-        self._debug_mode = True  # Default to True so landmarks always appear
+        self._debug_mode = True
         self._was_dragging = False
-        self._closing = False
+        self._last_task_view_action = 0.0
 
-        # --- Thread-safe results ---
-        self._lock = threading.Lock()
         self._disp_frame = None
-        self._gesture = GestureType.NONE
+        self._gesture = GestureType.PAUSE
         self._hand_ok = False
-        self._raw_hand = None
         self._fps_val = 0.0
-        self._error_msg = ""
+        self._overlay_text = ""
+        self._fingers_count = 0
 
-        self._preview_image = None
+        self._icons_dir = Path(__file__).resolve().parents[2] / "assets" / "icons"
+
         self._build_ui()
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._update_gui)
+        self._timer.start(16)
 
-    # ==================================================================
-    # UI construction
-    # ==================================================================
+    def mainloop(self) -> None:
+        app = QApplication.instance()
+        created = False
+        if app is None:
+            app = QApplication([]) # type: ignore
+            created = True
+        self.show()
+        app.exec()
+        if created:
+            del app
 
-    def _build_ui(self):
-        # Top Header
-        top = ctk.CTkFrame(self, height=52, corner_radius=0, fg_color="#1E1E1E")
-        top.pack(fill="x")
-
-        title = ctk.CTkLabel(top, text="  🖐️ Holographic Touch",
-                             font=ctk.CTkFont(size=20, weight="bold"))
-        title.pack(side="left", padx=16, pady=10)
-
-        self._fps_lbl = ctk.CTkLabel(top, text="FPS: 0",
-                                     font=ctk.CTkFont(size=14, weight="bold"),
-                                     text_color="#2FA572")
-        self._fps_lbl.pack(side="right", padx=16)
-
-        self._cam_stat_lbl = ctk.CTkLabel(top, text="● Offline",
-                                          font=ctk.CTkFont(size=14, weight="bold"),
-                                          text_color="#E74C3C")
-        self._cam_stat_lbl.pack(side="right", padx=16)
-
-        # Body
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=16, pady=(16, 0))
-
-        # Preview Area
-        pf = ctk.CTkFrame(body, corner_radius=12, fg_color="#2B2B2B")
-        pf.pack(side="left", fill="both", expand=True, padx=(0, 16))
-
-        self._preview = ctk.CTkLabel(pf, text="Camera Offline\n\nClick 'Start Camera' below",
-                                     font=ctk.CTkFont(size=16))
-        self._preview.pack(expand=True, fill="both", padx=4, pady=4)
-
-        # Sidebar
-        rp = ctk.CTkFrame(body, width=320, corner_radius=12, fg_color="transparent")
-        rp.pack(side="right", fill="y")
-        rp.pack_propagate(False)
-
-        # Status Panel
-        sf = ctk.CTkFrame(rp, corner_radius=10, fg_color="#333333")
-        sf.pack(fill="x", pady=(0, 16))
-
-        ctk.CTkLabel(sf, text="Gesture Status", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(12, 4))
-        self._gest_lbl = ctk.CTkLabel(sf, text="NONE", font=ctk.CTkFont(size=24, weight="bold"), text_color="#3B8ED0")
-        self._gest_lbl.pack(pady=(0, 8))
-
-        self._hand_lbl = ctk.CTkLabel(sf, text="Hand: Not Found", font=ctk.CTkFont(size=13))
-        self._hand_lbl.pack(pady=2)
-
-        self._mode_lbl = ctk.CTkLabel(sf, text="Mouse: Disabled", font=ctk.CTkFont(size=13))
-        self._mode_lbl.pack(pady=(2, 12))
-
-        # Help Guide Panel
-        hf = GestureHelpPanel(rp, corner_radius=10, fg_color="#333333")
-        hf.pack(fill="both", expand=True)
-
-        # Bottom Bar
-        bot = ctk.CTkFrame(self, height=64, corner_radius=12, fg_color="#2B2B2B")
-        bot.pack(fill="x", padx=16, pady=16)
-
-        bc = {"height": 38, "font": ctk.CTkFont(size=14, weight="bold"), "corner_radius": 6}
-
-        self._btn_start = ctk.CTkButton(bot, text="▶ Start Camera", command=self._start,
-                                        width=150, fg_color="#2FA572", hover_color="#25835A", **bc)
-        self._btn_start.pack(side="left", padx=12, pady=12)
-
-        self._btn_stop = ctk.CTkButton(bot, text="⬛ Stop Camera", command=self._stop,
-                                       width=150, fg_color="#E74C3C", hover_color="#B83C30",
-                                       state="disabled", **bc)
-        self._btn_stop.pack(side="left", padx=12, pady=12)
-
-        self._btn_mouse = ctk.CTkButton(bot, text="🖱 Enable Mouse", command=self._toggle_mouse,
-                                        width=150, border_width=2, fg_color="transparent",
-                                        border_color="#3B8ED0", text_color="#3B8ED0",
-                                        hover_color="#1E4768", **bc)
-        self._btn_mouse.pack(side="left", padx=(32, 12), pady=12)
-
-        # Switches Frame
-        sw_f = ctk.CTkFrame(bot, fg_color="transparent")
-        sw_f.pack(side="right", padx=12, pady=12)
-
-        self._btn_perf = ctk.CTkSwitch(sw_f, text="⚡ Perf", command=self._toggle_perf,
-                                       font=ctk.CTkFont(size=13, weight="bold"))
-        self._btn_perf.pack(side="left", padx=8)
-
-        self._btn_debug = ctk.CTkSwitch(sw_f, text="🔧 Skeleton", command=self._toggle_debug,
-                                        font=ctk.CTkFont(size=13, weight="bold"))
-        self._btn_debug.pack(side="left", padx=8)
-        self._btn_debug.select()  # Enable by default
-
-    # ==================================================================
-    # Button handlers
-    # ==================================================================
-
-    def _start(self):
-        if self._processing or (self._proc_thread and self._proc_thread.is_alive()):
-            return
-
-        # Ensure tracker is initialized fresh each start.
+    def closeEvent(self, event) -> None:
+        self._closing = True
+        self._stop_camera()
         try:
             self._tracker.close()
         except Exception:
             pass
-        self._tracker = HandTracker()
+        event.accept()
+
+    def _icon(self, name: str) -> QIcon:
+        p = self._icons_dir / name
+        return QIcon(str(p)) if p.exists() else QIcon()
+
+    def _build_ui(self) -> None:
+        root = QWidget(self)
+        self.setCentralWidget(root)
+
+        layout = QVBoxLayout(root)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
+
+        header = QFrame()
+        header.setObjectName("headerCard")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(16, 14, 16, 14)
+        header_layout.setSpacing(12)
+
+        icon_label = QLabel()
+        icon_label.setPixmap(self._icon("camera.svg").pixmap(QSize(22, 22)))
+        title = QLabel("Holographic Touch")
+        title.setObjectName("title")
+
+        header_layout.addWidget(icon_label)
+        header_layout.addWidget(title)
+        header_layout.addStretch(1)
+
+        self._status_dot = QLabel("●")
+        self._status_dot.setObjectName("statusOffline")
+        self._status_text = QLabel("Camera Offline")
+        self._fps_label = QLabel("FPS 0")
+
+        header_layout.addWidget(self._status_dot)
+        header_layout.addWidget(self._status_text)
+        header_layout.addSpacing(10)
+        header_layout.addWidget(self._fps_label)
+        header_layout.addSpacing(10)
+
+        body = QHBoxLayout()
+        body.setSpacing(14)
+
+        cam_card = QFrame()
+        cam_card.setObjectName("cameraCard")
+        cam_layout = QVBoxLayout(cam_card)
+        cam_layout.setContentsMargins(12, 12, 12, 12)
+
+        self._preview = QLabel("Camera Offline")
+        self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._preview.setObjectName("preview")
+        self._preview.setMinimumSize(760, 520)
+        cam_layout.addWidget(self._preview, 1)
+
+        sidebar = QVBoxLayout()
+        sidebar.setSpacing(12)
+
+        status_card = QFrame()
+        status_card.setObjectName("sideCard")
+        status_layout = QVBoxLayout(status_card)
+        status_layout.setContentsMargins(14, 14, 14, 14)
+        status_layout.setSpacing(8)
+
+        status_title = QLabel("Gesture Status")
+        status_title.setObjectName("cardTitle")
+        self._gesture_badge = QLabel("PAUSE")
+        self._gesture_badge.setObjectName("badge")
+        self._hand_label = QLabel("Hand: Not Detected")
+        self._mouse_label = QLabel("Mouse: OFF")
+        self._fingers_label = QLabel("Fingers: 0")
+
+        status_layout.addWidget(status_title)
+        status_layout.addWidget(self._gesture_badge)
+        status_layout.addWidget(self._hand_label)
+        status_layout.addWidget(self._mouse_label)
+        status_layout.addWidget(self._fingers_label)
+
+        guide_card = QFrame()
+        guide_card.setObjectName("sideCard")
+        guide_layout = QGridLayout(guide_card)
+        guide_layout.setContentsMargins(14, 14, 14, 14)
+        guide_layout.setHorizontalSpacing(10)
+        guide_layout.setVerticalSpacing(8)
+
+        guide_title = QLabel("Gesture Guide")
+        guide_title.setObjectName("cardTitle")
+        guide_layout.addWidget(guide_title, 0, 0, 1, 3)
+
+        guide_rows = [
+            ("move.svg", "Index finger", "Move cursor"),
+            ("click.svg", "Thumb + Index pinch", "Left click"),
+            ("drag.svg", "Hold Thumb + Index pinch", "Drag"),
+            ("click.svg", "Index down + Thumb + Middle pinch", "Right click"),
+            ("scroll.svg", "Peace sign + up/down", "Scroll"),
+            ("settings.svg", "Open palm", "Task View (Win+Tab)"),
+            ("pause.svg", "No gesture / hand down", "Pause"),
+        ]
+        for i, (ico, a, b) in enumerate(guide_rows, start=1):
+            il = QLabel()
+            il.setPixmap(self._icon(ico).pixmap(QSize(16, 16)))
+            tl = QLabel(a)
+            dl = QLabel(b)
+            dl.setObjectName("muted")
+            guide_layout.addWidget(il, i, 0)
+            guide_layout.addWidget(tl, i, 1)
+            guide_layout.addWidget(dl, i, 2)
+
+        sidebar.addWidget(status_card)
+        sidebar.addWidget(guide_card, 1)
+
+        body.addWidget(cam_card, 1)
+
+        side_wrap = QWidget()
+        side_wrap.setLayout(sidebar)
+        side_wrap.setMinimumWidth(360)
+        body.addWidget(side_wrap)
+
+        controls = QFrame()
+        controls.setObjectName("controlCard")
+        controls_layout = QHBoxLayout(controls)
+        controls_layout.setContentsMargins(16, 12, 16, 12)
+        controls_layout.setSpacing(10)
+
+        self._start_btn = QPushButton("Start Camera")
+        self._start_btn.setIcon(self._icon("camera.svg"))
+        self._start_btn.setObjectName("greenButton")
+        self._start_btn.clicked.connect(self._start_camera)
+
+        self._stop_btn = QPushButton("Stop Camera")
+        self._stop_btn.setIcon(self._icon("stop.svg"))
+        self._stop_btn.setObjectName("redButton")
+        self._stop_btn.clicked.connect(self._stop_camera)
+        self._stop_btn.setEnabled(False)
+
+        self._mouse_btn = QPushButton("Enable Mouse")
+        self._mouse_btn.setIcon(self._icon("mouse.svg"))
+        self._mouse_btn.setObjectName("blueButton")
+        self._mouse_btn.clicked.connect(self._toggle_mouse)
+
+        self._region_label = QLabel(f"Control margin: {self._mapper.frame_r}")
+        self._region_label.setObjectName("muted")
+        self._region_slider = QSlider(Qt.Orientation.Horizontal)
+        self._region_slider.setRange(40, 200)
+        self._region_slider.setValue(int(self._mapper.frame_r))
+        self._region_slider.setFixedWidth(180)
+        self._region_slider.valueChanged.connect(self._set_control_margin)
+
+
+        controls_layout.addWidget(self._start_btn)
+        controls_layout.addWidget(self._stop_btn)
+        controls_layout.addWidget(self._mouse_btn)
+        controls_layout.addSpacing(8)
+        controls_layout.addWidget(self._region_label)
+        controls_layout.addWidget(self._region_slider)
+        controls_layout.addStretch(1)
+
+        layout.addWidget(header)
+
+        body_wrap = QWidget()
+        body_wrap.setLayout(body)
+        layout.addWidget(body_wrap, 1)
+
+        layout.addWidget(controls)
+
+        self.setStyleSheet(
+            """
+            QMainWindow { background: #0F1115; color: #E5E7EB; }
+            #headerCard, #cameraCard, #sideCard, #controlCard {
+                background: #1A1D24;
+                border: 1px solid #222733;
+                border-radius: 16px;
+            }
+            #title { font-size: 20px; font-weight: 700; color: #F3F4F6; }
+            #statusOffline { color: #F87171; font-size: 18px; }
+            #statusOnline { color: #4ADE80; font-size: 18px; }
+            #preview {
+                background: #0D1016;
+                border-radius: 14px;
+                border: 1px solid #263041;
+                color: #9CA3AF;
+                font-size: 18px;
+            }
+            #cardTitle { font-size: 14px; font-weight: 700; color: #F3F4F6; }
+            #muted { color: #A3A9B8; }
+            #badge {
+                border-radius: 12px;
+                padding: 6px 10px;
+                font-weight: 700;
+                background: #334155;
+                color: #F8FAFC;
+                max-width: 160px;
+            }
+            QPushButton {
+                border: 0;
+                border-radius: 12px;
+                padding: 10px 14px;
+                color: #F8FAFC;
+                font-weight: 600;
+                background: #2A3040;
+            }
+            QPushButton:hover { background: #394055; }
+            QPushButton:disabled { background: #202532; color: #6B7280; }
+            #greenButton { background: #4ADE80; color: #0B1118; }
+            #greenButton:hover { background: #67E69A; }
+            #redButton { background: #F87171; color: #0B1118; }
+            #redButton:hover { background: #FA8A8A; }
+            #blueButton { background: #60A5FA; color: #0B1118; }
+            #blueButton:hover { background: #79B5FB; }
+            #purpleButton { background: #A78BFA; color: #0B1118; }
+            #purpleButton:hover { background: #B79EFB; }
+            #ghostButton { background: #252A36; color: #E5E7EB; }
+            #ghostButton:hover { background: #313849; }
+            """
+        )
+
+    def _set_control_margin(self, value: int) -> None:
+        # Lower margin => bigger blue rectangle (more movement area).
+        v = int(value)
+        self._mapper.frame_r = max(10, min(260, v))
+        self._region_label.setText(f"Control margin: {self._mapper.frame_r}")
+
+    def _start_camera(self) -> None:
+        if self._processing:
+            return
+        try:
+            self._tracker.close()
+        except Exception:
+            pass
+        try:
+            self._tracker = HandTracker()
+        except Exception as exc:
+            self._status_text.setText("MediaPipe Error")
+            self._status_dot.setObjectName("statusOffline")
+            self._status_dot.style().unpolish(self._status_dot)
+            self._status_dot.style().polish(self._status_dot)
+            self._preview.setText(str(exc))
+            return
+        self._detector = GestureDetector()
+        self._detector.set_confirm_frames(3)
 
         if not self._camera.start():
-            reason = self._camera.last_error or "Check permissions and camera availability"
-            self._preview_image = None
-            self._preview.configure(image=self._preview_image,
-                                    text=f"❌ Cannot open camera\n{reason}")
-            self._cam_stat_lbl.configure(text="● Error", text_color="#E74C3C")
+            self._status_text.setText("Camera Error")
+            self._status_dot.setObjectName("statusOffline")
+            self._status_dot.style().unpolish(self._status_dot)
+            self._status_dot.style().polish(self._status_dot)
+            self._preview.setText("Cannot open camera")
             return
-
-        with self._lock:
-            self._error_msg = ""
 
         self._processing = True
         self._proc_thread = threading.Thread(target=self._process_loop, daemon=True)
         self._proc_thread.start()
 
-        self._cam_stat_lbl.configure(text="● Live", text_color="#2FA572")
-        self._btn_start.configure(state="disabled")
-        self._btn_stop.configure(state="normal")
-        self._update_gui()
+        self._status_text.setText("Camera Active")
+        self._status_dot.setObjectName("statusOnline")
+        self._status_dot.style().unpolish(self._status_dot)
+        self._status_dot.style().polish(self._status_dot)
+        self._start_btn.setEnabled(False)
+        self._stop_btn.setEnabled(True)
 
-    def _stop(self):
-        was_processing = self._processing
+    def _stop_camera(self) -> None:
         self._processing = False
-
         if self._proc_thread and self._proc_thread.is_alive():
             self._proc_thread.join(timeout=2.0)
-        if self._proc_thread:
-            self._proc_thread = None
+        self._proc_thread = None
 
         self._camera.stop()
-        try:
-            self._tracker.close()
-        except Exception:
-            pass
-
         if self._mouse.is_dragging:
             self._mouse.end_drag()
         self._was_dragging = False
-        self._smoother.reset()
+        self._mapper.reset()
 
         with self._lock:
             self._disp_frame = None
-            self._gesture = GestureType.NONE
+            self._gesture = GestureType.PAUSE
+            self._overlay_text = _OVERLAY_LABELS.get(GestureType.PAUSE, "PAUSED")
+            self._fingers_count = 0
             self._hand_ok = False
-            self._raw_hand = None
-            if not was_processing:
-                self._error_msg = ""
 
-        self._cam_stat_lbl.configure(text="● Offline", text_color="#E74C3C")
-        self._btn_start.configure(state="normal")
-        self._btn_stop.configure(state="disabled")
-        self._preview_image = None
-        self._preview.configure(image=self._preview_image, text="Camera Offline")
+        self._status_text.setText("Camera Offline")
+        self._status_dot.setObjectName("statusOffline")
+        self._status_dot.style().unpolish(self._status_dot)
+        self._status_dot.style().polish(self._status_dot)
+        self._preview.setPixmap(QPixmap())
+        self._preview.setText("Camera Offline")
+        self._start_btn.setEnabled(True)
+        self._stop_btn.setEnabled(False)
 
-    def _toggle_mouse(self):
+    def _toggle_mouse(self) -> None:
         self._mouse_enabled = not self._mouse_enabled
         if self._mouse_enabled:
-            self._btn_mouse.configure(text="🖱 Disable Mouse", fg_color="#3B8ED0", text_color="white")
+            self._mouse_btn.setText("Disable Mouse")
+            self._mouse_label.setText("Mouse: ON")
         else:
-            self._btn_mouse.configure(text="🖱 Enable Mouse", fg_color="transparent", text_color="#3B8ED0")
+            self._mouse_btn.setText("Enable Mouse")
+            self._mouse_label.setText("Mouse: OFF")
 
-    def _toggle_perf(self):
-        self._perf_mode = bool(self._btn_perf.get())
+    def _process_loop(self) -> None:
+        last_overlay_gesture = GestureType.NONE
+        last_action_gesture = GestureType.NONE
 
-    def _toggle_debug(self):
-        self._debug_mode = bool(self._btn_debug.get())
-
-    def _on_close(self):
-        self._closing = True
-        self._stop()
-        try:
-            self._tracker.close()
-        except Exception:
-            pass
-        self.destroy()
-
-    # ==================================================================
-    # Processing thread
-    # ==================================================================
-
-    def _process_loop(self):
-        skip = False
         while self._processing:
-            # Camera disconnected?
             if not self._camera.is_running:
-                with self._lock:
-                    self._error_msg = "Camera disconnected"
                 self._processing = False
                 break
 
             frame = self._camera.get_frame()
             if frame is None:
-                time.sleep(0.005)
+                time.sleep(0.004)
                 continue
 
             frame = cv2.flip(frame, 1)
+            fh, fw = frame.shape[:2]
+            self._mapper.set_camera_size(fw, fh)
 
-            # Frame skipping in performance mode
-            if skip and self._perf_mode:
-                skip = False
-                # Use motion prediction during skipped frames
-                if self._mouse_enabled:
-                    px, py = self._smoother.predict()
-                    if px >= 0:
-                        self._mouse.move_cursor(px, py)
-                with self._lock:
-                    self._disp_frame = frame
-                continue
-
-            try:
-                landmarks, raw_hand = self._tracker.process_frame(frame)
-                result = self._detector.detect(landmarks)
-            except Exception:
-                landmarks, raw_hand = None, None
-                result = self._detector.detect(None)
-
+            hand_data, raw_hand = self._tracker.process_frame(frame)
+            result = self._detector.detect(hand_data)
             gesture = result.gesture
+            gesture_changed = gesture != last_action_gesture
 
-            # Mouse control
-            if self._mouse_enabled and landmarks and gesture not in _PAUSE_GESTURES:
-                tip = landmarks[8]
-                tx, ty = self._mapper.map_to_screen(tip[0], tip[1])
-                sx, sy = self._smoother.smooth(tx, ty)
+            if self._mouse_enabled and gesture == GestureType.TASK_VIEW and gesture_changed:
+                now = time.monotonic()
+                if now - self._last_task_view_action >= 1.0:
+                    self._last_task_view_action = now
+                    try:
+                        if sys.platform.startswith("win"):
+                            pyautogui.hotkey("winleft", "tab")
+                        elif sys.platform == "darwin":
+                            # Mission Control default shortcut.
+                            pyautogui.hotkey("ctrl", "up")
+                    except Exception:
+                        pass
 
-                if gesture == GestureType.MOVE:
-                    self._mouse.move_cursor(sx, sy)
-                elif gesture == GestureType.LEFT_CLICK:
-                    self._mouse.move_cursor(sx, sy)
-                    self._mouse.left_click()
-                elif gesture == GestureType.DOUBLE_CLICK:
-                    self._mouse.move_cursor(sx, sy)
-                    self._mouse.double_click()
-                elif gesture == GestureType.RIGHT_CLICK:
-                    self._mouse.right_click()
-                elif gesture == GestureType.SCROLL:
-                    if result.scroll_delta != 0:
+            fingers_count = 0
+            if hand_data and isinstance(hand_data, dict):
+                xy = hand_data.get("xy")
+                if xy:
+                    fs = get_finger_states(xy)
+                    fingers_count = int(fs.thumb) + int(fs.index) + int(fs.middle) + int(fs.ring) + int(fs.pinky)
+
+            if self._mouse_enabled and hand_data and gesture not in {GestureType.PAUSE, GestureType.NONE, GestureType.TASK_VIEW}:
+                xy = hand_data.get("xy")
+                if xy and len(xy) > 8:
+                    tip_x, tip_y = xy[8]
+                    cam_x = int((tip_x / PROCESS_WIDTH) * fw)
+                    cam_y = int((tip_y / PROCESS_HEIGHT) * fh)
+                    sx, sy = self._mapper.map_to_screen(cam_x, cam_y)
+
+                    if gesture == GestureType.MOVE:
+                        self._mouse.move_cursor(sx, sy)
+                    elif gesture == GestureType.LEFT_CLICK and gesture_changed:
+                        self._mouse.move_cursor(sx, sy)
+                        self._mouse.left_click()
+                    elif gesture == GestureType.RIGHT_CLICK and gesture_changed:
+                        self._mouse.right_click()
+                    elif gesture == GestureType.DOUBLE_CLICK and gesture_changed:
+                        self._mouse.double_click()
+                    elif gesture == GestureType.SCROLL and result.scroll_delta != 0:
                         self._mouse.scroll(result.scroll_delta)
-                elif gesture == GestureType.DRAG:
-                    self._mouse.move_cursor(sx, sy)
-                    if not self._was_dragging:
-                        self._mouse.start_drag()
+                    elif gesture == GestureType.DRAG:
+                        self._mouse.move_cursor(sx, sy)
+                        if not self._was_dragging:
+                            self._mouse.start_drag()
 
-                if self._was_dragging and gesture != GestureType.DRAG:
-                    self._mouse.end_drag()
-                self._was_dragging = gesture == GestureType.DRAG
+                    if self._was_dragging and gesture != GestureType.DRAG:
+                        self._mouse.end_drag()
+                    self._was_dragging = gesture == GestureType.DRAG
 
             elif self._was_dragging:
                 self._mouse.end_drag()
                 self._was_dragging = False
 
+            last_action_gesture = gesture
+            if gesture != last_overlay_gesture:
+                overlay_text = _OVERLAY_LABELS.get(gesture, "")
+                last_overlay_gesture = gesture
+            else:
+                overlay_text = self._overlay_text
+
             fps_v = self._fps.update()
             with self._lock:
                 self._disp_frame = frame
                 self._gesture = gesture
-                self._hand_ok = landmarks is not None
-                self._raw_hand = raw_hand
+                self._hand_ok = hand_data is not None
                 self._fps_val = fps_v
+                self._overlay_text = overlay_text
+                self._fingers_count = fingers_count
+                self._raw_hand = raw_hand
 
-            if self._fps.should_skip():
-                skip = True
-
-    # ==================================================================
-    # GUI update (runs on main thread via after())
-    # ==================================================================
-
-    def _update_gui(self):
-        if self._closing or not self._processing:
-            # Check for error to display
-            with self._lock:
-                err = self._error_msg
-            if err:
-                try:
-                    self._preview.configure(image=None, text=f"⚠ {err}")
-                    self._btn_start.configure(state="normal")
-                    self._btn_stop.configure(state="disabled")
-                    self._cam_stat_lbl.configure(text="● Error", text_color="#E74C3C")
-                except Exception:
-                    pass
+    def _update_gui(self) -> None:
+        if self._closing:
             return
 
         with self._lock:
             frame = self._disp_frame
             gesture = self._gesture
-            hand = self._hand_ok
-            raw_hand = self._raw_hand
-            fps = self._fps_val
+            hand_ok = self._hand_ok
+            fps_v = self._fps_val
+            overlay_text = self._overlay_text
+            fingers_count = self._fingers_count
+            raw_hand = getattr(self, "_raw_hand", None)
 
-        if frame is not None:
-            try:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        self._fps_label.setText(f"FPS {fps_v:.0f}")
+        self._gesture_badge.setText(gesture.value)
+        self._gesture_badge.setStyleSheet(
+            f"border-radius: 12px; padding: 6px 10px; font-weight: 700; background: {_BADGE_COLORS.get(gesture, '#64748B')}; color: #0B1118;"
+        )
+        self._hand_label.setText(f"Hand: {'Detected' if hand_ok else 'Not Detected'}")
+        self._fingers_label.setText(f"Fingers: {fingers_count}")
 
-                # Draw skeleton if requested and found
-                if self._debug_mode and raw_hand:
-                    self._tracker.draw_landmarks(rgb, raw_hand)
+        if frame is None:
+            return
 
-                # Resize and add overlay using PIL
-                pil_img = Image.fromarray(rgb).resize((_PREVIEW_W, _PREVIEW_H), Image.BILINEAR).convert("RGBA")
-                _draw_action_overlay_pil(pil_img, gesture)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                self._preview_image = ctk.CTkImage(
-                    light_image=pil_img,
-                    dark_image=pil_img,
-                    size=(_PREVIEW_W, _PREVIEW_H),
-                )
-                self._preview.configure(image=self._preview_image, text="")
-            except Exception:
-                pass
+        x1, y1, x2, y2 = self._mapper.control_region()
+        cv2.rectangle(rgb, (x1, y1), (x2, y2), (96, 165, 250), 2)
 
-        self._fps_lbl.configure(text=f"FPS: {fps:.0f}")
-        self._gest_lbl.configure(text=gesture.value)
-        hc = "#2FA572" if hand else "#AAAAAA"
-        self._hand_lbl.configure(text=f"Hand: {'Detected ✓' if hand else 'Not Found'}",
-                                 text_color=hc)
-        mc = "#2FA572" if self._mouse_enabled else "#AAAAAA"
-        self._mode_lbl.configure(text=f"Mouse: {'Active' if self._mouse_enabled else 'Disabled'}",
-                                 text_color=mc)
+        if self._debug_mode and not self._perf_mode and raw_hand is not None:
+            self._tracker.draw_landmarks(rgb, raw_hand)
 
-        self.after(33, self._update_gui)
+        cv2.putText(
+            rgb,
+            f"Fingers: {fingers_count}",
+            (18, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (120, 220, 200),
+            2,
+            cv2.LINE_AA,
+        )
+
+        if overlay_text:
+            (tw, th), baseline = cv2.getTextSize(overlay_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+            pad = 12
+            x = rgb.shape[1] - tw - pad * 2 - 20
+            y = 24
+            w = tw + pad * 2
+            h = th + baseline + pad * 2
+            overlay = rgb.copy()
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), (40, 45, 58), -1)
+            cv2.addWeighted(overlay, 0.65, rgb, 0.35, 0, rgb)
+            cv2.putText(
+                rgb,
+                overlay_text,
+                (x + pad, y + h - pad - baseline),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+        h, w, _ = rgb.shape
+        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
+        pix = QPixmap.fromImage(qimg.copy())
+        self._preview.setPixmap(
+            pix.scaled(
+                self._preview.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
 
 ===== FILE: src/main.py =====
 """Entry point for AI-HollowGraphic-Like-Touch desktop application."""
+
+from PySide6.QtWidgets import QApplication
 
 from gui.main_window import MainWindow
 
 
 def run() -> None:
-    app = MainWindow()
-    app.mainloop()
+    qt_app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.show()
+    qt_app.exec()
 
 
 if __name__ == "__main__":
@@ -1336,20 +3110,48 @@ _CONNECTIONS = [
 _PROC_SIZE = (PROCESS_WIDTH, PROCESS_HEIGHT)
 
 
+def _mediapipe_diagnostic() -> str:
+    try:
+        file_path = getattr(mp, "__file__", None)
+        version = getattr(mp, "__version__", None)
+        has_solutions = hasattr(mp, "solutions")
+        return f"mediapipe version={version} file={file_path} has_solutions={has_solutions}"
+    except Exception:
+        return "mediapipe diagnostic unavailable"
+
+
+def _ensure_mediapipe_solutions() -> None:
+    if hasattr(mp, "solutions"):
+        return
+    detail = _mediapipe_diagnostic()
+    raise RuntimeError(
+        "MediaPipe import looks wrong: 'mediapipe' has no attribute 'solutions'.\n"
+        f"{detail}\n\n"
+        "Fix (inside your venv):\n"
+        "- pip uninstall -y mediapipe\n"
+        "- pip install mediapipe==0.10.21\n"
+    )
+
+
 class HandTracker:
     def __init__(self):
+        _ensure_mediapipe_solutions()
         self._mp_hands = mp.solutions.hands
+        self._draw_utils = mp.solutions.drawing_utils
+        self._draw_styles = mp.solutions.drawing_styles
         self._hands = self._mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=MAX_NUM_HANDS,
-            min_detection_confidence=MIN_DETECTION_CONFIDENCE,
-            min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
+            max_num_hands=1,
+            min_detection_confidence=0.6,
+            min_tracking_confidence=0.6,
         )
         self._pw = PROCESS_WIDTH
         self._ph = PROCESS_HEIGHT
+        self._landmark_style = self._draw_styles.get_default_hand_landmarks_style()
+        self._connection_style = self._draw_styles.get_default_hand_connections_style()
 
     def process_frame(self, frame_bgr):
-        """Resize to 320x240, run MediaPipe, return (landmarks_list, hand_landmarks_proto)."""
+        """Resize to 320x240, run MediaPipe, return (hand_data, hand_landmarks_proto)."""
         try:
             small = cv2.resize(frame_bgr, _PROC_SIZE, interpolation=cv2.INTER_NEAREST)
             rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
@@ -1360,19 +3162,20 @@ class HandTracker:
             return None, None
         hand = result.multi_hand_landmarks[0]
         pw, ph = self._pw, self._ph
-        pts = [(int(lm.x * pw), int(lm.y * ph)) for lm in hand.landmark]
-        return pts, hand
+        xy = [(int(lm.x * pw), int(lm.y * ph)) for lm in hand.landmark]
+        z = [float(lm.z) for lm in hand.landmark]
+        return {"xy": xy, "z": z}, hand
 
     def draw_landmarks(self, frame_bgr, hand_landmarks):
         """Draw landmarks and connections onto full frame using mp.drawing_utils."""
         if not hand_landmarks:
             return
-        mp.solutions.drawing_utils.draw_landmarks(
+        self._draw_utils.draw_landmarks(
             frame_bgr,
             hand_landmarks,
             self._mp_hands.HAND_CONNECTIONS,
-            mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
-            mp.solutions.drawing_styles.get_default_hand_connections_style()
+            self._landmark_style,
+            self._connection_style,
         )
 
     def close(self):
@@ -1638,17 +3441,31 @@ class AdaptiveSmoother:
     Fast movement → light smoothing (responsiveness)
     Optional acceleration curve for large, fast movements.
     """
-    __slots__ = ("a_slow", "a_fast", "speed_t", "px", "py", "vx", "vy",
-                 "accel_factor", "accel_thresh")
+    __slots__ = (
+        "a_slow",
+        "a_fast",
+        "speed_t",
+        "px",
+        "py",
+        "vx",
+        "vy",
+        "accel_factor",
+        "accel_thresh",
+        "deadzone",
+        "max_boost",
+    )
 
     def __init__(self, alpha_slow=ALPHA_SLOW, alpha_fast=ALPHA_FAST,
                  speed_threshold=SPEED_THRESHOLD,
-                 accel_factor=1.3, accel_threshold=80.0):
+                 accel_factor=1.35, accel_threshold=80.0,
+                 deadzone=4.0, max_boost=1.8):
         self.a_slow = alpha_slow
         self.a_fast = alpha_fast
         self.speed_t = speed_threshold
         self.accel_factor = accel_factor    # multiplier for fast large moves
         self.accel_thresh = accel_threshold  # speed above which acceleration kicks in
+        self.deadzone = deadzone
+        self.max_boost = max_boost
         self.px = -1.0
         self.py = -1.0
         self.vx = 0.0
@@ -1663,6 +3480,12 @@ class AdaptiveSmoother:
         dx, dy = x - self.px, y - self.py
         speed = (dx * dx + dy * dy) ** 0.5
 
+        # Ignore tiny micro-movements to suppress jitter.
+        if speed < self.deadzone:
+            self.vx = 0.0
+            self.vy = 0.0
+            return int(self.px), int(self.py)
+
         # Adaptive alpha
         if speed >= self.speed_t:
             a = self.a_fast
@@ -1674,6 +3497,7 @@ class AdaptiveSmoother:
         if speed > self.accel_thresh:
             overshoot = (speed - self.accel_thresh) / self.accel_thresh
             boost = 1.0 + overshoot * (self.accel_factor - 1.0)
+            boost = min(boost, self.max_boost)
             dx *= boost
             dy *= boost
 
@@ -1722,6 +3546,7 @@ def _landmarks(thumb=(100, 100), index=(160, 60), middle=(220, 60),
     lm[3] = thumb_ip        # thumb IP
     lm[4] = thumb            # thumb tip
     lm[5] = index_mcp        # index MCP
+    lm[17] = (260, 140)      # pinky MCP (for hand scale)
     lm[6] = index_pip        # index PIP
     lm[8] = index            # index tip
     lm[10] = middle_pip      # middle PIP
@@ -1790,7 +3615,7 @@ def test_pause_gesture() -> None:
 
 
 def test_left_click_requires_stability() -> None:
-    """Pinch must persist for GESTURE_STABILITY_FRAMES before firing click."""
+    """Thumb+index pinch fires a click (edge-triggered)."""
     detector = GestureDetector()
     # Thumb and index very close = pinch
     lm = _landmarks(
@@ -1800,28 +3625,65 @@ def test_left_click_requires_stability() -> None:
         pinky=(270, 150), pinky_pip=(270, 100),
         thumb_ip=(90, 110), index_mcp=(150, 130),
     )
-    # First call — not yet stable
     r1 = detector.detect(lm)
-    # Second call — should trigger click (stability_frames=2)
-    r2 = detector.detect(lm)
-    assert r2.gesture == GestureType.LEFT_CLICK
+    assert r1.gesture == GestureType.LEFT_CLICK
 
 
-def test_right_click_two_fingers() -> None:
-    """Index + middle up, ring + pinky down → RIGHT_CLICK after stability."""
+def test_right_click_thumb_middle_pinch() -> None:
+    """Thumb + middle pinch with index down -> RIGHT_CLICK after brief hold."""
     detector = GestureDetector()
     lm = _landmarks(
-        index=(160, 50), index_pip=(160, 100),       # UP
-        middle=(220, 50), middle_pip=(220, 100),      # UP
-        ring=(250, 150), ring_pip=(250, 100),         # DOWN
-        pinky=(270, 150), pinky_pip=(270, 100),       # DOWN
+        # Make index "down" to avoid thumb-index pinch triggering left click.
+        index=(160, 160), index_pip=(160, 120),
+        middle=(220, 100), middle_pip=(220, 120),
+        ring=(250, 160), ring_pip=(250, 120),
+        pinky=(270, 160), pinky_pip=(270, 120),
+        thumb=(222, 102), thumb_ip=(210, 115),
+    )
+    r1 = detector.detect(lm)
+    assert r1.gesture in {GestureType.MOVE, GestureType.PAUSE}
+    r2 = detector.detect(lm)
+    assert r2.gesture == GestureType.RIGHT_CLICK
+
+
+def test_task_view_open_palm() -> None:
+    detector = GestureDetector()
+    lm = _landmarks(
+        thumb=(50, 80), thumb_ip=(90, 110),
+        index=(160, 50), index_pip=(160, 100),
+        middle=(220, 50), middle_pip=(220, 100),
+        ring=(250, 50), ring_pip=(250, 100),
+        pinky=(270, 50), pinky_pip=(270, 100),
+    )
+    result = None
+    # Task View requires a sustained open palm for stability.
+    for _ in range(6):
+        result = detector.detect(lm)
+    assert result is not None
+    assert result.gesture == GestureType.TASK_VIEW
+
+
+def test_scroll_peace_sign() -> None:
+    detector = GestureDetector()
+    # Index + middle up, ring + pinky down => SCROLL mode.
+    lm = _landmarks(
+        index=(160, 50), index_pip=(160, 100),
+        middle=(220, 50), middle_pip=(220, 100),
+        ring=(250, 160), ring_pip=(250, 120),
+        pinky=(270, 160), pinky_pip=(270, 120),
         thumb=(100, 130), thumb_ip=(90, 110),
     )
-    # Call enough times for stability + decision
-    result = None
-    for _ in range(5):
-        result = detector.detect(lm)
-        if result.gesture == GestureType.RIGHT_CLICK:
-            break
-    assert result.gesture == GestureType.RIGHT_CLICK
+    r1 = detector.detect(lm)
+    assert r1.gesture == GestureType.SCROLL
+    # Move tips upward to produce a scroll delta.
+    lm2 = _landmarks(
+        index=(160, 40), index_pip=(160, 100),
+        middle=(220, 40), middle_pip=(220, 100),
+        ring=(250, 160), ring_pip=(250, 120),
+        pinky=(270, 160), pinky_pip=(270, 120),
+        thumb=(100, 130), thumb_ip=(90, 110),
+    )
+    r2 = detector.detect(lm2)
+    assert r2.gesture == GestureType.SCROLL
+    assert isinstance(r2.scroll_delta, int)
 
