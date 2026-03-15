@@ -11,7 +11,7 @@ from config import (
     SPEED_THRESHOLD,
 )
 from utils.math_utils import clamp
-from utils.smoothing import AdaptiveExponentialSmoother2D, DeadzoneFilter2D, Kalman2D, MotionPredictor2D
+from utils.smoothing import AdaptiveExponentialSmoother2D, DeadzoneFilter2D
 
 
 class CursorMapper:
@@ -34,10 +34,7 @@ class CursorMapper:
         "_vel_y",
         "_deadzone_filter",
         "_exp_smoother",
-        "_kalman",
-        "_predictor",
         "_stationary_threshold_sq",
-        "_prediction_t",
     )
 
     def __init__(self, cam_width: int, cam_height: int, screen_width: int, screen_height: int) -> None:
@@ -61,10 +58,7 @@ class CursorMapper:
             alpha_fast=ALPHA_FAST,
             speed_threshold=SPEED_THRESHOLD,
         )
-        self._kalman = Kalman2D(process_noise=0.02, measurement_noise=2.5)
-        self._predictor = MotionPredictor2D()
         self._stationary_threshold_sq = float(max(3, int(CURSOR_MOVE_THRESHOLD)) ** 2)
-        self._prediction_t = float(CURSOR_PREDICTION_SECONDS)
 
     def set_camera_size(self, cam_width: int, cam_height: int) -> None:
         """Update source frame size for accurate runtime mapping."""
@@ -90,8 +84,6 @@ class CursorMapper:
         self._vel_x = 0.0
         self._vel_y = 0.0
         self._exp_smoother.reset()
-        self._kalman.reset()
-        self._predictor.reset()
 
     def _interp(self, value: float, in_min: float, in_max: float, out_min: float, out_max: float) -> float:
         if in_max <= in_min:
@@ -105,8 +97,8 @@ class CursorMapper:
 
         if cam_x < x1 or cam_x > x2 or cam_y < y1 or cam_y > y2:
             if self._out_x >= 0:
-                px = self._out_x + self._vel_x * self._prediction_t
-                py = self._out_y + self._vel_y * self._prediction_t
+                py = self._out_y
+                px = self._out_x
                 return int(clamp(px, 0.0, float(self.scr_w))), int(clamp(py, 0.0, float(self.scr_h)))
             return int(self.scr_w // 2), int(self.scr_h // 2)
 
@@ -137,19 +129,11 @@ class CursorMapper:
             return int(self._out_x), int(self._out_y)
 
         # Stage 2: adaptive exponential smoothing.
-        speed = math.sqrt(dx_raw * dx_raw + dy_raw * dy_raw)
-        sx, sy = self._exp_smoother.filter(target_x, target_y, speed)
+        speed_sq = dx_raw * dx_raw + dy_raw * dy_raw
+        sx, sy = self._exp_smoother.filter(target_x, target_y, speed_sq)
 
-        # Stage 3: lightweight Kalman filter.
-        kx, ky = self._kalman.filter(sx, sy)
-
-        # Velocity prediction to prevent micro-pauses.
-        px, py, vx, vy = self._predictor.predict(kx, ky, factor=self._prediction_t)
-        self._vel_x = vx
-        self._vel_y = vy
-
-        nx = clamp(px, 0.0, float(self.scr_w))
-        ny = clamp(py, 0.0, float(self.scr_h))
+        nx = clamp(sx, 0.0, float(self.scr_w))
+        ny = clamp(sy, 0.0, float(self.scr_h))
 
         # Additional stationary threshold to suppress residual jitter.
         ddx = nx - self._out_x
@@ -158,6 +142,9 @@ class CursorMapper:
             self._ploc_x = target_x
             self._ploc_y = target_y
             return int(self._out_x), int(self._out_y)
+
+        self._vel_x = ddx
+        self._vel_y = ddy
 
         self._ploc_x = target_x
         self._ploc_y = target_y

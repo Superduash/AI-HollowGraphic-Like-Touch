@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
         self._camera = CameraThread()
         self._tracker = HandTracker()
         self._detector = GestureDetector()
-        self._detector.set_confirm_frames(3)
+        self._detector.set_confirm_duration(0.12)
         self._fps = FPSCounter(target_fps=TARGET_FPS)
 
         try:
@@ -101,6 +101,7 @@ class MainWindow(QMainWindow):
         self._last_ui_gesture = GestureType.NONE
         self._last_preview_frame_id = -1
         self._last_preview_render = 0.0
+        self._ui_frame_counter = 0
 
         self._icons_dir = Path(__file__).resolve().parents[2] / "assets" / "icons"
 
@@ -369,7 +370,7 @@ class MainWindow(QMainWindow):
             self._preview.setText(str(exc))
             return
         self._detector = GestureDetector()
-        self._detector.set_confirm_frames(3)
+        self._detector.set_confirm_duration(0.12)
 
         if not self._camera.start():
             self._status_text.setText("Camera Error")
@@ -562,6 +563,10 @@ class MainWindow(QMainWindow):
             return
         self._last_preview_frame_id = frame_id
         self._last_preview_render = now
+
+        self._ui_frame_counter += 1
+        if self._ui_frame_counter % 3 != 0:
+            return
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 

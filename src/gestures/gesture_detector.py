@@ -28,9 +28,9 @@ class GestureDetector:
     """Gesture detector with confirmation, locking, hysteresis, and priority."""
 
     def __init__(self) -> None:
-        self._confirm_frames_required: int = 4
+        self._confirm_duration: float = 0.12
         self._candidate_gesture: GestureType = GestureType.PAUSE
-        self._candidate_frames: int = 0
+        self._candidate_start: float = 0.0
         self._active_gesture: GestureType = GestureType.PAUSE
 
         self._lock_ms: float = 0.2
@@ -57,9 +57,9 @@ class GestureDetector:
         self._smooth_scroll_output = 0.0
 
         self._task_view_cooldown = 1.0
-        self._task_view_confirm_frames = 6
+        self._task_view_confirm_duration = 0.2
         self._last_task_view = 0.0
-        self._task_view_frames = 0
+        self._task_view_start = 0.0
 
     def _is_open_palm(self, xy: list[tuple[int, int]], fingers, hand_scale: float) -> bool:
         # Require all fingers extended and a wide finger spread to prevent
@@ -85,8 +85,8 @@ class GestureDetector:
     def is_dragging(self) -> bool:
         return self._is_dragging
 
-    def set_confirm_frames(self, frames: int) -> None:
-        self._confirm_frames_required = max(1, int(frames))
+    def set_confirm_duration(self, duration: float) -> None:
+        self._confirm_duration = max(0.0, float(duration))
 
     def detect(self, hand_data) -> GestureResult:
         if not hand_data:
@@ -105,16 +105,17 @@ class GestureDetector:
         # Keep Task View behavior as explicit edge-trigger path.
         hand_scale = self._hand_scale(landmarks_xy)
         if self._is_open_palm(landmarks_xy, fingers, hand_scale):
-            self._task_view_frames += 1
-            if self._task_view_frames >= self._task_view_confirm_frames and now - self._last_task_view >= self._task_view_cooldown:
+            if self._task_view_start == 0.0:
+                self._task_view_start = now
+            elif now - self._task_view_start >= self._task_view_confirm_duration and now - self._last_task_view >= self._task_view_cooldown:
                 self._last_task_view = now
-                self._task_view_frames = 0
+                self._task_view_start = 0.0
                 self._active_gesture = GestureType.TASK_VIEW
                 self._locked_until = now + self._lock_ms
                 return GestureResult(GestureType.TASK_VIEW, 0)
             return self._commit_gesture(GestureType.PAUSE, now, 0)
         else:
-            self._task_view_frames = 0
+            self._task_view_start = 0.0
 
         thumb = landmarks_xy[_THUMB_TIP]
         index_tip = landmarks_xy[_INDEX_TIP]
@@ -211,20 +212,18 @@ class GestureDetector:
             return GestureResult(self._active_gesture, 0)
 
         if intent == self._candidate_gesture:
-            self._candidate_frames += 1
+            if now - self._candidate_start >= self._confirm_duration and intent != self._active_gesture:
+                self._active_gesture = intent
+                self._locked_until = now + self._lock_ms
+                if intent == GestureType.LEFT_CLICK:
+                    self._left_click_pending = False
+                    self._last_left_click = now
+                elif intent == GestureType.RIGHT_CLICK:
+                    self._right_click_pending = False
+                    self._last_right_click = now
         else:
             self._candidate_gesture = intent
-            self._candidate_frames = 1
-
-        if self._candidate_frames >= self._confirm_frames_required and intent != self._active_gesture:
-            self._active_gesture = intent
-            self._locked_until = now + self._lock_ms
-            if intent == GestureType.LEFT_CLICK:
-                self._left_click_pending = False
-                self._last_left_click = now
-            elif intent == GestureType.RIGHT_CLICK:
-                self._right_click_pending = False
-                self._last_right_click = now
+            self._candidate_start = now
 
         if self._active_gesture == GestureType.SCROLL:
             return GestureResult(GestureType.SCROLL, scroll_delta)
@@ -250,7 +249,8 @@ class GestureDetector:
         self._smooth_scroll_output = 0.0
 
         self._candidate_gesture = GestureType.PAUSE
-        self._candidate_frames = 0
+        self._candidate_start = 0.0
+        self._task_view_start = 0.0
         self._active_gesture = GestureType.PAUSE
         self._locked_until = 0.0
 
@@ -258,7 +258,4 @@ class GestureDetector:
         try:
             return max(40.0, point_distance(xy[_INDEX_MCP], xy[_PINKY_MCP]))
         except Exception:
-            # Fallback: use bounding box size.
-            xs = [p[0] for p in xy]
-            ys = [p[1] for p in xy]
-            return max(40.0, float(max(max(xs) - min(xs), max(ys) - min(ys))))
+            return 40.0
