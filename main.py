@@ -12,7 +12,7 @@ def main() -> None:
         sys.path.insert(0, str(src_dir))
 
     src_main = src_dir / "main.py"
-    runpy.run_path(str(src_main), run_name="__main__")q
+    runpy.run_path(str(src_main), run_name="__main__")
 
 
 if __name__ == "__main__":
