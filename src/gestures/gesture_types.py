@@ -12,6 +12,7 @@ class GestureType(str, Enum):
     SCROLL = "SCROLL"
     DRAG = "DRAG"
     PAUSE = "PAUSE"
+    TASK_VIEW = "TASK_VIEW"
     VOLUME = "VOLUME"
     SWITCH_WINDOW = "SWITCH_WINDOW"
     OPEN_PALM = "OPEN_PALM"

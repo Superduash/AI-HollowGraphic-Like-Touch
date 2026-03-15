@@ -3,12 +3,12 @@
 import customtkinter as ctk
 
 _GESTURES = [
-    ("☝️ Index up", "Move"),
-    ("🤏 Pinch", "L-Click"),
-    ("🤏🤏 2x Pinch", "D-Click"),
-    ("✌️ 2 Fingers", "R-Click"),
-    ("🤏⏳ Hold", "Drag"),
-    ("✌️↕ Move Y", "Scroll"),
+    ("☝️ Index only", "Move"),
+    ("🤏 Thumb+Index", "L-Click"),
+    ("🤏⏳ Hold Thumb+Index", "Drag"),
+    ("🤏 Thumb+Middle", "R-Click"),
+    ("✌️↕ Peace + Y", "Scroll"),
+    ("🖐️ Open palm", "Task View"),
     ("✊ Fist", "Pause"),
 ]
 

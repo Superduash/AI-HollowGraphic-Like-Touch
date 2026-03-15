@@ -21,6 +21,7 @@ def _landmarks(thumb=(100, 100), index=(160, 60), middle=(220, 60),
     lm[3] = thumb_ip        # thumb IP
     lm[4] = thumb            # thumb tip
     lm[5] = index_mcp        # index MCP
+    lm[17] = (260, 140)      # pinky MCP (for hand scale)
     lm[6] = index_pip        # index PIP
     lm[8] = index            # index tip
     lm[10] = middle_pip      # middle PIP
@@ -106,20 +107,55 @@ def test_left_click_requires_stability() -> None:
     assert r2.gesture == GestureType.LEFT_CLICK
 
 
-def test_right_click_two_fingers() -> None:
-    """Index + middle up, ring + pinky down → RIGHT_CLICK after stability."""
+def test_right_click_thumb_middle_pinch() -> None:
+    """Thumb + middle pinch → RIGHT_CLICK after stability."""
     detector = GestureDetector()
     lm = _landmarks(
-        index=(160, 50), index_pip=(160, 100),       # UP
-        middle=(220, 50), middle_pip=(220, 100),      # UP
-        ring=(250, 150), ring_pip=(250, 100),         # DOWN
-        pinky=(270, 150), pinky_pip=(270, 100),       # DOWN
+        # Make index "down" to avoid thumb-index pinch triggering left click.
+        index=(160, 160), index_pip=(160, 120),
+        middle=(220, 100), middle_pip=(220, 120),
+        ring=(250, 160), ring_pip=(250, 120),
+        pinky=(270, 160), pinky_pip=(270, 120),
+        thumb=(222, 102), thumb_ip=(210, 115),
+    )
+    r1 = detector.detect(lm)
+    r2 = detector.detect(lm)
+    assert r2.gesture == GestureType.RIGHT_CLICK
+
+
+def test_task_view_open_palm() -> None:
+    detector = GestureDetector()
+    lm = _landmarks(
+        thumb=(50, 80), thumb_ip=(90, 110),
+        index=(160, 50), index_pip=(160, 100),
+        middle=(220, 50), middle_pip=(220, 100),
+        ring=(250, 50), ring_pip=(250, 100),
+        pinky=(270, 50), pinky_pip=(270, 100),
+    )
+    result = detector.detect(lm)
+    assert result.gesture == GestureType.TASK_VIEW
+
+
+def test_scroll_peace_sign() -> None:
+    detector = GestureDetector()
+    # Index + middle up, ring + pinky down => SCROLL mode.
+    lm = _landmarks(
+        index=(160, 50), index_pip=(160, 100),
+        middle=(220, 50), middle_pip=(220, 100),
+        ring=(250, 160), ring_pip=(250, 120),
+        pinky=(270, 160), pinky_pip=(270, 120),
         thumb=(100, 130), thumb_ip=(90, 110),
     )
-    # Call enough times for stability + decision
-    result = None
-    for _ in range(5):
-        result = detector.detect(lm)
-        if result.gesture == GestureType.RIGHT_CLICK:
-            break
-    assert result.gesture == GestureType.RIGHT_CLICK
+    r1 = detector.detect(lm)
+    assert r1.gesture == GestureType.SCROLL
+    # Move tips upward to produce a scroll delta.
+    lm2 = _landmarks(
+        index=(160, 40), index_pip=(160, 100),
+        middle=(220, 40), middle_pip=(220, 100),
+        ring=(250, 160), ring_pip=(250, 120),
+        pinky=(270, 160), pinky_pip=(270, 120),
+        thumb=(100, 130), thumb_ip=(90, 110),
+    )
+    r2 = detector.detect(lm2)
+    assert r2.gesture == GestureType.SCROLL
+    assert isinstance(r2.scroll_delta, int)

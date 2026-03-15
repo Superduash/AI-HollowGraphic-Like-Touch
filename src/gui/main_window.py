@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import sys
 from pathlib import Path
 
 import cv2
@@ -41,6 +42,7 @@ _OVERLAY_LABELS = {
     GestureType.SCROLL: "SCROLL",
     GestureType.DRAG: "DRAG",
     GestureType.PAUSE: "PAUSED",
+    GestureType.TASK_VIEW: "TASK VIEW",
 }
 
 _BADGE_COLORS = {
@@ -51,6 +53,7 @@ _BADGE_COLORS = {
     GestureType.SCROLL: "#A78BFA",
     GestureType.DRAG: "#A78BFA",
     GestureType.PAUSE: "#F87171",
+    GestureType.TASK_VIEW: "#A78BFA",
     GestureType.NONE: "#64748B",
 }
 
@@ -67,7 +70,7 @@ class MainWindow(QMainWindow):
         self._camera = CameraThread()
         self._tracker = HandTracker()
         self._detector = GestureDetector()
-        self._detector.set_confirm_frames(4)
+        self._detector.set_confirm_frames(3)
         self._fps = FPSCounter(target_fps=TARGET_FPS)
 
         try:
@@ -85,6 +88,7 @@ class MainWindow(QMainWindow):
         self._perf_mode = False
         self._debug_mode = True
         self._was_dragging = False
+        self._last_task_view_action = 0.0
 
         self._disp_frame = None
         self._gesture = GestureType.NONE
@@ -206,17 +210,18 @@ class MainWindow(QMainWindow):
         guide_layout.setHorizontalSpacing(10)
         guide_layout.setVerticalSpacing(8)
 
-        guide_title = QLabel("Air-Touch Guide")
+        guide_title = QLabel("Gesture Guide")
         guide_title.setObjectName("cardTitle")
-        guide_layout.addWidget(guide_title, 0, 0, 1, 2)
+        guide_layout.addWidget(guide_title, 0, 0, 1, 3)
 
         guide_rows = [
-            ("move.svg", "Index hover", "Move cursor"),
-            ("click.svg", "Index forward poke", "Left click"),
-            ("drag.svg", "Index forward hold", "Drag"),
-            ("click.svg", "Index+Middle poke", "Right click"),
-            ("scroll.svg", "Index forward + vertical", "Scroll"),
-            ("pause.svg", "Open palm", "Pause"),
+            ("move.svg", "Index finger", "Move cursor"),
+            ("click.svg", "Thumb + Index pinch", "Left click"),
+            ("drag.svg", "Hold Thumb + Index pinch", "Drag"),
+            ("click.svg", "Thumb + Middle pinch", "Right click"),
+            ("scroll.svg", "Peace sign + up/down", "Scroll"),
+            ("settings.svg", "Open palm", "Task View (Win+Tab)"),
+            ("pause.svg", "Closed fist", "Pause"),
         ]
         for i, (ico, a, b) in enumerate(guide_rows, start=1):
             il = QLabel()
@@ -338,7 +343,7 @@ class MainWindow(QMainWindow):
             pass
         self._tracker = HandTracker()
         self._detector = GestureDetector()
-        self._detector.set_confirm_frames(4)
+        self._detector.set_confirm_frames(3)
 
         if not self._camera.start():
             self._status_text.setText("Camera Error")
@@ -419,6 +424,16 @@ class MainWindow(QMainWindow):
             gesture = result.gesture
             gesture_changed = gesture != last_action_gesture
 
+            if self._mouse_enabled and gesture == GestureType.TASK_VIEW and gesture_changed:
+                now = time.monotonic()
+                if now - self._last_task_view_action >= 1.0:
+                    self._last_task_view_action = now
+                    if sys.platform.startswith("win"):
+                        try:
+                            pyautogui.hotkey("winleft", "tab")
+                        except Exception:
+                            pass
+
             fingers_count = 0
             if hand_data and isinstance(hand_data, dict):
                 xy = hand_data.get("xy")
@@ -426,7 +441,7 @@ class MainWindow(QMainWindow):
                     fs = get_finger_states(xy)
                     fingers_count = int(fs.thumb) + int(fs.index) + int(fs.middle) + int(fs.ring) + int(fs.pinky)
 
-            if self._mouse_enabled and hand_data and gesture != GestureType.PAUSE and gesture != GestureType.NONE:
+            if self._mouse_enabled and hand_data and gesture not in {GestureType.PAUSE, GestureType.NONE, GestureType.TASK_VIEW}:
                 xy = hand_data.get("xy")
                 if xy and len(xy) > 8:
                     tip_x, tip_y = xy[8]
