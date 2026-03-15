@@ -109,7 +109,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         created = False
         if app is None:
-            app = QApplication([])
+            app = QApplication([]) # type: ignore
             created = True
         self.show()
         app.exec()
