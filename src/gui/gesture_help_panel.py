@@ -9,7 +9,7 @@ _GESTURES = [
     ("🤏 Thumb+Middle", "R-Click"),
     ("✌️↕ Peace + Y", "Scroll"),
     ("🖐️ Open palm", "Task View"),
-    ("✊ Fist", "Pause"),
+    ("🛑 No gesture / hand down", "Pause"),
 ]
 
 

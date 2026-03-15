@@ -65,8 +65,9 @@ class GestureDetector:
         self._smooth_scroll: float = 0.0
 
         # Scale-invariant thresholds (fraction of hand scale).
-        self._pinch_enter = 0.18
-        self._pinch_exit = 0.24
+        # Slightly more sensitive than before for easier real-world pinching.
+        self._pinch_enter = 0.23
+        self._pinch_exit = 0.30
         self._scroll_motion_threshold = 3.0
         self._task_view_cooldown = 1.0
 
@@ -80,22 +81,17 @@ class GestureDetector:
     def detect(self, hand_data) -> GestureResult:
         if not hand_data:
             self._reset_temporal()
-            return self._confirm_result(GestureType.NONE)
+            return self._confirm_result(GestureType.PAUSE)
 
         landmarks_xy, z_values = self._extract_hand_data(hand_data)
         if not landmarks_xy or len(landmarks_xy) < 21:
             self._reset_temporal()
-            return self._confirm_result(GestureType.NONE)
+            return self._confirm_result(GestureType.PAUSE)
 
         # Ignore z: requested gestures are 2D geometry + finger-shape based.
         now = time.monotonic()
         fingers = get_finger_states(landmarks_xy)
         hand_scale = self._hand_scale(landmarks_xy)
-
-        # Closed fist: pause/standby.
-        if not fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
-            self._reset_non_pause_modes()
-            return self._confirm_result(GestureType.PAUSE)
 
         # Open palm: Task View (edge-trigger action).
         if fingers.thumb and fingers.index and fingers.middle and fingers.ring and fingers.pinky:
@@ -112,8 +108,9 @@ class GestureDetector:
         left_dist = self._dist(thumb, index_tip)
         right_dist = self._dist(thumb, middle_tip)
 
-        left_enter = hand_scale * self._pinch_enter
-        left_exit = hand_scale * self._pinch_exit
+        # Clamp thresholds to be robust across camera resolutions.
+        left_enter = max(12.0, min(42.0, hand_scale * self._pinch_enter))
+        left_exit = max(left_enter + 2.0, min(58.0, hand_scale * self._pinch_exit))
         right_enter = left_enter
         right_exit = left_exit
 
@@ -137,7 +134,7 @@ class GestureDetector:
             self._scroll_active = False
             self._prev_scroll_y = None
             self._right_pinch_frames += 1
-            if not self._right_click_fired and self._right_pinch_frames >= 2 and now - self._last_right_click >= CLICK_COOLDOWN:
+            if not self._right_click_fired and self._right_pinch_frames >= 1 and now - self._last_right_click >= CLICK_COOLDOWN:
                 self._right_click_fired = True
                 self._last_right_click = now
                 return self._confirm_result(GestureType.RIGHT_CLICK)
@@ -151,7 +148,7 @@ class GestureDetector:
             self._scroll_active = False
             self._prev_scroll_y = None
             self._left_pinch_frames += 1
-            if not self._left_click_fired and self._left_pinch_frames >= 2 and now - self._last_left_click >= CLICK_COOLDOWN:
+            if not self._left_click_fired and self._left_pinch_frames >= 1 and now - self._last_left_click >= CLICK_COOLDOWN:
                 self._left_click_fired = True
                 self._last_left_click = now
                 self._left_pinch_start = now
@@ -201,7 +198,7 @@ class GestureDetector:
         if fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
             return self._confirm_result(GestureType.MOVE)
 
-        return self._confirm_result(GestureType.NONE)
+        return self._confirm_result(GestureType.PAUSE)
 
     def _extract_hand_data(self, hand_data):
         if isinstance(hand_data, dict):

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -60,7 +61,7 @@ class FingerStates:
 
 
 _OVERLAY_LABELS = {
-    GestureType.NONE: "",
+    GestureType.NONE: "PAUSED",
     GestureType.MOVE: "MOVE",
     GestureType.LEFT_CLICK: "CLICK",
     GestureType.DOUBLE_CLICK: "DOUBLE",
@@ -412,8 +413,8 @@ class GestureEngine:
         self._prev_scroll_y = None
         self._smooth_scroll = 0.0
 
-        self._pinch_enter = 0.18
-        self._pinch_exit = 0.24
+        self._pinch_enter = 0.23
+        self._pinch_exit = 0.30
         self._scroll_motion_threshold = 3.0
         self._task_view_cooldown = 1.0
         self._click_cooldown = 0.25
@@ -460,26 +461,12 @@ class GestureEngine:
 
             self._prev_scroll_y = None
             self._smooth_scroll = 0.0
-            return GestureResult(GestureType.NONE)
+            return GestureResult(GestureType.PAUSE)
 
         xy = hand_data["xy"]
         now = time.monotonic()
 
         fs = self._finger_states(xy)
-
-        # Closed fist: pause/standby.
-        if not fs.index and not fs.middle and not fs.ring and not fs.pinky:
-            self._dragging = False
-            self._left_pinch_active = False
-            self._right_pinch_active = False
-            self._left_pinch_start = 0.0
-            self._left_pinch_frames = 0
-            self._right_pinch_frames = 0
-            self._left_click_fired = False
-            self._right_click_fired = False
-            self._prev_scroll_y = None
-            self._smooth_scroll = 0.0
-            return self._confirm(GestureType.PAUSE, 0)
 
         # Open palm: Task View.
         if fs.thumb and fs.index and fs.middle and fs.ring and fs.pinky:
@@ -504,8 +491,8 @@ class GestureEngine:
         middle_tip = xy[12]
 
         hand_scale = max(40.0, self._distance(xy[5], xy[17]))
-        enter = hand_scale * self._pinch_enter
-        exit_ = hand_scale * self._pinch_exit
+        enter = max(12.0, min(42.0, hand_scale * self._pinch_enter))
+        exit_ = max(enter + 2.0, min(58.0, hand_scale * self._pinch_exit))
 
         left_dist = self._distance(thumb, index_tip)
         right_dist = self._distance(thumb, middle_tip)
@@ -531,7 +518,7 @@ class GestureEngine:
             self._right_pinch_frames += 1
             if (
                 not self._right_click_fired
-                and self._right_pinch_frames >= 2
+                and self._right_pinch_frames >= 1
                 and now - self._last_right >= self._click_cooldown
             ):
                 self._right_click_fired = True
@@ -549,7 +536,7 @@ class GestureEngine:
             self._left_pinch_frames += 1
             if (
                 not self._left_click_fired
-                and self._left_pinch_frames >= 2
+                and self._left_pinch_frames >= 1
                 and now - self._last_left >= self._click_cooldown
             ):
                 self._left_click_fired = True
@@ -595,7 +582,7 @@ class GestureEngine:
         if fs.index and not fs.middle and not fs.ring and not fs.pinky:
             return self._confirm(GestureType.MOVE, 0)
 
-        return self._confirm(GestureType.NONE, 0)
+        return self._confirm(GestureType.PAUSE, 0)
 
     def _confirm(self, raw: GestureType, scroll_delta: int, edge_trigger: bool = False) -> GestureResult:
         if raw == self._candidate:
@@ -652,8 +639,8 @@ class MainWindow(QMainWindow):
         self._lock = threading.Lock()
         self._frame = None
         self._hand_proto = None
-        self._gesture = GestureType.NONE
-        self._overlay_text = ""
+        self._gesture = GestureType.PAUSE
+        self._overlay_text = _OVERLAY_LABELS.get(GestureType.PAUSE, "PAUSED")
         self._fingers = 0
 
         self._build_ui()
@@ -731,7 +718,7 @@ class MainWindow(QMainWindow):
         status_title = QLabel("Gesture Status")
         status_title.setObjectName("cardTitle")
 
-        self.gesture_lbl = QLabel("NONE")
+        self.gesture_lbl = QLabel("PAUSED")
         self.gesture_lbl.setObjectName("badge")
         self.hand_lbl = QLabel("Hand: Not Detected")
         self.mouse_lbl = QLabel("Mouse: OFF")
@@ -760,7 +747,7 @@ class MainWindow(QMainWindow):
             ("click.svg", "Thumb + Middle pinch", "Right click"),
             ("scroll.svg", "Peace sign + up/down", "Scroll"),
             ("settings.svg", "Open palm", "Task View (Win+Tab)"),
-            ("pause.svg", "Closed fist", "Pause"),
+            ("pause.svg", "No gesture / hand down", "Pause"),
         ]
         for i, (ico, a, b) in enumerate(guide_rows, start=1):
             il = QLabel()
@@ -799,6 +786,14 @@ class MainWindow(QMainWindow):
         self.mouse_btn.setIcon(self._icon("mouse.svg"))
         self.mouse_btn.setObjectName("blueButton")
 
+        self._region_label = QLabel(f"Control margin: {self.mapper.frame_r}")
+        self._region_label.setObjectName("muted")
+        self._region_slider = QSlider(Qt.Orientation.Horizontal)
+        self._region_slider.setRange(40, 200)
+        self._region_slider.setValue(int(self.mapper.frame_r))
+        self._region_slider.setFixedWidth(180)
+        self._region_slider.valueChanged.connect(self._set_control_margin)
+
         self.start_btn.clicked.connect(self.start_camera)
         self.stop_btn.clicked.connect(self.stop_camera)
         self.mouse_btn.clicked.connect(self.toggle_mouse)
@@ -806,6 +801,9 @@ class MainWindow(QMainWindow):
         cl.addWidget(self.start_btn)
         cl.addWidget(self.stop_btn)
         cl.addWidget(self.mouse_btn)
+        cl.addSpacing(8)
+        cl.addWidget(self._region_label)
+        cl.addWidget(self._region_slider)
         cl.addStretch(1)
 
         top.addWidget(header)
@@ -866,6 +864,11 @@ class MainWindow(QMainWindow):
             """
         )
 
+    def _set_control_margin(self, value: int) -> None:
+        v = int(value)
+        self.mapper.frame_r = max(10, min(260, v))
+        self._region_label.setText(f"Control margin: {self.mapper.frame_r}")
+
     def start_camera(self) -> None:
         if self.running:
             return
@@ -901,8 +904,8 @@ class MainWindow(QMainWindow):
         self.mapper.reset()
         with self._lock:
             self._frame = None
-            self._gesture = GestureType.NONE
-            self._overlay_text = ""
+            self._gesture = GestureType.PAUSE
+            self._overlay_text = _OVERLAY_LABELS.get(GestureType.PAUSE, "PAUSED")
             self._fingers = 0
             self._hand_proto = None
 

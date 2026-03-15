@@ -97,7 +97,10 @@ These points allow the system to understand **hand position and finger gestures*
 | Index finger up      | Move cursor     |
 | Thumb + index pinch  | Left click      |
 | Thumb + middle pinch | Right click     |
-| Hand movement        | Cursor movement |
+| Hold thumb+index      | Drag            |
+| Peace sign + up/down  | Scroll          |
+| Open palm             | Task View (Win+Tab) |
+| No gesture / hand down| Pause           |
 
 ---
 

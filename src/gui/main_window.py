@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -34,7 +35,7 @@ from utils.camera_thread import CameraThread
 from utils.fps_counter import FPSCounter
 
 _OVERLAY_LABELS = {
-    GestureType.NONE: "",
+    GestureType.NONE: "PAUSED",
     GestureType.MOVE: "MOVE",
     GestureType.LEFT_CLICK: "CLICK",
     GestureType.DOUBLE_CLICK: "DOUBLE",
@@ -91,7 +92,7 @@ class MainWindow(QMainWindow):
         self._last_task_view_action = 0.0
 
         self._disp_frame = None
-        self._gesture = GestureType.NONE
+        self._gesture = GestureType.PAUSE
         self._hand_ok = False
         self._fps_val = 0.0
         self._overlay_text = ""
@@ -191,7 +192,7 @@ class MainWindow(QMainWindow):
 
         status_title = QLabel("Gesture Status")
         status_title.setObjectName("cardTitle")
-        self._gesture_badge = QLabel("NONE")
+        self._gesture_badge = QLabel("PAUSE")
         self._gesture_badge.setObjectName("badge")
         self._hand_label = QLabel("Hand: Not Detected")
         self._mouse_label = QLabel("Mouse: OFF")
@@ -221,7 +222,7 @@ class MainWindow(QMainWindow):
             ("click.svg", "Thumb + Middle pinch", "Right click"),
             ("scroll.svg", "Peace sign + up/down", "Scroll"),
             ("settings.svg", "Open palm", "Task View (Win+Tab)"),
-            ("pause.svg", "Closed fist", "Pause"),
+            ("pause.svg", "No gesture / hand down", "Pause"),
         ]
         for i, (ico, a, b) in enumerate(guide_rows, start=1):
             il = QLabel()
@@ -265,6 +266,14 @@ class MainWindow(QMainWindow):
         self._mouse_btn.setObjectName("blueButton")
         self._mouse_btn.clicked.connect(self._toggle_mouse)
 
+        self._region_label = QLabel(f"Control margin: {self._mapper.frame_r}")
+        self._region_label.setObjectName("muted")
+        self._region_slider = QSlider(Qt.Orientation.Horizontal)
+        self._region_slider.setRange(40, 200)
+        self._region_slider.setValue(int(self._mapper.frame_r))
+        self._region_slider.setFixedWidth(180)
+        self._region_slider.valueChanged.connect(self._set_control_margin)
+
         self._settings_btn = QPushButton("Settings")
         self._settings_btn.setIcon(self._icon("settings.svg"))
         self._settings_btn.setObjectName("purpleButton")
@@ -272,6 +281,9 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self._start_btn)
         controls_layout.addWidget(self._stop_btn)
         controls_layout.addWidget(self._mouse_btn)
+        controls_layout.addSpacing(8)
+        controls_layout.addWidget(self._region_label)
+        controls_layout.addWidget(self._region_slider)
         controls_layout.addStretch(1)
         controls_layout.addWidget(self._settings_btn)
 
@@ -334,6 +346,12 @@ class MainWindow(QMainWindow):
             """
         )
 
+    def _set_control_margin(self, value: int) -> None:
+        # Lower margin => bigger blue rectangle (more movement area).
+        v = int(value)
+        self._mapper.frame_r = max(10, min(260, v))
+        self._region_label.setText(f"Control margin: {self._mapper.frame_r}")
+
     def _start_camera(self) -> None:
         if self._processing:
             return
@@ -378,8 +396,8 @@ class MainWindow(QMainWindow):
 
         with self._lock:
             self._disp_frame = None
-            self._gesture = GestureType.NONE
-            self._overlay_text = ""
+            self._gesture = GestureType.PAUSE
+            self._overlay_text = _OVERLAY_LABELS.get(GestureType.PAUSE, "PAUSED")
             self._fingers_count = 0
             self._hand_ok = False
 

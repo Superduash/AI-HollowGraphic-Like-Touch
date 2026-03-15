@@ -90,7 +90,7 @@ def test_pause_gesture() -> None:
 
 
 def test_left_click_requires_stability() -> None:
-    """Pinch must persist for GESTURE_STABILITY_FRAMES before firing click."""
+    """Thumb+index pinch fires a click (edge-triggered)."""
     detector = GestureDetector()
     # Thumb and index very close = pinch
     lm = _landmarks(
@@ -100,11 +100,8 @@ def test_left_click_requires_stability() -> None:
         pinky=(270, 150), pinky_pip=(270, 100),
         thumb_ip=(90, 110), index_mcp=(150, 130),
     )
-    # First call — not yet stable
     r1 = detector.detect(lm)
-    # Second call — should trigger click (stability_frames=2)
-    r2 = detector.detect(lm)
-    assert r2.gesture == GestureType.LEFT_CLICK
+    assert r1.gesture == GestureType.LEFT_CLICK
 
 
 def test_right_click_thumb_middle_pinch() -> None:
@@ -119,8 +116,7 @@ def test_right_click_thumb_middle_pinch() -> None:
         thumb=(222, 102), thumb_ip=(210, 115),
     )
     r1 = detector.detect(lm)
-    r2 = detector.detect(lm)
-    assert r2.gesture == GestureType.RIGHT_CLICK
+    assert r1.gesture == GestureType.RIGHT_CLICK
 
 
 def test_task_view_open_palm() -> None:
