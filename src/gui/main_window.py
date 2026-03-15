@@ -446,11 +446,14 @@ class MainWindow(QMainWindow):
                 now = time.monotonic()
                 if now - self._last_task_view_action >= 1.0:
                     self._last_task_view_action = now
-                    if sys.platform.startswith("win"):
-                        try:
+                    try:
+                        if sys.platform.startswith("win"):
                             pyautogui.hotkey("winleft", "tab")
-                        except Exception:
-                            pass
+                        elif sys.platform == "darwin":
+                            # Mission Control default shortcut.
+                            pyautogui.hotkey("ctrl", "up")
+                    except Exception:
+                        pass
 
             fingers_count = 0
             if hand_data and isinstance(hand_data, dict):

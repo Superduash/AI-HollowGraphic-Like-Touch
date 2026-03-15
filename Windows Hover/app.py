@@ -612,7 +612,8 @@ class GestureEngine:
         self._confirmed = GestureType.NONE
         self._dragging = False
 
-        self._confirm_required = 3
+        # Higher confirmation reduces flicker/spam on Windows.
+        self._confirm_required = 4
 
         self._left_pinch_active = False
         self._right_pinch_active = False
@@ -625,14 +626,17 @@ class GestureEngine:
         self._last_left = 0.0
         self._last_right = 0.0
         self._last_task_view = 0.0
+        self._task_view_frames = 0
 
         self._prev_scroll_y = None
         self._smooth_scroll = 0.0
 
-        self._pinch_enter = 0.23
-        self._pinch_exit = 0.30
+        # Less sensitive pinches to avoid accidental clicks.
+        self._pinch_enter = 0.20
+        self._pinch_exit = 0.28
         self._scroll_motion_threshold = 3.0
         self._task_view_cooldown = 1.0
+        self._task_view_confirm_frames = 6
         self._click_cooldown = 0.25
 
     @property
@@ -660,6 +664,29 @@ class GestureEngine:
         pinky = landmarks_xy[20][1] < landmarks_xy[18][1]
         return FingerStates(thumb, index, middle, ring, pinky)
 
+    def _is_open_palm(self, xy, fs: FingerStates, hand_scale: float) -> bool:
+        # Require all fingers extended AND a wide finger spread to prevent
+        # Task View triggering from partial/rotated hands.
+        if not (fs.thumb and fs.index and fs.middle and fs.ring and fs.pinky):
+            return False
+
+        try:
+            wrist_y = xy[0][1]
+            # Fingertips should be above the wrist.
+            if not (xy[8][1] < wrist_y and xy[12][1] < wrist_y and xy[16][1] < wrist_y and xy[20][1] < wrist_y):
+                return False
+
+            spread = self._distance(xy[8], xy[20])  # index tip to pinky tip
+            thumb_sep = self._distance(xy[4], xy[5])  # thumb tip to index MCP
+
+            if spread < hand_scale * 0.85:
+                return False
+            if thumb_sep < hand_scale * 0.35:
+                return False
+            return True
+        except Exception:
+            return False
+
     def detect(self, hand_data) -> GestureResult:
         if not hand_data:
             self._confirmed = GestureType.NONE
@@ -684,8 +711,11 @@ class GestureEngine:
 
         fs = self._finger_states(xy)
 
+        # Hand scale used for robust open-palm checks too.
+        hand_scale = max(40.0, self._distance(xy[5], xy[17]))
+
         # Open palm: Task View.
-        if fs.thumb and fs.index and fs.middle and fs.ring and fs.pinky:
+        if self._is_open_palm(xy, fs, hand_scale):
             self._dragging = False
             self._left_pinch_active = False
             self._right_pinch_active = False
@@ -697,35 +727,46 @@ class GestureEngine:
             self._prev_scroll_y = None
             self._smooth_scroll = 0.0
 
-            if now - self._last_task_view >= self._task_view_cooldown:
+            self._task_view_frames += 1
+            if self._task_view_frames >= self._task_view_confirm_frames and now - self._last_task_view >= self._task_view_cooldown:
                 self._last_task_view = now
-            return self._confirm(GestureType.TASK_VIEW, 0, edge_trigger=True)
+                self._task_view_frames = 0
+                return self._confirm(GestureType.TASK_VIEW, 0, edge_trigger=True)
+
+            # Hold open palm without triggering anything.
+            return self._confirm(GestureType.PAUSE, 0)
+        else:
+            self._task_view_frames = 0
 
         # Pinch distances (scale-invariant).
         thumb = xy[4]
         index_tip = xy[8]
         middle_tip = xy[12]
-
-        hand_scale = max(40.0, self._distance(xy[5], xy[17]))
         enter = max(12.0, min(42.0, hand_scale * self._pinch_enter))
         exit_ = max(enter + 2.0, min(58.0, hand_scale * self._pinch_exit))
 
         left_dist = self._distance(thumb, index_tip)
         right_dist = self._distance(thumb, middle_tip)
 
-        if self._left_pinch_active:
-            if left_dist > exit_:
-                self._left_pinch_active = False
+        if not fs.index:
+            self._left_pinch_active = False
         else:
-            if left_dist < enter:
-                self._left_pinch_active = True
+            if self._left_pinch_active:
+                if left_dist > exit_:
+                    self._left_pinch_active = False
+            else:
+                if left_dist < enter:
+                    self._left_pinch_active = True
 
-        if self._right_pinch_active:
-            if right_dist > exit_:
-                self._right_pinch_active = False
+        if not fs.middle:
+            self._right_pinch_active = False
         else:
-            if right_dist < enter:
-                self._right_pinch_active = True
+            if self._right_pinch_active:
+                if right_dist > exit_:
+                    self._right_pinch_active = False
+            else:
+                if right_dist < enter:
+                    self._right_pinch_active = True
 
         # Right click: thumb + middle pinch.
         if self._right_pinch_active and not self._left_pinch_active:
@@ -853,7 +894,7 @@ class MainWindow(QMainWindow):
         self.running = False
         self.proc_thread = None
         self.mouse_enabled = False
-        self.debug = False
+        self.debug = True
         self._overlay: StatusOverlay | None = None
 
         # Self-contained: only use assets shipped inside the Windows Hover folder.

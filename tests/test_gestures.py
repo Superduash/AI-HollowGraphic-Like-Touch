@@ -128,7 +128,11 @@ def test_task_view_open_palm() -> None:
         ring=(250, 50), ring_pip=(250, 100),
         pinky=(270, 50), pinky_pip=(270, 100),
     )
-    result = detector.detect(lm)
+    result = None
+    # Task View requires a sustained open palm for stability.
+    for _ in range(6):
+        result = detector.detect(lm)
+    assert result is not None
     assert result.gesture == GestureType.TASK_VIEW
 
 

@@ -60,6 +60,8 @@ class GestureDetector:
         self._last_right_click = 0.0
         self._last_task_view = 0.0
 
+        self._task_view_frames = 0
+
         self._scroll_active = False
         self._prev_scroll_y: float | None = None
         self._smooth_scroll: float = 0.0
@@ -70,6 +72,27 @@ class GestureDetector:
         self._pinch_exit = 0.30
         self._scroll_motion_threshold = 3.0
         self._task_view_cooldown = 1.0
+        self._task_view_confirm_frames = 6
+
+    def _is_open_palm(self, xy: list[tuple[int, int]], fingers, hand_scale: float) -> bool:
+        # Require all fingers extended and a wide finger spread to prevent
+        # accidental Task View when the hand is rotated or only partially open.
+        if not (fingers.thumb and fingers.index and fingers.middle and fingers.ring and fingers.pinky):
+            return False
+
+        try:
+            wrist_y = xy[_WRIST][1]
+            if not (xy[_INDEX_TIP][1] < wrist_y and xy[_MIDDLE_TIP][1] < wrist_y and xy[16][1] < wrist_y and xy[20][1] < wrist_y):
+                return False
+            spread = self._dist(xy[_INDEX_TIP], xy[20])
+            thumb_sep = self._dist(xy[_THUMB_TIP], xy[_INDEX_MCP])
+            if spread < hand_scale * 0.85:
+                return False
+            if thumb_sep < hand_scale * 0.35:
+                return False
+            return True
+        except Exception:
+            return False
 
     @property
     def is_dragging(self) -> bool:
@@ -94,12 +117,16 @@ class GestureDetector:
         hand_scale = self._hand_scale(landmarks_xy)
 
         # Open palm: Task View (edge-trigger action).
-        if fingers.thumb and fingers.index and fingers.middle and fingers.ring and fingers.pinky:
+        if self._is_open_palm(landmarks_xy, fingers, hand_scale):
             self._reset_non_pause_modes()
-            if now - self._last_task_view >= self._task_view_cooldown:
+            self._task_view_frames += 1
+            if self._task_view_frames >= self._task_view_confirm_frames and now - self._last_task_view >= self._task_view_cooldown:
                 self._last_task_view = now
+                self._task_view_frames = 0
                 return self._confirm_result(GestureType.TASK_VIEW)
-            return self._confirm_result(GestureType.TASK_VIEW)
+            return self._confirm_result(GestureType.PAUSE)
+        else:
+            self._task_view_frames = 0
 
         thumb = landmarks_xy[_THUMB_TIP]
         index_tip = landmarks_xy[_INDEX_TIP]
