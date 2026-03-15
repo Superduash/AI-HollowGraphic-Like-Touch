@@ -749,8 +749,8 @@ class MainWindow(QMainWindow):
         if platform.system() != "Windows":
             print("Windows Hover is optimized for Windows.")
 
-        self.setWindowTitle("Windows Hover")
-        self.resize(1220, 760)
+        self.setWindowTitle("Holographic Touch")
+        self.resize(1280, 820)
         self.setMinimumSize(1024, 680)
 
         self.camera = CameraSource(640, 480)
@@ -795,8 +795,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
         top = QVBoxLayout(root)
-        top.setContentsMargins(16, 16, 16, 16)
-        top.setSpacing(12)
+        top.setContentsMargins(18, 18, 18, 18)
+        top.setSpacing(14)
 
         header = QFrame()
         header.setObjectName("headerCard")
@@ -807,14 +807,13 @@ class MainWindow(QMainWindow):
         icon_label = QLabel()
         icon_label.setPixmap(self._icon("camera.svg").pixmap(QSize(22, 22)))
 
-        self.title_lbl = QLabel("Windows Hover")
+        self.title_lbl = QLabel("Holographic Touch")
         self.title_lbl.setObjectName("title")
 
         self._status_dot = QLabel("●")
         self._status_dot.setObjectName("statusOffline")
         self.cam_status = QLabel("Camera Offline")
         self.fps_lbl = QLabel("FPS 0")
-
 
         header_l.addWidget(icon_label)
         header_l.addWidget(self.title_lbl)
@@ -826,7 +825,7 @@ class MainWindow(QMainWindow):
         header_l.addSpacing(10)
 
         body_l = QHBoxLayout()
-        body_l.setSpacing(12)
+        body_l.setSpacing(14)
 
         cam_card = QFrame()
         cam_card.setObjectName("cameraCard")
@@ -837,10 +836,10 @@ class MainWindow(QMainWindow):
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setObjectName("preview")
         self.preview.setMinimumSize(760, 520)
-        cam_l.addWidget(self.preview)
+        cam_l.addWidget(self.preview, 1)
 
         side = QVBoxLayout()
-        side.setSpacing(10)
+        side.setSpacing(12)
 
         status = QFrame()
         status.setObjectName("sideCard")
@@ -892,7 +891,7 @@ class MainWindow(QMainWindow):
             gl.addWidget(dl, i, 2)
 
         side.addWidget(status)
-        side.addWidget(guide)
+        side.addWidget(guide, 1)
 
         side_wrap = QWidget()
         side_wrap.setLayout(side)
@@ -954,7 +953,6 @@ class MainWindow(QMainWindow):
                 border: 1px solid #222733;
                 border-radius: 16px;
             }
-            QLabel { color: #E5E7EB; font-size: 13px; }
             #title { font-size: 20px; font-weight: 700; color: #F3F4F6; }
             #statusOffline { color: #F87171; font-size: 18px; }
             #statusOnline { color: #4ADE80; font-size: 18px; }
@@ -978,8 +976,8 @@ class MainWindow(QMainWindow):
             QPushButton {
                 border: 0;
                 border-radius: 12px;
-                color: #F8FAFC;
                 padding: 10px 14px;
+                color: #F8FAFC;
                 font-weight: 600;
                 background: #2A3040;
             }
@@ -991,6 +989,8 @@ class MainWindow(QMainWindow):
             #redButton:hover { background: #FA8A8A; }
             #blueButton { background: #60A5FA; color: #0B1118; }
             #blueButton:hover { background: #79B5FB; }
+            #purpleButton { background: #A78BFA; color: #0B1118; }
+            #purpleButton:hover { background: #B79EFB; }
             #ghostButton { background: #252A36; color: #E5E7EB; }
             #ghostButton:hover { background: #313849; }
             """
