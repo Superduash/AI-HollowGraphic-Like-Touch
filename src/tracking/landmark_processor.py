@@ -1,31 +1,62 @@
-"""Helpers to extract specific landmarks from 21-point hand data."""
+"""Finger state detection and landmark helpers — O(1) per frame."""
 
-from typing import List, Optional, Tuple
-
-
-Landmark = Tuple[int, int]
-
-THUMB_TIP_ID = 4
-INDEX_TIP_ID = 8
-MIDDLE_TIP_ID = 12
-
-
-def get_landmark(landmarks: Optional[List[Landmark]], index: int) -> Optional[Landmark]:
-    """Safely fetch a landmark by index."""
-    if landmarks is None:
-        return None
-    if index < 0 or index >= len(landmarks):
-        return None
-    return landmarks[index]
+# Landmark indices
+THUMB_TIP = 4
+THUMB_IP = 3
+INDEX_MCP = 5
+INDEX_PIP = 6
+INDEX_TIP = 8
+MIDDLE_PIP = 10
+MIDDLE_TIP = 12
+RING_PIP = 14
+RING_TIP = 16
+PINKY_PIP = 18
+PINKY_TIP = 20
 
 
-def get_index_tip(landmarks: Optional[List[Landmark]]) -> Optional[Landmark]:
-    return get_landmark(landmarks, INDEX_TIP_ID)
+class FingerStates:
+    """Boolean up/down state for each finger."""
+    __slots__ = ("thumb", "index", "middle", "ring", "pinky")
+
+    def __init__(self, thumb: bool, index: bool, middle: bool, ring: bool, pinky: bool) -> None:
+        self.thumb = thumb
+        self.index = index
+        self.middle = middle
+        self.ring = ring
+        self.pinky = pinky
+
+    @property
+    def count(self) -> int:
+        return self.thumb + self.index + self.middle + self.ring + self.pinky
 
 
-def get_thumb_tip(landmarks: Optional[List[Landmark]]) -> Optional[Landmark]:
-    return get_landmark(landmarks, THUMB_TIP_ID)
+def get_finger_states(landmarks: list[tuple[int, int]]) -> FingerStates:
+    """Determine up/down state for each finger. O(1)."""
+    # Thumb: extended when tip is farther from index_mcp than IP is
+    # (orientation-independent, works for both hands)
+    tt = landmarks[THUMB_TIP]
+    ti = landmarks[THUMB_IP]
+    im = landmarks[INDEX_MCP]
+    dx1, dy1 = tt[0] - im[0], tt[1] - im[1]
+    dx2, dy2 = ti[0] - im[0], ti[1] - im[1]
+    thumb = (dx1 * dx1 + dy1 * dy1) > (dx2 * dx2 + dy2 * dy2)
+
+    # Other fingers: tip.y < pip.y means extended (y increases downward)
+    index = landmarks[INDEX_TIP][1] < landmarks[INDEX_PIP][1]
+    middle = landmarks[MIDDLE_TIP][1] < landmarks[MIDDLE_PIP][1]
+    ring = landmarks[RING_TIP][1] < landmarks[RING_PIP][1]
+    pinky = landmarks[PINKY_TIP][1] < landmarks[PINKY_PIP][1]
+
+    return FingerStates(thumb, index, middle, ring, pinky)
 
 
-def get_middle_tip(landmarks: Optional[List[Landmark]]) -> Optional[Landmark]:
-    return get_landmark(landmarks, MIDDLE_TIP_ID)
+def get_index_tip(landmarks: list[tuple[int, int]]) -> tuple[int, int]:
+    return landmarks[INDEX_TIP]
+
+
+def get_thumb_tip(landmarks: list[tuple[int, int]]) -> tuple[int, int]:
+    return landmarks[THUMB_TIP]
+
+
+def get_middle_tip(landmarks: list[tuple[int, int]]) -> tuple[int, int]:
+    return landmarks[MIDDLE_TIP]
