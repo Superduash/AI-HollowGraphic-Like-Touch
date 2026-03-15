@@ -1,32 +1,18 @@
-"""Robust gesture detection engine with state machine and priority system.
-
-Priority order: DRAG > CLICK > SCROLL > MOVE
-All detection is O(1) per frame using only required landmark indices.
-"""
+"""Air-touch gesture detector with forward poke interaction model."""
 
 import time
 
-from config import (
-    CLICK_COOLDOWN,
-    DOUBLE_CLICK_WINDOW,
-    DRAG_HOLD_TIME,
-    GESTURE_STABILITY_FRAMES,
-    PINCH_DISTANCE_THRESHOLD,
-    PINCH_RELEASE_FACTOR,
-    SCROLL_SENSITIVITY,
-    SCROLL_THRESHOLD,
-)
+from config import CLICK_COOLDOWN, DRAG_HOLD_TIME, SCROLL_SENSITIVITY
 from gestures.gesture_types import GestureType
 from tracking.landmark_processor import get_finger_states
 
-# Landmark indices (inlined for zero function-call overhead)
-_THUMB = 4
 _INDEX = 8
 _MIDDLE = 12
 
 
 class GestureResult:
     """Output of gesture detection for one frame."""
+
     __slots__ = ("gesture", "scroll_delta")
 
     def __init__(self, gesture: GestureType = GestureType.NONE, scroll_delta: int = 0) -> None:
@@ -34,16 +20,8 @@ class GestureResult:
         self.scroll_delta = scroll_delta
 
 
-_NONE = GestureResult()
-_PAUSE = GestureResult(GestureType.PAUSE)
-_MOVE = GestureResult(GestureType.MOVE)
-_OPEN_PALM = GestureResult(GestureType.OPEN_PALM)
-_VOLUME = GestureResult(GestureType.VOLUME)
-_SWITCH = GestureResult(GestureType.SWITCH_WINDOW)
-
-
 class GestureDetector:
-    """State-machine gesture detector with stability, cooldowns, and hysteresis."""
+    """Stable gesture detector for holographic air-touch interactions."""
 
     def __init__(self) -> None:
         self._confirm_frames_required: int = 4
@@ -51,309 +29,164 @@ class GestureDetector:
         self._candidate_frames: int = 0
         self._confirmed_gesture: GestureType = GestureType.NONE
 
-        # State machine
-        self._prev_raw: GestureType = GestureType.NONE
-        self._raw_frames: int = 0
+        self._prev_index_z: float | None = None
+        self._prev_middle_z: float | None = None
+        self._prev_index_y: int | None = None
 
-        # Pinch tracking
-        self._is_pinching: bool = False
-        self._pinch_start: float = 0.0
-        self._click_fired: bool = False
+        self._forward_active = False
+        self._forward_start = 0.0
+        self._is_dragging = False
+        self._last_click_time = 0.0
 
-        # Drag
-        self._is_dragging: bool = False
-
-        # Click / double-click cooldown
-        self._last_click_time: float = 0.0
-
-        # Right-click cooldown
-        self._last_rclick_time: float = 0.0
-        self._rclick_fired: bool = False
-
-        # Two-finger / scroll state
-        self._two_finger_frames: int = 0
-        self._two_finger_y_accum: float = 0.0
-        self._prev_scroll_y: float = -1.0
-        self._in_scroll_mode: bool = False
-        self._smooth_scroll: float = 0.0
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        self._tap_threshold = 0.055
+        self._drag_threshold = 0.080
+        self._scroll_forward_threshold = 0.020
+        self._scroll_motion_threshold = 4
 
     @property
     def is_dragging(self) -> bool:
         return self._is_dragging
 
-    def detect(self, landmarks: list[tuple[int, int]] | None) -> GestureResult:
-        """Classify the current gesture from 21-point landmarks. O(1)."""
-        if not landmarks or len(landmarks) < 21:
-            self._reset_all()
-            self._confirmed_gesture = GestureType.NONE
-            self._candidate_gesture = GestureType.NONE
-            self._candidate_frames = 0
-            return GestureResult(GestureType.NONE)
+    def set_confirm_frames(self, frames: int) -> None:
+        self._confirm_frames_required = max(1, int(frames))
+
+    def detect(self, hand_data) -> GestureResult:
+        if not hand_data:
+            self._reset_temporal()
+            return self._confirm_result(GestureType.NONE)
+
+        landmarks_xy, z_values = self._extract_hand_data(hand_data)
+        if not landmarks_xy or len(landmarks_xy) < 21:
+            self._reset_temporal()
+            return self._confirm_result(GestureType.NONE)
+
+        # Backward-compatible 2D behavior for older callers/tests.
+        if z_values is None:
+            return self._detect_legacy_2d(landmarks_xy)
 
         now = time.monotonic()
+        fingers = get_finger_states(landmarks_xy)
 
-        # --- Pinch distance (thumb ↔ index) ---
-        tx, ty = landmarks[_THUMB]
-        ix, iy = landmarks[_INDEX]
-        dx, dy = tx - ix, ty - iy
-        pinch_dist = (dx * dx + dy * dy) ** 0.5
+        index_z = z_values[_INDEX] if z_values and len(z_values) > _INDEX else 0.0
+        middle_z = z_values[_MIDDLE] if z_values and len(z_values) > _MIDDLE else 0.0
 
-        enter_thresh = PINCH_DISTANCE_THRESHOLD
-        exit_thresh = PINCH_DISTANCE_THRESHOLD * PINCH_RELEASE_FACTOR
+        dz_index = 0.0 if self._prev_index_z is None else self._prev_index_z - index_z
+        dz_middle = 0.0 if self._prev_middle_z is None else self._prev_middle_z - middle_z
 
-        # Hysteresis: enter at tight threshold, exit at looser threshold
-        if self._is_pinching:
-            is_pinch = pinch_dist < exit_thresh
-        else:
-            is_pinch = pinch_dist < enter_thresh
+        raw_gesture = GestureType.NONE
+        scroll_delta = 0
 
-        # ==============================================================
-        # PRIORITY 1 — DRAG / CLICK (pinch-based)
-        # ==============================================================
-        if is_pinch:
-            if not self._is_pinching:
-                self._is_pinching = True
-                self._pinch_start = now
-                self._click_fired = False
-                self._is_dragging = False
-            self._reset_scroll()
-
-            hold = now - self._pinch_start
-
-            # DRAG: pinch held beyond threshold
-            if hold >= DRAG_HOLD_TIME:
-                self._is_dragging = True
-                self._bump_raw(GestureType.DRAG)
-                return self._confirm_result(GestureType.DRAG)
-
-            # LEFT_CLICK / DOUBLE_CLICK: pinch stable for N frames
-            self._bump_raw(GestureType.LEFT_CLICK)
-            if self._raw_frames >= GESTURE_STABILITY_FRAMES and not self._click_fired:
-                self._click_fired = True
-                if now - self._last_click_time < DOUBLE_CLICK_WINDOW:
-                    self._last_click_time = now
-                    return self._confirm_result(GestureType.DOUBLE_CLICK)
-                self._last_click_time = now
-                return self._confirm_result(GestureType.LEFT_CLICK)
-
-            # Still pinching but not yet stable → keep moving cursor
-            return self._confirm_result(GestureType.MOVE)
-
-        # Pinch just released
-        if self._is_pinching:
-            was_drag = self._is_dragging
-            self._is_pinching = False
-            self._is_dragging = False
-            if was_drag:
-                # Return NONE so caller can detect drag→non-drag transition
-                self._bump_raw(GestureType.NONE)
-                return self._confirm_result(GestureType.NONE)
-
-        # ==============================================================
-        # FINGER-PATTERN GESTURES (no pinch active)
-        # ==============================================================
-        fingers = get_finger_states(landmarks)
-
-        # PAUSE — closed fist (4 fingers down, ignore thumb)
-        if not fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
-            self._reset_scroll()
-            self._bump_raw(GestureType.PAUSE)
-            return self._confirm_result(GestureType.PAUSE)
-
-        # OPEN PALM — all 5 up
+        # PAUSE: open palm freezes pointer updates.
         if fingers.thumb and fingers.index and fingers.middle and fingers.ring and fingers.pinky:
-            self._reset_scroll()
-            self._bump_raw(GestureType.OPEN_PALM)
-            return self._confirm_result(GestureType.OPEN_PALM)
+            raw_gesture = GestureType.PAUSE
 
-        # VOLUME — 4 fingers up, thumb down
-        if not fingers.thumb and fingers.index and fingers.middle and fingers.ring and fingers.pinky:
-            self._reset_scroll()
-            self._bump_raw(GestureType.VOLUME)
-            return self._confirm_result(GestureType.VOLUME)
-
-        # SWITCH WINDOW — index + middle + ring up, pinky down
-        if fingers.index and fingers.middle and fingers.ring and not fingers.pinky:
-            self._reset_scroll()
-            self._bump_raw(GestureType.SWITCH_WINDOW)
-            return self._confirm_result(GestureType.SWITCH_WINDOW)
-
-        # TWO FINGERS (RIGHT_CLICK / SCROLL) — index + middle up, ring + pinky down
-        if fingers.index and fingers.middle and not fingers.ring and not fingers.pinky:
-            return self._handle_two_finger(landmarks, now)
-
-        # MOVE — index up only
-        if fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
-            self._reset_scroll()
-            self._bump_raw(GestureType.MOVE)
-            return self._confirm_result(GestureType.MOVE)
-
-        # Fallback
-        self._reset_scroll()
-        self._bump_raw(GestureType.NONE)
-        return self._confirm_result(GestureType.NONE)
-
-    # ------------------------------------------------------------------
-    # Two-finger handler (RIGHT_CLICK vs SCROLL discrimination)
-    # ------------------------------------------------------------------
-
-    def _handle_two_finger(self, landmarks: list[tuple[int, int]], now: float) -> GestureResult:
-        ix, iy = landmarks[_INDEX]
-        mx, my = landmarks[_MIDDLE]
-        tip_len = ((mx - ix) * (mx - ix) + (my - iy) * (my - iy)) ** 0.5
-        current_y = (iy + my) * 0.5
-
-        if self._two_finger_frames == 0:
-            # Just entered two-finger mode
-            self._prev_scroll_y = current_y
-            self._two_finger_y_accum = 0.0
-            self._rclick_fired = False
-            self._in_scroll_mode = False
-            self._smooth_scroll = 0.0
-
-        self._two_finger_frames += 1
-        y_delta = current_y - self._prev_scroll_y
-        self._two_finger_y_accum += abs(y_delta)
-        self._prev_scroll_y = current_y
-
-        # Click detection mode when two fingers are up and tips pinch together.
-        if tip_len < PINCH_DISTANCE_THRESHOLD and now - self._last_click_time >= CLICK_COOLDOWN:
-            self._last_click_time = now
-            self._bump_raw(GestureType.LEFT_CLICK)
-            return self._confirm_result(GestureType.LEFT_CLICK)
-
-        # Decision phase: wait stability frames then decide
-        if not self._in_scroll_mode and self._two_finger_frames >= GESTURE_STABILITY_FRAMES:
-            if self._two_finger_y_accum > SCROLL_THRESHOLD:
-                # Significant movement → scroll (no right click)
-                self._in_scroll_mode = True
+        # Two-finger forward poke: right click.
+        elif fingers.index and fingers.middle and not fingers.ring and not fingers.pinky:
+            if dz_index > self._tap_threshold and dz_middle > self._tap_threshold and now - self._last_click_time > CLICK_COOLDOWN:
+                self._last_click_time = now
+                raw_gesture = GestureType.RIGHT_CLICK
             else:
-                # Stable hold → right click (once, then enter scroll standby)
-                if not self._rclick_fired and now - self._last_rclick_time >= CLICK_COOLDOWN:
-                    self._rclick_fired = True
-                    self._last_rclick_time = now
-                    self._bump_raw(GestureType.RIGHT_CLICK)
-                    return self._confirm_result(GestureType.RIGHT_CLICK)
-                self._in_scroll_mode = True
+                raw_gesture = GestureType.MOVE
 
-        if self._in_scroll_mode:
-            # Smooth the scroll delta (EMA)
-            raw = -y_delta * SCROLL_SENSITIVITY
-            self._smooth_scroll = 0.6 * self._smooth_scroll + 0.4 * raw
-            amount = int(self._smooth_scroll)
-            self._bump_raw(GestureType.SCROLL)
-            return self._confirm_result(GestureType.SCROLL, scroll_delta=amount)
+        # Index-forward hold: drag; quick poke: left click.
+        elif fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
+            if dz_index > self._drag_threshold:
+                if not self._forward_active:
+                    self._forward_active = True
+                    self._forward_start = now
+            elif dz_index < 0.0:
+                self._forward_active = False
 
-        # Waiting for decision
-        self._bump_raw(GestureType.NONE)
-        return self._confirm_result(GestureType.NONE)
+            if self._forward_active and now - self._forward_start >= DRAG_HOLD_TIME:
+                self._is_dragging = True
+                raw_gesture = GestureType.DRAG
+            elif dz_index > self._tap_threshold and now - self._last_click_time > CLICK_COOLDOWN:
+                self._last_click_time = now
+                raw_gesture = GestureType.LEFT_CLICK
+            else:
+                raw_gesture = GestureType.MOVE
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+            # Forward-hover + vertical motion: scroll.
+            if index_z < -self._scroll_forward_threshold and self._prev_index_y is not None:
+                dy = landmarks_xy[_INDEX][1] - self._prev_index_y
+                if abs(dy) >= self._scroll_motion_threshold:
+                    raw_gesture = GestureType.SCROLL
+                    scroll_delta = int(-dy * SCROLL_SENSITIVITY)
 
-    def _bump_raw(self, raw: GestureType) -> None:
-        if raw == self._prev_raw:
-            self._raw_frames += 1
         else:
-            self._prev_raw = raw
-            self._raw_frames = 1
+            if self._is_dragging:
+                self._is_dragging = False
+            self._forward_active = False
+            raw_gesture = GestureType.NONE
 
-    def _reset_scroll(self) -> None:
-        self._two_finger_frames = 0
-        self._two_finger_y_accum = 0.0
-        self._prev_scroll_y = -1.0
-        self._in_scroll_mode = False
-        self._smooth_scroll = 0.0
-
-    def _reset_all(self) -> None:
-        if self._is_dragging:
+        if raw_gesture != GestureType.DRAG and self._is_dragging and dz_index < 0.0:
             self._is_dragging = False
-        self._is_pinching = False
-        self._reset_scroll()
-        self._prev_raw = GestureType.NONE
-        self._raw_frames = 0
+            raw_gesture = GestureType.NONE
+
+        self._prev_index_z = index_z
+        self._prev_middle_z = middle_z
+        self._prev_index_y = landmarks_xy[_INDEX][1]
+
+        return self._confirm_result(raw_gesture, scroll_delta)
+
+    def _extract_hand_data(self, hand_data):
+        if isinstance(hand_data, dict):
+            return hand_data.get("xy"), hand_data.get("z")
+        # Backward compatibility with list[(x,y)] payloads.
+        return hand_data, None
+
+    def _detect_legacy_2d(self, landmarks_xy) -> GestureResult:
+        fingers = get_finger_states(landmarks_xy)
+
+        # PAUSE: fist/closed hand.
+        if not fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
+            return GestureResult(GestureType.PAUSE)
+
+        # LEFT_CLICK: thumb-index pinch with short stability.
+        tx, ty = landmarks_xy[4]
+        ix, iy = landmarks_xy[8]
+        pinch_dist = ((tx - ix) * (tx - ix) + (ty - iy) * (ty - iy)) ** 0.5
+        if pinch_dist < 20:
+            self._candidate_frames += 1
+            if self._candidate_frames >= 2:
+                return GestureResult(GestureType.LEFT_CLICK)
+            return GestureResult(GestureType.MOVE)
+
+        # MOVE: index up only.
+        if fingers.index and not fingers.middle and not fingers.ring and not fingers.pinky:
+            return GestureResult(GestureType.MOVE)
+
+        # RIGHT_CLICK: index+middle up with stability.
+        if fingers.index and fingers.middle and not fingers.ring and not fingers.pinky:
+            self._candidate_frames += 1
+            if self._candidate_frames >= 2:
+                return GestureResult(GestureType.RIGHT_CLICK)
+            return GestureResult(GestureType.MOVE)
+
+        self._candidate_frames = 0
+        return GestureResult(GestureType.NONE)
+
+    def _reset_temporal(self) -> None:
+        self._prev_index_z = None
+        self._prev_middle_z = None
+        self._prev_index_y = None
+        self._forward_active = False
+        self._is_dragging = False
 
     def _confirm_result(self, raw_gesture: GestureType, scroll_delta: int = 0) -> GestureResult:
-        # Keep click/drag responses immediate to avoid missed transient actions.
-        if raw_gesture in {
-            GestureType.LEFT_CLICK,
-            GestureType.RIGHT_CLICK,
-            GestureType.DOUBLE_CLICK,
-            GestureType.DRAG,
-        }:
-            self._confirmed_gesture = self._transition_state(self._confirmed_gesture, raw_gesture)
-            if self._confirmed_gesture == GestureType.SCROLL:
-                return GestureResult(self._confirmed_gesture, scroll_delta=scroll_delta)
-            return GestureResult(self._confirmed_gesture, scroll_delta=0)
-
-        if self._confirmed_gesture == GestureType.NONE and raw_gesture in {GestureType.MOVE, GestureType.PAUSE}:
-            self._confirmed_gesture = raw_gesture
-            return GestureResult(self._confirmed_gesture, scroll_delta=0)
-
         if raw_gesture == self._candidate_gesture:
             self._candidate_frames += 1
         else:
             self._candidate_gesture = raw_gesture
             self._candidate_frames = 1
 
-        if self._candidate_frames >= self._confirm_frames_required:
-            next_gesture = self._transition_state(self._confirmed_gesture, self._candidate_gesture)
-            self._confirmed_gesture = next_gesture
+        if self._candidate_frames > self._confirm_frames_required:
+            self._confirmed_gesture = raw_gesture
+
+        # Click actions should not be blocked by long persistence.
+        if raw_gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}:
+            self._confirmed_gesture = raw_gesture
 
         if self._confirmed_gesture == GestureType.SCROLL:
             return GestureResult(self._confirmed_gesture, scroll_delta=scroll_delta)
         return GestureResult(self._confirmed_gesture, scroll_delta=0)
-
-    def set_confirm_frames(self, frames: int) -> None:
-        self._confirm_frames_required = max(1, int(frames))
-
-    @staticmethod
-    def _transition_state(current: GestureType, nxt: GestureType) -> GestureType:
-        if nxt == current:
-            return current
-
-        allowed = {
-            GestureType.MOVE: {
-                GestureType.LEFT_CLICK,
-                GestureType.RIGHT_CLICK,
-                GestureType.DOUBLE_CLICK,
-                GestureType.SCROLL,
-                GestureType.DRAG,
-                GestureType.PAUSE,
-                GestureType.MOVE,
-                GestureType.NONE,
-            },
-            GestureType.LEFT_CLICK: {GestureType.MOVE, GestureType.PAUSE, GestureType.NONE, GestureType.DRAG},
-            GestureType.RIGHT_CLICK: {GestureType.MOVE, GestureType.PAUSE, GestureType.NONE, GestureType.DRAG},
-            GestureType.DOUBLE_CLICK: {GestureType.MOVE, GestureType.PAUSE, GestureType.NONE, GestureType.DRAG},
-            GestureType.SCROLL: {GestureType.MOVE, GestureType.PAUSE, GestureType.NONE, GestureType.SCROLL},
-            GestureType.DRAG: {GestureType.MOVE, GestureType.PAUSE, GestureType.NONE, GestureType.DRAG},
-            GestureType.PAUSE: {
-                GestureType.MOVE,
-                GestureType.PAUSE,
-                GestureType.NONE,
-                GestureType.LEFT_CLICK,
-                GestureType.RIGHT_CLICK,
-                GestureType.DOUBLE_CLICK,
-                GestureType.SCROLL,
-                GestureType.DRAG,
-            },
-            GestureType.NONE: {
-                GestureType.MOVE,
-                GestureType.NONE,
-                GestureType.PAUSE,
-                GestureType.LEFT_CLICK,
-                GestureType.RIGHT_CLICK,
-                GestureType.DOUBLE_CLICK,
-                GestureType.SCROLL,
-                GestureType.DRAG,
-            },
-        }
-        if nxt in allowed.get(current, {nxt}):
-            return nxt
-        return current

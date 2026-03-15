@@ -37,7 +37,7 @@ class HandTracker:
         self._connection_style = self._draw_styles.get_default_hand_connections_style()
 
     def process_frame(self, frame_bgr):
-        """Resize to 320x240, run MediaPipe, return (landmarks_list, hand_landmarks_proto)."""
+        """Resize to 320x240, run MediaPipe, return (hand_data, hand_landmarks_proto)."""
         try:
             small = cv2.resize(frame_bgr, _PROC_SIZE, interpolation=cv2.INTER_NEAREST)
             rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
@@ -48,8 +48,9 @@ class HandTracker:
             return None, None
         hand = result.multi_hand_landmarks[0]
         pw, ph = self._pw, self._ph
-        pts = [(int(lm.x * pw), int(lm.y * ph)) for lm in hand.landmark]
-        return pts, hand
+        xy = [(int(lm.x * pw), int(lm.y * ph)) for lm in hand.landmark]
+        z = [float(lm.z) for lm in hand.landmark]
+        return {"xy": xy, "z": z}, hand
 
     def draw_landmarks(self, frame_bgr, hand_landmarks):
         """Draw landmarks and connections onto full frame using mp.drawing_utils."""
