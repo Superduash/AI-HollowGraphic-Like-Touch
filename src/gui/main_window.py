@@ -156,16 +156,12 @@ class MainWindow(QMainWindow):
         self._status_dot.setObjectName("statusOffline")
         self._status_text = QLabel("Camera Offline")
         self._fps_label = QLabel("FPS 0")
-        settings_btn = QPushButton("Settings")
-        settings_btn.setIcon(self._icon("settings.svg"))
-        settings_btn.setObjectName("ghostButton")
 
         header_layout.addWidget(self._status_dot)
         header_layout.addWidget(self._status_text)
         header_layout.addSpacing(10)
         header_layout.addWidget(self._fps_label)
         header_layout.addSpacing(10)
-        header_layout.addWidget(settings_btn)
 
         body = QHBoxLayout()
         body.setSpacing(14)
@@ -274,9 +270,6 @@ class MainWindow(QMainWindow):
         self._region_slider.setFixedWidth(180)
         self._region_slider.valueChanged.connect(self._set_control_margin)
 
-        self._settings_btn = QPushButton("Settings")
-        self._settings_btn.setIcon(self._icon("settings.svg"))
-        self._settings_btn.setObjectName("purpleButton")
 
         controls_layout.addWidget(self._start_btn)
         controls_layout.addWidget(self._stop_btn)
@@ -285,7 +278,6 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self._region_label)
         controls_layout.addWidget(self._region_slider)
         controls_layout.addStretch(1)
-        controls_layout.addWidget(self._settings_btn)
 
         layout.addWidget(header)
 

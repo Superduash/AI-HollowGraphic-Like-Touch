@@ -815,10 +815,6 @@ class MainWindow(QMainWindow):
         self.cam_status = QLabel("Camera Offline")
         self.fps_lbl = QLabel("FPS 0")
 
-        settings_btn = QPushButton("Settings")
-        settings_btn.setIcon(self._icon("settings.svg"))
-        settings_btn.setObjectName("ghostButton")
-        settings_btn.setEnabled(False)
 
         header_l.addWidget(icon_label)
         header_l.addWidget(self.title_lbl)
@@ -828,7 +824,6 @@ class MainWindow(QMainWindow):
         header_l.addSpacing(10)
         header_l.addWidget(self.fps_lbl)
         header_l.addSpacing(10)
-        header_l.addWidget(settings_btn)
 
         body_l = QHBoxLayout()
         body_l.setSpacing(12)
