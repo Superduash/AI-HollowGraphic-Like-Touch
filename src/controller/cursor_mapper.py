@@ -17,7 +17,16 @@ class CursorMapper:
         self.scale_x = self.scr_w / cam_width if cam_width else 1.0
         self.scale_y = self.scr_h / cam_height if cam_height else 1.0
 
+    def set_camera_size(self, cam_width: int, cam_height: int) -> None:
+        """Update source frame size for accurate runtime mapping."""
+        if cam_width <= 0 or cam_height <= 0:
+            return
+        self.cam_w = cam_width
+        self.cam_h = cam_height
+        self.scale_x = self.scr_w / cam_width
+        self.scale_y = self.scr_h / cam_height
+
     def map_to_screen(self, cam_x: int, cam_y: int) -> tuple[int, int]:
-        sx = clamp(cam_x, 0, self.cam_w) * self.scale_x
-        sy = clamp(cam_y, 0, self.cam_h) * self.scale_y
+        sx = clamp(cam_x, 0, self.cam_w - 1) * self.scale_x
+        sy = clamp(cam_y, 0, self.cam_h - 1) * self.scale_y
         return int(sx), int(sy)

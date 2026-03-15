@@ -1,6 +1,7 @@
 """Mouse control: move, click, double-click, scroll, drag. Supports pydirectinput on Windows."""
 
 import platform
+import time
 import pyautogui
 from config import CLICK_COOLDOWN, CURSOR_MOVE_THRESHOLD
 
@@ -28,9 +29,13 @@ def _move(x, y):
 
 class MouseController:
     def __init__(self, cooldown=CLICK_COOLDOWN, threshold=CURSOR_MOVE_THRESHOLD):
+        # Enforce required deadzone floor for jitter suppression.
+        threshold = max(4, int(threshold))
         self.thresh_sq = threshold * threshold
         self._lx = -1
         self._ly = -1
+        self._last_move_time = 0.0
+        self._move_interval = 1.0 / 120.0
         self._dragging = False
         self.is_available = True
         self.last_error_message = ""
@@ -49,11 +54,17 @@ class MouseController:
     def move_cursor(self, x, y):
         if not self.is_available:
             return
+
+        now = time.monotonic()
+        if now - self._last_move_time < self._move_interval:
+            return
+
         dx, dy = x - self._lx, y - self._ly
         if dx * dx + dy * dy < self.thresh_sq:
             return
         if self._safe(_move, x, y):
             self._lx, self._ly = x, y
+            self._last_move_time = now
 
     def left_click(self):
         return self._safe(pyautogui.click, button="left")

@@ -23,6 +23,8 @@ _PROC_SIZE = (PROCESS_WIDTH, PROCESS_HEIGHT)
 class HandTracker:
     def __init__(self):
         self._mp_hands = mp.solutions.hands
+        self._draw_utils = mp.solutions.drawing_utils
+        self._draw_styles = mp.solutions.drawing_styles
         self._hands = self._mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=MAX_NUM_HANDS,
@@ -31,6 +33,8 @@ class HandTracker:
         )
         self._pw = PROCESS_WIDTH
         self._ph = PROCESS_HEIGHT
+        self._landmark_style = self._draw_styles.get_default_hand_landmarks_style()
+        self._connection_style = self._draw_styles.get_default_hand_connections_style()
 
     def process_frame(self, frame_bgr):
         """Resize to 320x240, run MediaPipe, return (landmarks_list, hand_landmarks_proto)."""
@@ -51,12 +55,12 @@ class HandTracker:
         """Draw landmarks and connections onto full frame using mp.drawing_utils."""
         if not hand_landmarks:
             return
-        mp.solutions.drawing_utils.draw_landmarks(
+        self._draw_utils.draw_landmarks(
             frame_bgr,
             hand_landmarks,
             self._mp_hands.HAND_CONNECTIONS,
-            mp.solutions.drawing_styles.get_default_hand_landmarks_style(),
-            mp.solutions.drawing_styles.get_default_hand_connections_style()
+            self._landmark_style,
+            self._connection_style,
         )
 
     def close(self):

@@ -8,7 +8,7 @@ import customtkinter as ctk
 import pyautogui
 from PIL import Image, ImageDraw, ImageFont
 
-from config import PROCESS_HEIGHT, PROCESS_WIDTH, TARGET_FPS
+from config import CAMERA_HEIGHT, CAMERA_WIDTH, PROCESS_HEIGHT, PROCESS_WIDTH, TARGET_FPS
 from controller.cursor_mapper import CursorMapper
 from controller.mouse_controller import MouseController
 from gestures.gesture_detector import GestureDetector
@@ -76,6 +76,10 @@ def _draw_action_overlay_pil(img: Image.Image, gesture: GestureType) -> None:
     draw.text((text_x, text_y), label, font=font, fill=(255, 255, 255, 255))
 
 
+def _gesture_label(gesture: GestureType) -> str:
+    return _OVERLAY_LABELS.get(gesture, "")
+
+
 class MainWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -97,7 +101,7 @@ class MainWindow(ctk.CTk):
             sw, sh = pyautogui.size()
         except Exception:
             sw, sh = 1920, 1080
-        self._mapper = CursorMapper(PROCESS_WIDTH, PROCESS_HEIGHT, sw, sh)
+        self._mapper = CursorMapper(CAMERA_WIDTH, CAMERA_HEIGHT, sw, sh)
         self._mouse = MouseController()
 
         # --- Runtime state ---
@@ -119,6 +123,8 @@ class MainWindow(ctk.CTk):
         self._error_msg = ""
 
         self._preview_image = None
+        self._update_job = None
+        self._overlay_label = ""
         self._build_ui()
 
     # ==================================================================
@@ -221,6 +227,13 @@ class MainWindow(ctk.CTk):
         if self._processing or (self._proc_thread and self._proc_thread.is_alive()):
             return
 
+        if self._update_job is not None:
+            try:
+                self.after_cancel(self._update_job)
+            except Exception:
+                pass
+            self._update_job = None
+
         # Ensure tracker is initialized fresh each start.
         try:
             self._tracker.close()
@@ -257,6 +270,13 @@ class MainWindow(ctk.CTk):
         if self._proc_thread:
             self._proc_thread = None
 
+        if self._update_job is not None:
+            try:
+                self.after_cancel(self._update_job)
+            except Exception:
+                pass
+            self._update_job = None
+
         self._camera.stop()
         try:
             self._tracker.close()
@@ -273,6 +293,7 @@ class MainWindow(ctk.CTk):
             self._gesture = GestureType.NONE
             self._hand_ok = False
             self._raw_hand = None
+            self._overlay_label = ""
             if not was_processing:
                 self._error_msg = ""
 
@@ -310,6 +331,7 @@ class MainWindow(ctk.CTk):
 
     def _process_loop(self):
         skip = False
+        last_overlay_gesture = GestureType.NONE
         while self._processing:
             # Camera disconnected?
             if not self._camera.is_running:
@@ -324,6 +346,8 @@ class MainWindow(ctk.CTk):
                 continue
 
             frame = cv2.flip(frame, 1)
+            fh, fw = frame.shape[:2]
+            self._mapper.set_camera_size(fw, fh)
 
             # Frame skipping in performance mode
             if skip and self._perf_mode:
@@ -349,7 +373,10 @@ class MainWindow(ctk.CTk):
             # Mouse control
             if self._mouse_enabled and landmarks and gesture not in _PAUSE_GESTURES:
                 tip = landmarks[8]
-                tx, ty = self._mapper.map_to_screen(tip[0], tip[1])
+                # Landmarks are in PROCESS_WIDTH/PROCESS_HEIGHT space; scale to full frame first.
+                cam_x = int((tip[0] / PROCESS_WIDTH) * fw)
+                cam_y = int((tip[1] / PROCESS_HEIGHT) * fh)
+                tx, ty = self._mapper.map_to_screen(cam_x, cam_y)
                 sx, sy = self._smoother.smooth(tx, ty)
 
                 if gesture == GestureType.MOVE:
@@ -379,12 +406,19 @@ class MainWindow(ctk.CTk):
                 self._was_dragging = False
 
             fps_v = self._fps.update()
+            if gesture != last_overlay_gesture:
+                overlay_label = _gesture_label(gesture)
+                last_overlay_gesture = gesture
+            else:
+                overlay_label = self._overlay_label
+
             with self._lock:
                 self._disp_frame = frame
                 self._gesture = gesture
                 self._hand_ok = landmarks is not None
                 self._raw_hand = raw_hand
                 self._fps_val = fps_v
+                self._overlay_label = overlay_label
 
             if self._fps.should_skip():
                 skip = True
@@ -414,6 +448,7 @@ class MainWindow(ctk.CTk):
             hand = self._hand_ok
             raw_hand = self._raw_hand
             fps = self._fps_val
+            overlay_label = self._overlay_label
 
         if frame is not None:
             try:
@@ -425,7 +460,8 @@ class MainWindow(ctk.CTk):
 
                 # Resize and add overlay using PIL
                 pil_img = Image.fromarray(rgb).resize((_PREVIEW_W, _PREVIEW_H), Image.BILINEAR).convert("RGBA")
-                _draw_action_overlay_pil(pil_img, gesture)
+                if overlay_label:
+                    _draw_action_overlay_pil(pil_img, gesture)
 
                 self._preview_image = ctk.CTkImage(
                     light_image=pil_img,
@@ -445,4 +481,4 @@ class MainWindow(ctk.CTk):
         self._mode_lbl.configure(text=f"Mouse: {'Active' if self._mouse_enabled else 'Disabled'}",
                                  text_color=mc)
 
-        self.after(33, self._update_gui)
+        self._update_job = self.after(33, self._update_gui)
