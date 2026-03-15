@@ -17,7 +17,6 @@ from gui.gesture_help_panel import GestureHelpPanel
 from tracking.hand_tracker import HandTracker
 from utils.camera_thread import CameraThread
 from utils.fps_counter import FPSCounter
-from utils.smoothing import AdaptiveSmoother
 
 _PREVIEW_W, _PREVIEW_H = 640, 480
 _PAUSE_GESTURES = frozenset({GestureType.PAUSE, GestureType.NONE})
@@ -95,7 +94,7 @@ class MainWindow(ctk.CTk):
         self._camera = CameraThread()
         self._tracker = HandTracker()
         self._detector = GestureDetector()
-        self._smoother = AdaptiveSmoother()
+        self._detector.set_confirm_frames(4)
         self._fps = FPSCounter(target_fps=TARGET_FPS)
         try:
             sw, sh = pyautogui.size()
@@ -286,7 +285,6 @@ class MainWindow(ctk.CTk):
         if self._mouse.is_dragging:
             self._mouse.end_drag()
         self._was_dragging = False
-        self._smoother.reset()
 
         with self._lock:
             self._disp_frame = None
@@ -302,6 +300,7 @@ class MainWindow(ctk.CTk):
         self._btn_stop.configure(state="disabled")
         self._preview_image = None
         self._preview.configure(image=self._preview_image, text="Camera Offline")
+        self._mapper.reset()
 
     def _toggle_mouse(self):
         self._mouse_enabled = not self._mouse_enabled
@@ -332,6 +331,7 @@ class MainWindow(ctk.CTk):
     def _process_loop(self):
         skip = False
         last_overlay_gesture = GestureType.NONE
+        last_action_gesture = GestureType.NONE
         while self._processing:
             # Camera disconnected?
             if not self._camera.is_running:
@@ -352,11 +352,6 @@ class MainWindow(ctk.CTk):
             # Frame skipping in performance mode
             if skip and self._perf_mode:
                 skip = False
-                # Use motion prediction during skipped frames
-                if self._mouse_enabled:
-                    px, py = self._smoother.predict()
-                    if px >= 0:
-                        self._mouse.move_cursor(px, py)
                 with self._lock:
                     self._disp_frame = frame
                 continue
@@ -369,6 +364,7 @@ class MainWindow(ctk.CTk):
                 result = self._detector.detect(None)
 
             gesture = result.gesture
+            gesture_changed = gesture != last_action_gesture
 
             # Mouse control
             if self._mouse_enabled and landmarks and gesture not in _PAUSE_GESTURES:
@@ -376,19 +372,21 @@ class MainWindow(ctk.CTk):
                 # Landmarks are in PROCESS_WIDTH/PROCESS_HEIGHT space; scale to full frame first.
                 cam_x = int((tip[0] / PROCESS_WIDTH) * fw)
                 cam_y = int((tip[1] / PROCESS_HEIGHT) * fh)
-                tx, ty = self._mapper.map_to_screen(cam_x, cam_y)
-                sx, sy = self._smoother.smooth(tx, ty)
+                sx, sy = self._mapper.map_to_screen(cam_x, cam_y)
 
                 if gesture == GestureType.MOVE:
                     self._mouse.move_cursor(sx, sy)
                 elif gesture == GestureType.LEFT_CLICK:
-                    self._mouse.move_cursor(sx, sy)
-                    self._mouse.left_click()
+                    if gesture_changed:
+                        self._mouse.move_cursor(sx, sy)
+                        self._mouse.left_click()
                 elif gesture == GestureType.DOUBLE_CLICK:
-                    self._mouse.move_cursor(sx, sy)
-                    self._mouse.double_click()
+                    if gesture_changed:
+                        self._mouse.move_cursor(sx, sy)
+                        self._mouse.double_click()
                 elif gesture == GestureType.RIGHT_CLICK:
-                    self._mouse.right_click()
+                    if gesture_changed:
+                        self._mouse.right_click()
                 elif gesture == GestureType.SCROLL:
                     if result.scroll_delta != 0:
                         self._mouse.scroll(result.scroll_delta)
@@ -404,6 +402,8 @@ class MainWindow(ctk.CTk):
             elif self._was_dragging:
                 self._mouse.end_drag()
                 self._was_dragging = False
+
+            last_action_gesture = gesture
 
             fps_v = self._fps.update()
             if gesture != last_overlay_gesture:
@@ -453,9 +453,13 @@ class MainWindow(ctk.CTk):
         if frame is not None:
             try:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # Draw control region to stabilize cursor mapping near frame edges.
+                x1, y1, x2, y2 = self._mapper.control_region()
+                cv2.rectangle(rgb, (x1, y1), (x2, y2), (50, 180, 255), 2)
                 
                 # Draw skeleton if requested and found
-                if self._debug_mode and raw_hand:
+                if self._debug_mode and not self._perf_mode and raw_hand:
                     self._tracker.draw_landmarks(rgb, raw_hand)
 
                 # Resize and add overlay using PIL

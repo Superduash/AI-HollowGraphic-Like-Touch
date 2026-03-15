@@ -27,9 +27,9 @@ class HandTracker:
         self._draw_styles = mp.solutions.drawing_styles
         self._hands = self._mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=MAX_NUM_HANDS,
-            min_detection_confidence=MIN_DETECTION_CONFIDENCE,
-            min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
+            max_num_hands=1,
+            min_detection_confidence=0.6,
+            min_tracking_confidence=0.6,
         )
         self._pw = PROCESS_WIDTH
         self._ph = PROCESS_HEIGHT

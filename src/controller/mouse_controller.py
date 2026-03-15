@@ -30,12 +30,12 @@ def _move(x, y):
 class MouseController:
     def __init__(self, cooldown=CLICK_COOLDOWN, threshold=CURSOR_MOVE_THRESHOLD):
         # Enforce required deadzone floor for jitter suppression.
-        threshold = max(4, int(threshold))
+        threshold = max(3, int(threshold))
         self.thresh_sq = threshold * threshold
         self._lx = -1
         self._ly = -1
         self._last_move_time = 0.0
-        self._move_interval = 1.0 / 120.0
+        self._move_interval = 1.0 / 100.0
         self._dragging = False
         self.is_available = True
         self.last_error_message = ""
