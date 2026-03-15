@@ -12,3 +12,4 @@ if [[ ! -x "$VENV_PY" ]]; then
 fi
 
 exec "$VENV_PY" "$ROOT_DIR/src/main.py"
+

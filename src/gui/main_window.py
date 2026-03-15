@@ -1,118 +1,116 @@
-"""Main application window — customtkinter GUI with threaded processing."""
+"""Main application window implemented with PySide6."""
 
+import sys
 import threading
 import time
+from pathlib import Path
 
 import cv2
-import customtkinter as ctk
 import pyautogui
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer
+from PySide6.QtGui import QIcon, QImage, QPixmap
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from config import CAMERA_HEIGHT, CAMERA_WIDTH, PROCESS_HEIGHT, PROCESS_WIDTH, TARGET_FPS
 from controller.cursor_mapper import CursorMapper
 from controller.mouse_controller import MouseController
 from gestures.gesture_detector import GestureDetector
 from gestures.gesture_types import GestureType
-from gui.gesture_help_panel import GestureHelpPanel
 from tracking.hand_tracker import HandTracker
 from utils.camera_thread import CameraThread
 from utils.fps_counter import FPSCounter
 
-_PREVIEW_W, _PREVIEW_H = 640, 480
 _PAUSE_GESTURES = frozenset({GestureType.PAUSE, GestureType.NONE})
+_ASSETS_DIR = Path(__file__).resolve().parents[2] / "assets" / "icons"
 
-# Overlay display names (shorter, user-friendly)
-_OVERLAY_LABELS = {
-    GestureType.NONE: "",
-    GestureType.MOVE: "MOVE",
-    GestureType.LEFT_CLICK: "LEFT CLICK",
-    GestureType.DOUBLE_CLICK: "DOUBLE CLICK",
-    GestureType.RIGHT_CLICK: "RIGHT CLICK",
-    GestureType.SCROLL: "SCROLL",
-    GestureType.DRAG: "DRAG",
-    GestureType.PAUSE: "PAUSED",
-    GestureType.VOLUME: "VOLUME",
-    GestureType.SWITCH_WINDOW: "SWITCH",
-    GestureType.OPEN_PALM: "OPEN PALM",
+_BADGE_COLORS = {
+    "IDLE": "#374151",
+    "MOVE": "#60A5FA",
+    "CLICK": "#4ADE80",
+    "R-CLICK": "#4ADE80",
+    "SCROLL": "#A78BFA",
+    "DRAG": "#4ADE80",
+    "PAUSE": "#F87171",
 }
 
 
-def _draw_action_overlay_pil(img: Image.Image, gesture: GestureType) -> None:
-    """Draw a modern rounded semi-transparent overlay inside the preview image."""
-    label = _OVERLAY_LABELS.get(gesture, "")
-    if not label:
-        return
+class GlassButton(QPushButton):
+    """Rounded button with subtle hover animation."""
 
-    draw = ImageDraw.Draw(img, "RGBA")
-    font = ImageFont.load_default()
-    try:
-        # For newer pillow
-        bbox = font.getbbox(label)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-    except AttributeError:
-        # Fallback for old pillow
-        tw, th = draw.textsize(label, font=font)
+    def __init__(self, text: str = ""):
+        super().__init__(text)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    # Scale up dimensions artificially since default font is small
-    pad_x, pad_y = 16, 12
-    box_w = tw * 2 + pad_x * 2
-    box_h = th * 2 + pad_y * 2
-    margin = 20
+        self._shadow = QGraphicsDropShadowEffect(self)
+        self._shadow.setColor(Qt.GlobalColor.black)
+        self._shadow.setBlurRadius(10.0)
+        self._shadow.setOffset(0, 2)
+        self.setGraphicsEffect(self._shadow)
 
-    x2 = img.width - margin
-    x1 = x2 - box_w
-    y1 = margin
-    y2 = y1 + box_h
+        self._anim = QPropertyAnimation(self._shadow, b"blurRadius", self)
+        self._anim.setDuration(150)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-    # Draw rounded dark background with alpha
-    radius = 8
-    draw.rounded_rectangle((x1, y1, x2, y2), radius=radius, fill=(20, 20, 20, 200))
+    def enterEvent(self, event):
+        self._anim.stop()
+        self._anim.setStartValue(self._shadow.blurRadius())
+        self._anim.setEndValue(18.0)
+        self._anim.start()
+        super().enterEvent(event)
 
-    # Center text in box
-    text_x = x1 + pad_x + (box_w - pad_x * 2 - tw) // 2
-    text_y = y1 + pad_y + (box_h - pad_y * 2 - th) // 2
-    draw.text((text_x, text_y), label, font=font, fill=(255, 255, 255, 255))
+    def leaveEvent(self, event):
+        self._anim.stop()
+        self._anim.setStartValue(self._shadow.blurRadius())
+        self._anim.setEndValue(10.0)
+        self._anim.start()
+        super().leaveEvent(event)
 
 
-def _gesture_label(gesture: GestureType) -> str:
-    return _OVERLAY_LABELS.get(gesture, "")
-
-
-class MainWindow(ctk.CTk):
+class MainWindow(QMainWindow):
     def __init__(self):
+        self._app = QApplication.instance() or QApplication(sys.argv)
         super().__init__()
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
-        self.title("AI Holographic Touch")
-        # Give enough space for the new layout
-        self.geometry("1100x680")
-        self.resizable(True, True)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # --- Components ---
+        self.setWindowTitle("Holographic Touch")
+        self.resize(1280, 820)
+        self.setMinimumSize(1120, 720)
+
         self._camera = CameraThread()
         self._tracker = HandTracker()
         self._detector = GestureDetector()
         self._detector.set_confirm_frames(4)
         self._fps = FPSCounter(target_fps=TARGET_FPS)
+
         try:
             sw, sh = pyautogui.size()
         except Exception:
             sw, sh = 1920, 1080
+
         self._mapper = CursorMapper(CAMERA_WIDTH, CAMERA_HEIGHT, sw, sh)
         self._mouse = MouseController()
 
-        # --- Runtime state ---
         self._processing = False
         self._proc_thread = None
         self._mouse_enabled = False
         self._perf_mode = False
-        self._debug_mode = True  # Default to True so landmarks always appear
+        self._debug_mode = True
         self._was_dragging = False
         self._closing = False
 
-        # --- Thread-safe results ---
         self._lock = threading.Lock()
         self._disp_frame = None
         self._gesture = GestureType.NONE
@@ -120,120 +118,418 @@ class MainWindow(ctk.CTk):
         self._raw_hand = None
         self._fps_val = 0.0
         self._error_msg = ""
-
-        self._preview_image = None
-        self._update_job = None
         self._overlay_label = ""
+        self._last_overlay_text = "IDLE"
+
+        self._preview_pixmap = QPixmap()
+
         self._build_ui()
 
-    # ==================================================================
-    # UI construction
-    # ==================================================================
+        self._ui_timer = QTimer(self)
+        self._ui_timer.setInterval(16)
+        self._ui_timer.timeout.connect(self._update_gui)
+
+    def mainloop(self):
+        self.show()
+        return self._app.exec()
 
     def _build_ui(self):
-        # Top Header
-        top = ctk.CTkFrame(self, height=52, corner_radius=0, fg_color="#1E1E1E")
-        top.pack(fill="x")
+        root = QWidget(self)
+        root.setObjectName("Root")
+        self.setCentralWidget(root)
 
-        title = ctk.CTkLabel(top, text="  🖐️ Holographic Touch",
-                             font=ctk.CTkFont(size=20, weight="bold"))
-        title.pack(side="left", padx=16, pady=10)
+        self.setStyleSheet(
+            """
+            QMainWindow {
+                background: #0F1115;
+            }
+            QWidget#Root {
+                background: qradialgradient(
+                    cx: 0.15, cy: 0.05, radius: 1.2,
+                    fx: 0.15, fy: 0.05,
+                    stop: 0 rgba(44, 68, 110, 92),
+                    stop: 0.4 rgba(18, 25, 39, 80),
+                    stop: 1 rgba(15, 17, 21, 255)
+                );
+                color: #E5E7EB;
+                font-family: "SF Pro Text", "Manrope", "Inter", sans-serif;
+                font-size: 14px;
+            }
+            QFrame#Shell {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 rgba(22, 30, 45, 205),
+                    stop: 0.6 rgba(20, 28, 40, 215),
+                    stop: 1 rgba(18, 26, 37, 225)
+                );
+                border: 1px solid rgba(141, 173, 219, 70);
+                border-radius: 26px;
+            }
+            QFrame#Card {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 rgba(31, 42, 61, 170),
+                    stop: 1 rgba(26, 34, 49, 185)
+                );
+                border: 1px solid rgba(147, 183, 235, 58);
+                border-radius: 20px;
+            }
+            QFrame#PreviewViewport {
+                background: #0A1019;
+                border: 1px solid rgba(139, 241, 203, 120);
+                border-radius: 18px;
+            }
+            QLabel#Title {
+                font-size: 32px;
+                font-weight: 700;
+                color: #F3F7FF;
+            }
+            QLabel#Muted {
+                color: #9DB0CE;
+                font-size: 15px;
+            }
+            QLabel#SectionTitle {
+                color: #DEE7F7;
+                font-size: 22px;
+                font-weight: 700;
+            }
+            QLabel#OverlayPill {
+                color: #E9FFF8;
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 rgba(73, 197, 140, 128),
+                    stop: 1 rgba(91, 187, 250, 90)
+                );
+                border: 1px solid rgba(162, 255, 222, 180);
+                border-radius: 16px;
+                padding: 6px 14px;
+                font-size: 16px;
+                font-weight: 700;
+                letter-spacing: 0.4px;
+            }
+            QLabel#GestureBadge {
+                border-radius: 14px;
+                padding: 8px 14px;
+                color: #F7FAFF;
+                font-weight: 700;
+                font-size: 17px;
+            }
+            QLabel#GuideText {
+                color: #CEDAF0;
+                font-size: 14px;
+            }
+            QLabel#GuideHint {
+                color: #9AB0D4;
+                font-size: 13px;
+            }
+            QPushButton {
+                background: rgba(33, 46, 67, 220);
+                border: 1px solid rgba(137, 171, 224, 95);
+                border-radius: 14px;
+                color: #EAF1FF;
+                padding: 11px 16px;
+                font-size: 14px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background: rgba(42, 60, 89, 230);
+                border: 1px solid rgba(162, 206, 255, 155);
+            }
+            QPushButton:disabled {
+                background: rgba(22, 30, 45, 150);
+                border: 1px solid rgba(102, 120, 150, 70);
+                color: rgba(201, 214, 237, 120);
+            }
+            QPushButton[variant="start"] {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 rgba(74, 222, 128, 210),
+                    stop: 1 rgba(46, 189, 109, 225)
+                );
+                border: 1px solid rgba(177, 255, 204, 170);
+                color: #EDFFF5;
+            }
+            QPushButton[variant="stop"] {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 rgba(248, 113, 113, 215),
+                    stop: 1 rgba(210, 72, 87, 230)
+                );
+                border: 1px solid rgba(255, 200, 208, 170);
+                color: #FFF6F7;
+            }
+            QPushButton[variant="mouse"][active="true"] {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 rgba(88, 205, 177, 220),
+                    stop: 1 rgba(65, 171, 151, 220)
+                );
+                border: 1px solid rgba(175, 255, 238, 185);
+                color: #F0FFFC;
+            }
+            """
+        )
 
-        self._fps_lbl = ctk.CTkLabel(top, text="FPS: 0",
-                                     font=ctk.CTkFont(size=14, weight="bold"),
-                                     text_color="#2FA572")
-        self._fps_lbl.pack(side="right", padx=16)
+        root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(14, 14, 14, 14)
+        root_layout.setSpacing(0)
 
-        self._cam_stat_lbl = ctk.CTkLabel(top, text="● Offline",
-                                          font=ctk.CTkFont(size=14, weight="bold"),
-                                          text_color="#E74C3C")
-        self._cam_stat_lbl.pack(side="right", padx=16)
+        shell = QFrame()
+        shell.setObjectName("Shell")
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(20, 20, 20, 20)
+        shell_layout.setSpacing(14)
+        root_layout.addWidget(shell)
 
-        # Body
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=16, pady=(16, 0))
+        header = QFrame()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(8, 2, 8, 2)
+        header_layout.setSpacing(10)
 
-        # Preview Area
-        pf = ctk.CTkFrame(body, corner_radius=12, fg_color="#2B2B2B")
-        pf.pack(side="left", fill="both", expand=True, padx=(0, 16))
+        title_icon = QLabel()
+        title_icon.setPixmap(self._icon("move").pixmap(QSize(24, 24)))
+        header_layout.addWidget(title_icon)
 
-        self._preview = ctk.CTkLabel(pf, text="Camera Offline\n\nClick 'Start Camera' below",
-                                     font=ctk.CTkFont(size=16))
-        self._preview.pack(expand=True, fill="both", padx=4, pady=4)
+        title = QLabel("Holographic Touch")
+        title.setObjectName("Title")
+        header_layout.addWidget(title)
+        header_layout.addStretch(1)
 
-        # Sidebar
-        rp = ctk.CTkFrame(body, width=320, corner_radius=12, fg_color="transparent")
-        rp.pack(side="right", fill="y")
-        rp.pack_propagate(False)
+        self._status_dot = QLabel("●")
+        self._status_dot.setStyleSheet("color: #F87171; font-size: 15px;")
+        header_layout.addWidget(self._status_dot)
 
-        # Status Panel
-        sf = ctk.CTkFrame(rp, corner_radius=10, fg_color="#333333")
-        sf.pack(fill="x", pady=(0, 16))
+        self._status_text = QLabel("Offline")
+        self._status_text.setObjectName("Muted")
+        header_layout.addWidget(self._status_text)
 
-        ctk.CTkLabel(sf, text="Gesture Status", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(12, 4))
-        self._gest_lbl = ctk.CTkLabel(sf, text="NONE", font=ctk.CTkFont(size=24, weight="bold"), text_color="#3B8ED0")
-        self._gest_lbl.pack(pady=(0, 8))
+        divider = QLabel("| |")
+        divider.setObjectName("Muted")
+        header_layout.addWidget(divider)
 
-        self._hand_lbl = ctk.CTkLabel(sf, text="Hand: Not Found", font=ctk.CTkFont(size=13))
-        self._hand_lbl.pack(pady=2)
+        self._fps_lbl = QLabel("FPS: 0")
+        self._fps_lbl.setObjectName("Muted")
+        header_layout.addWidget(self._fps_lbl)
 
-        self._mode_lbl = ctk.CTkLabel(sf, text="Mouse: Disabled", font=ctk.CTkFont(size=13))
-        self._mode_lbl.pack(pady=(2, 12))
+        self._header_settings = GlassButton("")
+        self._header_settings.setIcon(self._icon("settings"))
+        self._header_settings.setIconSize(QSize(18, 18))
+        self._header_settings.setFixedSize(40, 40)
+        self._header_settings.setEnabled(False)
+        header_layout.addWidget(self._header_settings)
 
-        # Help Guide Panel
-        hf = GestureHelpPanel(rp, corner_radius=10, fg_color="#333333")
-        hf.pack(fill="both", expand=True)
+        shell_layout.addWidget(header)
 
-        # Bottom Bar
-        bot = ctk.CTkFrame(self, height=64, corner_radius=12, fg_color="#2B2B2B")
-        bot.pack(fill="x", padx=16, pady=16)
+        center = QHBoxLayout()
+        center.setSpacing(14)
 
-        bc = {"height": 38, "font": ctk.CTkFont(size=14, weight="bold"), "corner_radius": 6}
+        preview_card = QFrame()
+        preview_card.setObjectName("Card")
+        preview_layout = QVBoxLayout(preview_card)
+        preview_layout.setContentsMargins(16, 16, 16, 16)
+        preview_layout.setSpacing(10)
 
-        self._btn_start = ctk.CTkButton(bot, text="▶ Start Camera", command=self._start,
-                                        width=150, fg_color="#2FA572", hover_color="#25835A", **bc)
-        self._btn_start.pack(side="left", padx=12, pady=12)
+        preview_title = QLabel("Live Camera")
+        preview_title.setObjectName("SectionTitle")
+        preview_layout.addWidget(preview_title)
 
-        self._btn_stop = ctk.CTkButton(bot, text="⬛ Stop Camera", command=self._stop,
-                                       width=150, fg_color="#E74C3C", hover_color="#B83C30",
-                                       state="disabled", **bc)
-        self._btn_stop.pack(side="left", padx=12, pady=12)
+        viewport = QFrame()
+        viewport.setObjectName("PreviewViewport")
+        viewport_layout = QGridLayout(viewport)
+        viewport_layout.setContentsMargins(0, 0, 0, 0)
 
-        self._btn_mouse = ctk.CTkButton(bot, text="🖱 Enable Mouse", command=self._toggle_mouse,
-                                        width=150, border_width=2, fg_color="transparent",
-                                        border_color="#3B8ED0", text_color="#3B8ED0",
-                                        hover_color="#1E4768", **bc)
-        self._btn_mouse.pack(side="left", padx=(32, 12), pady=12)
+        self._preview_image = QLabel("Camera Offline")
+        self._preview_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._preview_image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._preview_image.setMinimumSize(640, 430)
+        self._preview_image.setObjectName("Muted")
+        viewport_layout.addWidget(self._preview_image, 0, 0)
 
-        # Switches Frame
-        sw_f = ctk.CTkFrame(bot, fg_color="transparent")
-        sw_f.pack(side="right", padx=12, pady=12)
+        overlay_top = QWidget()
+        overlay_top.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        overlay_top_layout = QHBoxLayout(overlay_top)
+        overlay_top_layout.setContentsMargins(0, 10, 12, 0)
+        overlay_top_layout.addStretch(1)
 
-        self._btn_perf = ctk.CTkSwitch(sw_f, text="⚡ Perf", command=self._toggle_perf,
-                                       font=ctk.CTkFont(size=13, weight="bold"))
-        self._btn_perf.pack(side="left", padx=8)
+        self._overlay_pill = QLabel("IDLE")
+        self._overlay_pill.setObjectName("OverlayPill")
+        overlay_top_layout.addWidget(self._overlay_pill)
+        viewport_layout.addWidget(overlay_top, 0, 0, Qt.AlignmentFlag.AlignTop)
 
-        self._btn_debug = ctk.CTkSwitch(sw_f, text="🔧 Skeleton", command=self._toggle_debug,
-                                        font=ctk.CTkFont(size=13, weight="bold"))
-        self._btn_debug.pack(side="left", padx=8)
-        self._btn_debug.select()  # Enable by default
+        overlay_bottom = QWidget()
+        overlay_bottom.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        overlay_bottom_layout = QHBoxLayout(overlay_bottom)
+        overlay_bottom_layout.setContentsMargins(14, 0, 14, 10)
 
-    # ==================================================================
-    # Button handlers
-    # ==================================================================
+        self._finger_overlay = QLabel("Detected Fingers: -")
+        self._finger_overlay.setObjectName("Muted")
+        overlay_bottom_layout.addWidget(self._finger_overlay)
+        overlay_bottom_layout.addStretch(1)
+
+        self._fps_overlay = QLabel("FPS: 0")
+        self._fps_overlay.setObjectName("Muted")
+        overlay_bottom_layout.addWidget(self._fps_overlay)
+        viewport_layout.addWidget(overlay_bottom, 0, 0, Qt.AlignmentFlag.AlignBottom)
+
+        preview_layout.addWidget(viewport, 1)
+        center.addWidget(preview_card, 4)
+
+        sidebar = QVBoxLayout()
+        sidebar.setSpacing(14)
+
+        status_card = QFrame()
+        status_card.setObjectName("Card")
+        status_layout = QVBoxLayout(status_card)
+        status_layout.setContentsMargins(14, 14, 14, 14)
+        status_layout.setSpacing(10)
+
+        status_title = QLabel("Gesture Status")
+        status_title.setObjectName("SectionTitle")
+        status_layout.addWidget(status_title)
+
+        self._gesture_badge = QLabel("IDLE")
+        self._gesture_badge.setObjectName("GestureBadge")
+        status_layout.addWidget(self._gesture_badge)
+
+        self._hand_status = QLabel("Hand: Not Detected")
+        self._hand_status.setObjectName("Muted")
+        status_layout.addWidget(self._hand_status)
+
+        self._mouse_status = QLabel("Mouse: Disabled")
+        self._mouse_status.setObjectName("Muted")
+        status_layout.addWidget(self._mouse_status)
+
+        sidebar.addWidget(status_card)
+
+        guide_card = QFrame()
+        guide_card.setObjectName("Card")
+        guide_layout = QVBoxLayout(guide_card)
+        guide_layout.setContentsMargins(14, 14, 14, 14)
+        guide_layout.setSpacing(12)
+
+        guide_title = QLabel("Air-Touch Guide")
+        guide_title.setObjectName("SectionTitle")
+        guide_layout.addWidget(guide_title)
+
+        for icon_name, title_text, hint_text in [
+            ("move", "Index hover", "Move cursor"),
+            ("click", "Forward finger tap", "Left click"),
+            ("drag", "Forward hold", "Drag"),
+            ("click", "Two finger tap", "Right click"),
+            ("scroll", "Vertical swipe", "Scroll"),
+            ("pause", "Open palm", "Pause"),
+        ]:
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            icon_label = QLabel()
+            icon_label.setPixmap(self._icon(icon_name).pixmap(QSize(18, 18)))
+            row.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
+
+            text_col = QVBoxLayout()
+            text_col.setSpacing(2)
+            primary = QLabel(title_text)
+            primary.setObjectName("GuideText")
+            text_col.addWidget(primary)
+            hint = QLabel(hint_text)
+            hint.setObjectName("GuideHint")
+            text_col.addWidget(hint)
+            row.addLayout(text_col)
+            row.addStretch(1)
+            guide_layout.addLayout(row)
+
+        sidebar.addWidget(guide_card)
+        sidebar.addStretch(1)
+
+        center.addLayout(sidebar, 2)
+        shell_layout.addLayout(center, 1)
+
+        bottom_card = QFrame()
+        bottom_card.setObjectName("Card")
+        bottom_layout = QHBoxLayout(bottom_card)
+        bottom_layout.setContentsMargins(14, 12, 14, 12)
+        bottom_layout.setSpacing(10)
+
+        self._btn_start = GlassButton("Start Camera")
+        self._btn_start.setProperty("variant", "start")
+        self._btn_start.setIcon(self._icon("camera"))
+        self._btn_start.clicked.connect(self._start)
+
+        self._btn_stop = GlassButton("Stop Camera")
+        self._btn_stop.setProperty("variant", "stop")
+        self._btn_stop.setIcon(self._icon("stop"))
+        self._btn_stop.clicked.connect(self._stop)
+        self._btn_stop.setEnabled(False)
+
+        self._btn_mouse = GlassButton("Enable Mouse")
+        self._btn_mouse.setProperty("variant", "mouse")
+        self._btn_mouse.setProperty("active", "false")
+        self._btn_mouse.setIcon(self._icon("mouse"))
+        self._btn_mouse.clicked.connect(self._toggle_mouse)
+
+        self._btn_settings = GlassButton("Settings")
+        self._btn_settings.setIcon(self._icon("settings"))
+        self._btn_settings.setEnabled(False)
+
+        bottom_layout.addWidget(self._btn_start)
+        bottom_layout.addWidget(self._btn_stop)
+        bottom_layout.addWidget(self._btn_mouse)
+        bottom_layout.addStretch(1)
+        bottom_layout.addWidget(self._btn_settings)
+
+        shell_layout.addWidget(bottom_card)
+
+        self._overlay_opacity = QGraphicsOpacityEffect(self._overlay_pill)
+        self._overlay_pill.setGraphicsEffect(self._overlay_opacity)
+        self._overlay_fade = QPropertyAnimation(self._overlay_opacity, b"opacity", self)
+        self._overlay_fade.setDuration(180)
+        self._overlay_fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _icon(self, name: str) -> QIcon:
+        path = _ASSETS_DIR / f"{name}.svg"
+        if path.exists():
+            return QIcon(str(path))
+        return QIcon()
+
+    def _status_gesture_name(self, gesture: GestureType) -> str:
+        if gesture == GestureType.MOVE:
+            return "MOVE"
+        if gesture in (GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK):
+            return "CLICK"
+        if gesture == GestureType.RIGHT_CLICK:
+            return "R-CLICK"
+        if gesture == GestureType.SCROLL:
+            return "SCROLL"
+        if gesture == GestureType.DRAG:
+            return "DRAG"
+        if gesture in (GestureType.PAUSE, GestureType.OPEN_PALM):
+            return "PAUSE"
+        return "IDLE"
+
+    def _overlay_name(self, gesture: GestureType) -> str:
+        if gesture == GestureType.MOVE:
+            return "HOVER MOVE"
+        if gesture in (GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK):
+            return "FORWARD TAP"
+        if gesture == GestureType.RIGHT_CLICK:
+            return "TWO FINGER TAP"
+        if gesture == GestureType.SCROLL:
+            return "VERTICAL SWIPE"
+        if gesture == GestureType.DRAG:
+            return "FORWARD HOLD"
+        if gesture in (GestureType.PAUSE, GestureType.OPEN_PALM):
+            return "OPEN PALM"
+        return "IDLE"
+
+    def _animate_overlay_pill(self):
+        self._overlay_fade.stop()
+        self._overlay_fade.setStartValue(0.35)
+        self._overlay_fade.setEndValue(1.0)
+        self._overlay_fade.start()
 
     def _start(self):
         if self._processing or (self._proc_thread and self._proc_thread.is_alive()):
             return
 
-        if self._update_job is not None:
-            try:
-                self.after_cancel(self._update_job)
-            except Exception:
-                pass
-            self._update_job = None
-
-        # Ensure tracker is initialized fresh each start.
         try:
             self._tracker.close()
         except Exception:
@@ -241,24 +537,25 @@ class MainWindow(ctk.CTk):
         self._tracker = HandTracker()
 
         if not self._camera.start():
-            reason = self._camera.last_error or "Check permissions and camera availability"
-            self._preview_image = None
-            self._preview.configure(image=self._preview_image,
-                                    text=f"❌ Cannot open camera\n{reason}")
-            self._cam_stat_lbl.configure(text="● Error", text_color="#E74C3C")
+            self._preview_image.setText(f"Cannot open camera\n{self._camera.last_error or ''}")
+            self._status_dot.setStyleSheet("color: #F87171; font-size: 15px;")
+            self._status_text.setText("Error")
             return
 
         with self._lock:
             self._error_msg = ""
+            self._gesture = GestureType.NONE
+            self._overlay_label = "IDLE"
 
         self._processing = True
         self._proc_thread = threading.Thread(target=self._process_loop, daemon=True)
         self._proc_thread.start()
-        
-        self._cam_stat_lbl.configure(text="● Live", text_color="#2FA572")
-        self._btn_start.configure(state="disabled")
-        self._btn_stop.configure(state="normal")
-        self._update_gui()
+
+        self._status_dot.setStyleSheet("color: #4ADE80; font-size: 15px;")
+        self._status_text.setText("Online")
+        self._btn_start.setEnabled(False)
+        self._btn_stop.setEnabled(True)
+        self._ui_timer.start()
 
     def _stop(self):
         was_processing = self._processing
@@ -266,15 +563,7 @@ class MainWindow(ctk.CTk):
 
         if self._proc_thread and self._proc_thread.is_alive():
             self._proc_thread.join(timeout=2.0)
-        if self._proc_thread:
-            self._proc_thread = None
-
-        if self._update_job is not None:
-            try:
-                self.after_cancel(self._update_job)
-            except Exception:
-                pass
-            self._update_job = None
+        self._proc_thread = None
 
         self._camera.stop()
         try:
@@ -285,55 +574,37 @@ class MainWindow(ctk.CTk):
         if self._mouse.is_dragging:
             self._mouse.end_drag()
         self._was_dragging = False
+        self._mapper.reset()
 
         with self._lock:
             self._disp_frame = None
             self._gesture = GestureType.NONE
             self._hand_ok = False
             self._raw_hand = None
-            self._overlay_label = ""
+            self._overlay_label = "IDLE"
             if not was_processing:
                 self._error_msg = ""
 
-        self._cam_stat_lbl.configure(text="● Offline", text_color="#E74C3C")
-        self._btn_start.configure(state="normal")
-        self._btn_stop.configure(state="disabled")
-        self._preview_image = None
-        self._preview.configure(image=self._preview_image, text="Camera Offline")
-        self._mapper.reset()
+        self._ui_timer.stop()
+        self._preview_image.clear()
+        self._preview_image.setText("Camera Offline")
+        self._status_dot.setStyleSheet("color: #F87171; font-size: 15px;")
+        self._status_text.setText("Offline")
+        self._btn_start.setEnabled(True)
+        self._btn_stop.setEnabled(False)
 
     def _toggle_mouse(self):
         self._mouse_enabled = not self._mouse_enabled
-        if self._mouse_enabled:
-            self._btn_mouse.configure(text="🖱 Disable Mouse", fg_color="#3B8ED0", text_color="white")
-        else:
-            self._btn_mouse.configure(text="🖱 Enable Mouse", fg_color="transparent", text_color="#3B8ED0")
-
-    def _toggle_perf(self):
-        self._perf_mode = bool(self._btn_perf.get())
-
-    def _toggle_debug(self):
-        self._debug_mode = bool(self._btn_debug.get())
-
-    def _on_close(self):
-        self._closing = True
-        self._stop()
-        try:
-            self._tracker.close()
-        except Exception:
-            pass
-        self.destroy()
-
-    # ==================================================================
-    # Processing thread
-    # ==================================================================
+        self._btn_mouse.setText("Disable Mouse" if self._mouse_enabled else "Enable Mouse")
+        self._btn_mouse.setProperty("active", "true" if self._mouse_enabled else "false")
+        self._btn_mouse.style().unpolish(self._btn_mouse)
+        self._btn_mouse.style().polish(self._btn_mouse)
 
     def _process_loop(self):
         skip = False
-        last_overlay_gesture = GestureType.NONE
         last_action_gesture = GestureType.NONE
+
         while self._processing:
-            # Camera disconnected?
             if not self._camera.is_running:
                 with self._lock:
                     self._error_msg = "Camera disconnected"
@@ -342,14 +613,13 @@ class MainWindow(ctk.CTk):
 
             frame = self._camera.get_frame()
             if frame is None:
-                time.sleep(0.005)
+                time.sleep(0.004)
                 continue
 
             frame = cv2.flip(frame, 1)
             fh, fw = frame.shape[:2]
             self._mapper.set_camera_size(fw, fh)
 
-            # Frame skipping in performance mode
             if skip and self._perf_mode:
                 skip = False
                 with self._lock:
@@ -366,30 +636,24 @@ class MainWindow(ctk.CTk):
             gesture = result.gesture
             gesture_changed = gesture != last_action_gesture
 
-            # Mouse control
             if self._mouse_enabled and landmarks and gesture not in _PAUSE_GESTURES:
                 tip = landmarks[8]
-                # Landmarks are in PROCESS_WIDTH/PROCESS_HEIGHT space; scale to full frame first.
                 cam_x = int((tip[0] / PROCESS_WIDTH) * fw)
                 cam_y = int((tip[1] / PROCESS_HEIGHT) * fh)
                 sx, sy = self._mapper.map_to_screen(cam_x, cam_y)
 
                 if gesture == GestureType.MOVE:
                     self._mouse.move_cursor(sx, sy)
-                elif gesture == GestureType.LEFT_CLICK:
-                    if gesture_changed:
-                        self._mouse.move_cursor(sx, sy)
-                        self._mouse.left_click()
-                elif gesture == GestureType.DOUBLE_CLICK:
-                    if gesture_changed:
-                        self._mouse.move_cursor(sx, sy)
-                        self._mouse.double_click()
-                elif gesture == GestureType.RIGHT_CLICK:
-                    if gesture_changed:
-                        self._mouse.right_click()
-                elif gesture == GestureType.SCROLL:
-                    if result.scroll_delta != 0:
-                        self._mouse.scroll(result.scroll_delta)
+                elif gesture == GestureType.LEFT_CLICK and gesture_changed:
+                    self._mouse.move_cursor(sx, sy)
+                    self._mouse.left_click()
+                elif gesture == GestureType.DOUBLE_CLICK and gesture_changed:
+                    self._mouse.move_cursor(sx, sy)
+                    self._mouse.double_click()
+                elif gesture == GestureType.RIGHT_CLICK and gesture_changed:
+                    self._mouse.right_click()
+                elif gesture == GestureType.SCROLL and result.scroll_delta != 0:
+                    self._mouse.scroll(result.scroll_delta)
                 elif gesture == GestureType.DRAG:
                     self._mouse.move_cursor(sx, sy)
                     if not self._was_dragging:
@@ -398,48 +662,34 @@ class MainWindow(ctk.CTk):
                 if self._was_dragging and gesture != GestureType.DRAG:
                     self._mouse.end_drag()
                 self._was_dragging = gesture == GestureType.DRAG
-
             elif self._was_dragging:
                 self._mouse.end_drag()
                 self._was_dragging = False
 
             last_action_gesture = gesture
 
-            fps_v = self._fps.update()
-            if gesture != last_overlay_gesture:
-                overlay_label = _gesture_label(gesture)
-                last_overlay_gesture = gesture
-            else:
-                overlay_label = self._overlay_label
-
             with self._lock:
                 self._disp_frame = frame
                 self._gesture = gesture
                 self._hand_ok = landmarks is not None
                 self._raw_hand = raw_hand
-                self._fps_val = fps_v
-                self._overlay_label = overlay_label
+                self._fps_val = self._fps.update()
+                self._overlay_label = self._overlay_name(gesture)
 
             if self._fps.should_skip():
                 skip = True
 
-    # ==================================================================
-    # GUI update (runs on main thread via after())
-    # ==================================================================
-
     def _update_gui(self):
-        if self._closing or not self._processing:
-            # Check for error to display
+        if self._closing:
+            return
+
+        if not self._processing:
             with self._lock:
                 err = self._error_msg
             if err:
-                try:
-                    self._preview.configure(image=None, text=f"⚠ {err}")
-                    self._btn_start.configure(state="normal")
-                    self._btn_stop.configure(state="disabled")
-                    self._cam_stat_lbl.configure(text="● Error", text_color="#E74C3C")
-                except Exception:
-                    pass
+                self._preview_image.setText(f"Warning: {err}")
+                self._btn_start.setEnabled(True)
+                self._btn_stop.setEnabled(False)
             return
 
         with self._lock:
@@ -448,41 +698,54 @@ class MainWindow(ctk.CTk):
             hand = self._hand_ok
             raw_hand = self._raw_hand
             fps = self._fps_val
-            overlay_label = self._overlay_label
+            overlay_text = self._overlay_label
 
         if frame is not None:
-            try:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                # Draw control region to stabilize cursor mapping near frame edges.
-                x1, y1, x2, y2 = self._mapper.control_region()
-                cv2.rectangle(rgb, (x1, y1), (x2, y2), (50, 180, 255), 2)
-                
-                # Draw skeleton if requested and found
-                if self._debug_mode and not self._perf_mode and raw_hand:
-                    self._tracker.draw_landmarks(rgb, raw_hand)
+            if self._debug_mode and raw_hand:
+                self._tracker.draw_landmarks(rgb, raw_hand)
 
-                # Resize and add overlay using PIL
-                pil_img = Image.fromarray(rgb).resize((_PREVIEW_W, _PREVIEW_H), Image.BILINEAR).convert("RGBA")
-                if overlay_label:
-                    _draw_action_overlay_pil(pil_img, gesture)
+            display_w = max(320, self._preview_image.width())
+            display_h = max(240, self._preview_image.height())
+            pil_img = Image.fromarray(rgb).resize((display_w, display_h), Image.Resampling.BILINEAR)
 
-                self._preview_image = ctk.CTkImage(
-                    light_image=pil_img,
-                    dark_image=pil_img,
-                    size=(_PREVIEW_W, _PREVIEW_H),
+            image_data = pil_img.tobytes("raw", "RGB")
+            qimg = QImage(image_data, pil_img.width, pil_img.height, QImage.Format.Format_RGB888)
+            self._preview_pixmap = QPixmap.fromImage(qimg)
+            self._preview_image.setPixmap(
+                self._preview_pixmap.scaled(
+                    self._preview_image.size(),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
                 )
-                self._preview.configure(image=self._preview_image, text="")
-            except Exception:
-                pass
+            )
 
-        self._fps_lbl.configure(text=f"FPS: {fps:.0f}")
-        self._gest_lbl.configure(text=gesture.value)
-        hc = "#2FA572" if hand else "#AAAAAA"
-        self._hand_lbl.configure(text=f"Hand: {'Detected ✓' if hand else 'Not Found'}",
-                                 text_color=hc)
-        mc = "#2FA572" if self._mouse_enabled else "#AAAAAA"
-        self._mode_lbl.configure(text=f"Mouse: {'Active' if self._mouse_enabled else 'Disabled'}",
-                                 text_color=mc)
+        self._fps_lbl.setText(f"FPS: {fps:.0f}")
+        self._fps_overlay.setText(f"FPS: {fps:.0f}")
+        self._finger_overlay.setText("Detected Fingers: Present" if hand else "Detected Fingers: -")
 
-        self._update_job = self.after(33, self._update_gui)
+        self._hand_status.setText("Hand: Detected" if hand else "Hand: Not Detected")
+        self._mouse_status.setText("Mouse: Enabled" if self._mouse_enabled else "Mouse: Disabled")
+
+        badge_text = self._status_gesture_name(gesture)
+        badge_color = _BADGE_COLORS.get(badge_text, "#374151")
+        self._gesture_badge.setText(badge_text)
+        self._gesture_badge.setStyleSheet(
+            f"border-radius: 14px; padding: 8px 14px; color: #F7FAFF;"
+            f"font-weight: 700; font-size: 17px; background: {badge_color};"
+        )
+
+        if overlay_text != self._last_overlay_text:
+            self._overlay_pill.setText(overlay_text)
+            self._animate_overlay_pill()
+            self._last_overlay_text = overlay_text
+
+    def closeEvent(self, event):
+        self._closing = True
+        self._stop()
+        try:
+            self._tracker.close()
+        except Exception:
+            pass
+        event.accept()
