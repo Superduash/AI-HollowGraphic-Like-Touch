@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import platform
-import pyautogui
 
 try:
     import mediapipe as mp  # type: ignore
@@ -48,14 +47,7 @@ def _ensure_mediapipe_solutions() -> None:
 
 
 def _configure_input_latency() -> None:
-    # Reduce pyautogui built-in delays for lower latency.
-    try:
-        pyautogui.PAUSE = 0
-        pyautogui.MINIMUM_DURATION = 0
-        pyautogui.MINIMUM_SLEEP = 0
-        pyautogui.FAILSAFE = False
-    except Exception:
-        pass
+    pass
 
 
 def _boost_runtime_priority() -> None:

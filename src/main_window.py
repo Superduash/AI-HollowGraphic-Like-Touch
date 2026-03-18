@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import ctypes
 import platform
+import subprocess
 import threading
 import time
-from pathlib import Path
 
 import cv2
-import pyautogui
+import qtawesome as qta
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QIcon, QImage, QPixmap
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -21,13 +24,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .camera import CameraSource
+from .camera_thread import CameraDevice, CameraThread
 from .constants import _BADGE_COLORS, _OVERLAY_LABELS
-from .engine import GestureEngine
-from .mapper import CursorMapper
+from .cursor_mapper import CursorMapper
+from .gesture_detector import GestureDetector
+from .hand_tracker import HandTracker
 from .models import GestureType
 from .mouse import MouseController
-from .tracker import HandTracker
 from .utils import _boost_runtime_priority, _configure_input_latency
 
 
@@ -40,32 +43,29 @@ class StatusOverlay(QWidget):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setFixedSize(260, 120)
+        self.setFixedSize(280, 130)
 
         root = QFrame(self)
         root.setObjectName("overlayRoot")
-        root.setGeometry(0, 0, 260, 120)
+        root.setGeometry(0, 0, 280, 130)
         layout = QVBoxLayout(root)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
 
         top = QHBoxLayout()
-        top.setSpacing(10)
         self._dot = QLabel("●")
         self._dot.setObjectName("statusOnline")
-        self._title = QLabel("Windows Hover")
+        self._title = QLabel("Holographic Touch")
         self._title.setObjectName("overlayTitle")
+        self._fps = QLabel("FPS 0")
+        self._fps.setObjectName("muted")
         top.addWidget(self._dot)
         top.addWidget(self._title)
         top.addStretch(1)
-        self._fps = QLabel("FPS 0")
-        self._fps.setObjectName("muted")
         top.addWidget(self._fps)
         layout.addLayout(top)
 
         mid = QHBoxLayout()
-        mid.setSpacing(10)
         self._badge = QLabel("PAUSED")
         self._badge.setObjectName("badge")
         self._hand = QLabel("Hand: -")
@@ -76,7 +76,6 @@ class StatusOverlay(QWidget):
         layout.addLayout(mid)
 
         btns = QHBoxLayout()
-        btns.setSpacing(8)
         self.open_btn = QPushButton("Open")
         self.open_btn.setObjectName("ghostButton")
         self.disable_btn = QPushButton("Disable Mouse")
@@ -88,30 +87,18 @@ class StatusOverlay(QWidget):
 
         self.setStyleSheet(
             """
-            #overlayRoot {
-                background: #1A1D24;
-                border: 1px solid #222733;
-                border-radius: 14px;
-            }
+            #overlayRoot { background: #1A1D24; border: 1px solid #222733; border-radius: 14px; }
             QLabel { color: #E5E7EB; font-size: 13px; }
             #overlayTitle { font-weight: 700; }
             #muted { color: #A3A9B8; }
             #statusOnline { color: #4ADE80; font-size: 18px; }
             #badge {
-                border-radius: 12px;
-                padding: 6px 10px;
-                font-weight: 700;
-                background: #334155;
-                color: #F8FAFC;
-                max-width: 160px;
+                border-radius: 12px; padding: 6px 10px; font-weight: 700;
+                background: #334155; color: #F8FAFC; max-width: 170px;
             }
             QPushButton {
-                border: 0;
-                border-radius: 12px;
-                color: #F8FAFC;
-                padding: 8px 10px;
-                font-weight: 600;
-                background: #2A3040;
+                border: 0; border-radius: 12px; color: #F8FAFC;
+                padding: 8px 10px; font-weight: 600; background: #2A3040;
             }
             QPushButton:hover { background: #394055; }
             #ghostButton { background: #252A36; color: #E5E7EB; }
@@ -130,51 +117,115 @@ class StatusOverlay(QWidget):
         )
 
 
+class SettingsDialog(QDialog):
+    def __init__(self, parent: QWidget, cameras: list[CameraDevice], selected_index: int) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        title_row = QHBoxLayout()
+        title_icon = QLabel()
+        title_icon.setPixmap(qta.icon("fa5s.cog", color="#A5B4FC").pixmap(QSize(20, 20)))
+        title = QLabel("Settings")
+        title.setObjectName("title")
+        title_row.addWidget(title_icon)
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        layout.addLayout(title_row)
+
+        cam_label = QLabel("Camera Selection")
+        cam_label.setObjectName("section")
+        self.camera_combo = QComboBox()
+        self.camera_combo.setObjectName("cameraSelector")
+        self.camera_combo.setMinimumHeight(36)
+
+        for dev in cameras:
+            self.camera_combo.addItem(dev.name, dev.index)
+        if self.camera_combo.count() > 0:
+            match = self.camera_combo.findData(selected_index)
+            self.camera_combo.setCurrentIndex(max(0, match))
+
+        close_btn = QPushButton("Close")
+        close_btn.setIcon(qta.icon("fa5s.times-circle", color="#F8FAFC"))
+        close_btn.setObjectName("ghostButton")
+        close_btn.clicked.connect(self.accept)
+
+        layout.addWidget(cam_label)
+        layout.addWidget(self.camera_combo)
+        layout.addSpacing(6)
+        layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self.setStyleSheet(
+            """
+            QDialog { background: #171A22; color: #E5E7EB; border: 1px solid #2C3342; border-radius: 14px; }
+            QLabel { color: #E5E7EB; }
+            #title { font-size: 18px; font-weight: 700; }
+            #section { font-size: 13px; color: #A3A9B8; font-weight: 600; }
+            QComboBox {
+                background: #252C3B; color: #F8FAFC; border: 0;
+                border-radius: 8px; padding: 8px;
+            }
+            QComboBox:drop-down { border: 0; }
+            QPushButton {
+                border: 0; border-radius: 10px; padding: 8px 12px;
+                color: #F8FAFC; font-weight: 600; background: #2A3040;
+            }
+            QPushButton:hover { background: #394055; }
+            #ghostButton { background: #252A36; }
+            #ghostButton:hover { background: #313849; }
+            """
+        )
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
         _configure_input_latency()
-
         if platform.system() != "Windows":
-            print("Windows Hover is optimized for Windows.")
+            print("Holographic Touch is optimized for Windows.")
 
         self.setWindowTitle("Holographic Touch")
         self.resize(1280, 820)
         self.setMinimumSize(1024, 680)
 
-        self.camera = CameraSource(640, 480)
+        self.camera = CameraThread(640, 480)
         self._mediapipe_error: str | None = None
         try:
             self.tracker: HandTracker | None = HandTracker(320, 240)
         except Exception as exc:
             self.tracker = None
             self._mediapipe_error = str(exc)
-        self.gestures = GestureEngine()
-        self.fps = 0.0
-        self._fps_prev = time.monotonic()
 
-        sw, sh = pyautogui.size()
-        self.mapper = CursorMapper(640, 480, sw, sh)
+        self.gestures = GestureDetector()
+        self.mapper = CursorMapper(640, 480)
         self.mouse = MouseController()
 
+        self.fps = 0.0
+        self._fps_prev = time.monotonic()
         self.running = False
-        self.proc_thread = None
+        self.proc_thread: threading.Thread | None = None
         self.mouse_enabled = False
         self.debug = True
         self._overlay: StatusOverlay | None = None
-
-        # Self-contained: use assets shipped inside the app directory.
-        self._icons_dir = Path(__file__).resolve().parent.parent / "assets" / "icons"
+        self._dimmer: QWidget | None = None
 
         self._lock = threading.Lock()
         self._frame = None
         self._hand_proto = None
+        self._hand_data = None
         self._gesture = GestureType.PAUSE
         self._overlay_text = _OVERLAY_LABELS.get(GestureType.PAUSE, "PAUSED")
         self._fingers = 0
+        self._kbd_locked = False
 
         self._build_ui()
+        self._populate_cameras()
 
         if self._mediapipe_error:
             self.cam_status.setText("MediaPipe Error")
@@ -185,30 +236,8 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self._render)
         self.timer.start(16)
 
-        self._last_esc_time = 0.0
-        try:
-            import keyboard  # type: ignore
-            keyboard.on_press_key("esc", self._on_esc_press)
-        except Exception:
-            pass
-
-    def _on_esc_press(self, event=None) -> None:
-        now = time.monotonic()
-        if now - self._last_esc_time < 0.5:
-            self._last_esc_time = 0.0
-            QTimer.singleShot(0, self._execute_panic)
-        else:
-            self._last_esc_time = now
-
-    def _execute_panic(self) -> None:
-        if self.mouse_enabled:
-            self.toggle_mouse()
-        if self.mouse.is_dragging:
-            self.mouse.end_drag()
-
-    def _icon(self, name: str) -> QIcon:
-        p = self._icons_dir / name
-        return QIcon(str(p)) if p.exists() else QIcon()
+    def _qa(self, icon_name: str, color: str = "#F8FAFC"):
+        return qta.icon(icon_name, color=color)
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -225,8 +254,7 @@ class MainWindow(QMainWindow):
         header_l.setSpacing(12)
 
         icon_label = QLabel()
-        icon_label.setPixmap(self._icon("camera.svg").pixmap(QSize(22, 22)))
-
+        icon_label.setPixmap(self._qa("fa5s.video", "#7DD3FC").pixmap(QSize(22, 22)))
         self.title_lbl = QLabel("Holographic Touch")
         self.title_lbl.setObjectName("title")
 
@@ -242,7 +270,6 @@ class MainWindow(QMainWindow):
         header_l.addWidget(self.cam_status)
         header_l.addSpacing(10)
         header_l.addWidget(self.fps_lbl)
-        header_l.addSpacing(10)
 
         body_l = QHBoxLayout()
         body_l.setSpacing(14)
@@ -268,7 +295,6 @@ class MainWindow(QMainWindow):
         sl.setSpacing(8)
         status_title = QLabel("Gesture Status")
         status_title.setObjectName("cardTitle")
-
         self.gesture_lbl = QLabel("PAUSED")
         self.gesture_lbl.setObjectName("badge")
         self.hand_lbl = QLabel("Hand: Not Detected")
@@ -292,17 +318,18 @@ class MainWindow(QMainWindow):
         gl.addWidget(guide_title, 0, 0, 1, 3)
 
         guide_rows = [
-            ("move.svg", "Index finger", "Move cursor"),
-            ("click.svg", "Thumb + Index pinch", "Left click"),
-            ("drag.svg", "Hold Thumb + Index pinch", "Drag"),
-            ("click.svg", "Index down + Thumb + Middle pinch", "Right click"),
-            ("scroll.svg", "Peace sign + up/down", "Scroll"),
-            ("settings.svg", "Open palm", "Task View (Win+Tab)"),
-            ("pause.svg", "No gesture / hand down", "Pause"),
+            ("fa5s.mouse-pointer", "Index finger", "Move cursor"),
+            ("fa5s.hand-pointer", "Thumb + Index pinch", "Left click"),
+            ("fa5s.arrows-alt", "Hold Thumb + Index pinch", "Drag"),
+            ("fa5s.hand-point-up", "Middle down + Thumb pinch", "Right click"),
+            ("fa5s.arrows-alt-v", "Peace sign + up/down", "Scroll"),
+            ("fa5s.th-large", "Open palm", "Task View (Win+Tab)"),
+            ("fa5s.keyboard", "Thumb + Index + Pinky", "On-Screen Keyboard"),
+            ("fa5s.pause-circle", "No gesture / hand down", "Pause"),
         ]
-        for i, (ico, a, b) in enumerate(guide_rows, start=1):
+        for i, (icon_name, a, b) in enumerate(guide_rows, start=1):
             il = QLabel()
-            il.setPixmap(self._icon(ico).pixmap(QSize(16, 16)))
+            il.setPixmap(self._qa(icon_name, "#93C5FD").pixmap(QSize(16, 16)))
             tl = QLabel(a)
             dl = QLabel(b)
             dl.setObjectName("muted")
@@ -327,14 +354,16 @@ class MainWindow(QMainWindow):
         cl.setSpacing(10)
 
         self.start_btn = QPushButton("Start Camera")
-        self.start_btn.setIcon(self._icon("camera.svg"))
+        self.start_btn.setIcon(self._qa("fa5s.video", "#0B1118"))
         self.start_btn.setObjectName("greenButton")
+
         self.stop_btn = QPushButton("Stop Camera")
-        self.stop_btn.setIcon(self._icon("stop.svg"))
+        self.stop_btn.setIcon(self._qa("fa5s.stop-circle", "#0B1118"))
         self.stop_btn.setObjectName("redButton")
         self.stop_btn.setEnabled(False)
+
         self.mouse_btn = QPushButton("Enable Mouse")
-        self.mouse_btn.setIcon(self._icon("mouse.svg"))
+        self.mouse_btn.setIcon(self._qa("fa5s.mouse-pointer", "#0B1118"))
         self.mouse_btn.setObjectName("blueButton")
 
         self._region_label = QLabel(f"Control margin: {self.mapper.frame_r}")
@@ -343,11 +372,16 @@ class MainWindow(QMainWindow):
         self._region_slider.setRange(40, 200)
         self._region_slider.setValue(int(self.mapper.frame_r))
         self._region_slider.setFixedWidth(180)
-        self._region_slider.valueChanged.connect(self._set_control_margin)
+
+        self.settings_btn = QPushButton("Settings")
+        self.settings_btn.setIcon(self._qa("fa5s.cog", "#0B1118"))
+        self.settings_btn.setObjectName("purpleButton")
 
         self.start_btn.clicked.connect(self.start_camera)
         self.stop_btn.clicked.connect(self.stop_camera)
         self.mouse_btn.clicked.connect(self.toggle_mouse)
+        self._region_slider.valueChanged.connect(self._set_control_margin)
+        self.settings_btn.clicked.connect(self._open_settings_dialog)
 
         cl.addWidget(self.start_btn)
         cl.addWidget(self.stop_btn)
@@ -356,50 +390,36 @@ class MainWindow(QMainWindow):
         cl.addWidget(self._region_label)
         cl.addWidget(self._region_slider)
         cl.addStretch(1)
+        cl.addWidget(self.settings_btn)
 
         top.addWidget(header)
-
         body_wrap = QWidget()
         body_wrap.setLayout(body_l)
         top.addWidget(body_wrap, 1)
-
         top.addWidget(controls)
 
         self.setStyleSheet(
             """
             QMainWindow { background: #0F1115; color: #E5E7EB; }
             #headerCard, #cameraCard, #sideCard, #controlCard {
-                background: #1A1D24;
-                border: 1px solid #222733;
-                border-radius: 16px;
+                background: #1A1D24; border: 1px solid #222733; border-radius: 16px;
             }
             #title { font-size: 20px; font-weight: 700; color: #F3F4F6; }
             #statusOffline { color: #F87171; font-size: 18px; }
             #statusOnline { color: #4ADE80; font-size: 18px; }
             #preview {
-                background: #0D1016;
-                border-radius: 14px;
-                border: 1px solid #263041;
-                color: #9CA3AF;
-                font-size: 18px;
+                background: #0D1016; border-radius: 14px; border: 1px solid #263041;
+                color: #9CA3AF; font-size: 18px;
             }
             #cardTitle { font-size: 14px; font-weight: 700; color: #F3F4F6; }
             #muted { color: #A3A9B8; }
             #badge {
-                border-radius: 12px;
-                padding: 6px 10px;
-                font-weight: 700;
-                background: #334155;
-                color: #F8FAFC;
-                max-width: 160px;
+                border-radius: 12px; padding: 6px 10px; font-weight: 700;
+                background: #334155; color: #F8FAFC; max-width: 160px;
             }
             QPushButton {
-                border: 0;
-                border-radius: 12px;
-                padding: 10px 14px;
-                color: #F8FAFC;
-                font-weight: 600;
-                background: #2A3040;
+                border: 0; border-radius: 12px; padding: 10px 14px;
+                color: #F8FAFC; font-weight: 600; background: #2A3040;
             }
             QPushButton:hover { background: #394055; }
             QPushButton:disabled { background: #202532; color: #6B7280; }
@@ -411,10 +431,84 @@ class MainWindow(QMainWindow):
             #blueButton:hover { background: #79B5FB; }
             #purpleButton { background: #A78BFA; color: #0B1118; }
             #purpleButton:hover { background: #B79EFB; }
-            #ghostButton { background: #252A36; color: #E5E7EB; }
-            #ghostButton:hover { background: #313849; }
             """
         )
+
+    def _show_dimmer(self) -> None:
+        if self._dimmer is not None:
+            self._dimmer.deleteLater()
+        self._dimmer = QWidget(self)
+        self._dimmer.setObjectName("windowDimmer")
+        self._dimmer.setGeometry(self.rect())
+        self._dimmer.setStyleSheet("#windowDimmer { background: rgba(5, 8, 14, 170); }")
+        self._dimmer.show()
+        self._dimmer.raise_()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._dimmer is not None:
+            self._dimmer.setGeometry(self.rect())
+
+    def _populate_cameras(self) -> list[CameraDevice]:
+        return self.camera.enumerate_cameras()
+
+    def _open_settings_dialog(self) -> None:
+        cameras = self._populate_cameras()
+        self._show_dimmer()
+
+        dlg = SettingsDialog(self, cameras, self.camera.camera_index)
+        dlg.camera_combo.currentIndexChanged.connect(
+            lambda idx: self._on_camera_selected(dlg.camera_combo.itemData(idx))
+        )
+        dlg.exec()
+
+        if self._dimmer is not None:
+            self._dimmer.hide()
+            self._dimmer.deleteLater()
+            self._dimmer = None
+
+    def _on_camera_selected(self, camera_index) -> None:
+        if camera_index is None:
+            return
+        index = int(camera_index)
+
+        if not self.running:
+            self.camera.camera_index = index
+            return
+
+        ok = self.camera.switch_camera(index)
+        if not ok:
+            self.cam_status.setText("Cannot open selected camera")
+
+    def _osk_running(self) -> bool:
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            out = subprocess.check_output(
+                ["tasklist", "/FI", "IMAGENAME eq osk.exe"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                creationflags=flags,
+            )
+            return "osk.exe" in out.lower()
+        except Exception:
+            return False
+
+    def _launch_keyboard(self) -> None:
+        if self._kbd_locked:
+            return
+        if self._osk_running():
+            return
+
+        self._kbd_locked = True
+        try:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen(["osk.exe"], creationflags=flags)
+        except Exception:
+            pass
+        QTimer.singleShot(800, self._unlock_keyboard)
+
+    def _unlock_keyboard(self) -> None:
+        self._kbd_locked = False
 
     def _set_control_margin(self, value: int) -> None:
         v = int(value)
@@ -424,7 +518,6 @@ class MainWindow(QMainWindow):
     def start_camera(self) -> None:
         if self.running:
             return
-
         if self._mediapipe_error:
             self.preview.setText(self._mediapipe_error)
             return
@@ -440,8 +533,8 @@ class MainWindow(QMainWindow):
             self.preview.setText(self._mediapipe_error)
             self.start_btn.setEnabled(False)
             return
-        self.gestures = GestureEngine()
 
+        self.gestures = GestureDetector()
         if not self.camera.start():
             self.preview.setText("Cannot open camera")
             return
@@ -474,6 +567,7 @@ class MainWindow(QMainWindow):
             self._overlay_text = _OVERLAY_LABELS.get(GestureType.PAUSE, "PAUSED")
             self._fingers = 0
             self._hand_proto = None
+            self._hand_data = None
 
         self.preview.setPixmap(QPixmap())
         self.preview.setText("Camera Offline")
@@ -498,11 +592,9 @@ class MainWindow(QMainWindow):
                 self.tracker.close()
         except Exception:
             pass
-        try:
-            if self._overlay is not None:
-                self._overlay.close()
-        except Exception:
-            pass
+        if self._dimmer is not None:
+            self._dimmer.deleteLater()
+            self._dimmer = None
         event.accept()
 
     def toggle_mouse(self) -> None:
@@ -515,20 +607,18 @@ class MainWindow(QMainWindow):
                 self._overlay = StatusOverlay()
                 self._overlay.open_btn.clicked.connect(self._show_main_window)
                 self._overlay.disable_btn.clicked.connect(self._disable_mouse_from_overlay)
-                # Top-right-ish.
                 try:
-                    sw, _ = pyautogui.size()
+                    user32 = ctypes.windll.user32
+                    sw = user32.GetSystemMetrics(0)
                     self._overlay.move(max(10, sw - self._overlay.width() - 20), 20)
                 except Exception:
                     self._overlay.move(20, 20)
                 self._overlay.show()
 
-            # Minimize the main UI when mouse control is active.
             self.showMinimized()
         else:
             self.mouse_btn.setText("Enable Mouse")
             self.mouse_lbl.setText("Mouse: OFF")
-
             if self._overlay is not None:
                 self._overlay.close()
                 self._overlay = None
@@ -547,6 +637,7 @@ class MainWindow(QMainWindow):
         last_overlay = GestureType.NONE
         last_action = GestureType.NONE
         last_task_view_action = 0.0
+        last_hand_time = time.monotonic()
 
         _boost_runtime_priority()
         try:
@@ -555,6 +646,9 @@ class MainWindow(QMainWindow):
             pass
 
         while self.running:
+            if time.monotonic() - last_hand_time > 5.0:
+                time.sleep(0.2)
+
             frame = self.camera.latest()
             if frame is None:
                 time.sleep(0.001)
@@ -568,17 +662,28 @@ class MainWindow(QMainWindow):
             if tracker is None:
                 time.sleep(0.01)
                 continue
+
             hand_data, hand_proto = tracker.detect(frame)
+            if hand_proto is not None:
+                last_hand_time = time.monotonic()
+
             result = self.gestures.detect(hand_data)
             gesture = result.gesture
             gesture_changed = gesture != last_action
+
+            if self.mouse_enabled and gesture == GestureType.KEYBOARD and gesture_changed:
+                self._launch_keyboard()
 
             if self.mouse_enabled and gesture == GestureType.TASK_VIEW and gesture_changed:
                 now = time.monotonic()
                 if now - last_task_view_action >= 1.0:
                     last_task_view_action = now
                     try:
-                        pyautogui.hotkey("winleft", "tab")
+                        user32 = ctypes.windll.user32
+                        user32.keybd_event(0x5B, 0, 0, 0)
+                        user32.keybd_event(0x09, 0, 0, 0)
+                        user32.keybd_event(0x09, 0, 2, 0)
+                        user32.keybd_event(0x5B, 0, 2, 0)
                     except Exception:
                         pass
 
@@ -587,14 +692,24 @@ class MainWindow(QMainWindow):
                 fs = self.gestures._finger_states(hand_data["xy"])
                 fingers = int(fs.thumb) + int(fs.index) + int(fs.middle) + int(fs.ring) + int(fs.pinky)
 
-            if self.mouse_enabled and gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN, GestureType.MEDIA_NEXT, GestureType.MEDIA_PREV):
+            if self.mouse_enabled and gesture in {
+                GestureType.MEDIA_VOL_UP,
+                GestureType.MEDIA_VOL_DOWN,
+                GestureType.MEDIA_NEXT,
+                GestureType.MEDIA_PREV,
+            }:
                 if gesture_changed or gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN):
                     if gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN) and result.scroll_delta == 0:
                         pass
                     else:
                         self._execute_media(gesture, result.scroll_delta)
 
-            if self.mouse_enabled and hand_data and gesture not in {GestureType.NONE, GestureType.PAUSE, GestureType.TASK_VIEW, GestureType.KEYBOARD}:
+            if self.mouse_enabled and hand_data and gesture not in {
+                GestureType.NONE,
+                GestureType.PAUSE,
+                GestureType.TASK_VIEW,
+                GestureType.KEYBOARD,
+            }:
                 tip = hand_data["xy"][8]
                 cam_x = int((tip[0] / float(tracker.process_w)) * w)
                 cam_y = int((tip[1] / float(tracker.process_h)) * h)
@@ -615,7 +730,6 @@ class MainWindow(QMainWindow):
 
                 if gesture != GestureType.DRAG and self.mouse.is_dragging:
                     self.mouse.end_drag()
-
             elif self.mouse.is_dragging:
                 self.mouse.end_drag()
 
@@ -640,6 +754,7 @@ class MainWindow(QMainWindow):
                 self._overlay_text = overlay
                 self._fingers = fingers
                 self._hand_proto = hand_proto
+                self._hand_data = hand_data
 
     def _render(self) -> None:
         with self._lock:
@@ -648,6 +763,7 @@ class MainWindow(QMainWindow):
             overlay = self._overlay_text
             fingers = self._fingers
             hand_proto = self._hand_proto
+            hand_data = self._hand_data
 
         self.fps_lbl.setText(f"FPS {self.fps:.0f}")
         self.gesture_lbl.setText(gesture.value)
@@ -663,12 +779,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # When minimized (mouse control mode), keep the overlay responsive and
-        # avoid spending CPU on preview rendering.
-        if self.isMinimized():
-            return
-
-        if frame is None:
+        if self.isMinimized() or frame is None:
             return
 
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -678,7 +789,8 @@ class MainWindow(QMainWindow):
 
         tracker = self.tracker
         if self.debug and hand_proto is not None and tracker is not None:
-            tracker.draw(rgb, hand_proto)
+            label = hand_data["label"] if hand_data else "Right"
+            tracker.draw(rgb, hand_proto, label)
 
         cv2.putText(
             rgb,
@@ -723,15 +835,19 @@ class MainWindow(QMainWindow):
         )
 
     def _execute_media(self, gesture: GestureType, delta: int) -> None:
-        def _run():
+        def _run() -> None:
             try:
-                import ctypes
                 user32 = ctypes.windll.user32
                 vk = 0
-                if gesture == GestureType.MEDIA_VOL_UP: vk = 0xAF
-                elif gesture == GestureType.MEDIA_VOL_DOWN: vk = 0xAE
-                elif gesture == GestureType.MEDIA_NEXT: vk = 0xB0
-                elif gesture == GestureType.MEDIA_PREV: vk = 0xB1
+                if gesture == GestureType.MEDIA_VOL_UP:
+                    vk = 0xAF
+                elif gesture == GestureType.MEDIA_VOL_DOWN:
+                    vk = 0xAE
+                elif gesture == GestureType.MEDIA_NEXT:
+                    vk = 0xB0
+                elif gesture == GestureType.MEDIA_PREV:
+                    vk = 0xB1
+
                 if vk:
                     count = max(1, delta) if gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN) else 1
                     for _ in range(count):
@@ -739,4 +855,5 @@ class MainWindow(QMainWindow):
                         user32.keybd_event(vk, 0, 2, 0)
             except Exception:
                 pass
+
         threading.Thread(target=_run, daemon=True).start()
