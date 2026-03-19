@@ -479,7 +479,7 @@ class MainWindow(QMainWindow):
             "left_click": qta.icon("fa6s.arrow-pointer", color="#4ADE80"),
             "double_click": qta.icon("fa6s.hand-pointer", color="#4ADE80"),
             "drag": qta.icon("fa6s.hand", color="#A78BFA"),
-            "right_click": qta.icon("fa6s.mouse", color="#4ADE80"),
+            "right_click": qta.icon("fa6s.arrow-pointer", color="#4ADE80"),
             "scroll": qta.icon("fa6s.arrows-up-down", color="#A78BFA"),
             "task_view": qta.icon("fa6s.table-cells-large", color="#A78BFA"),
             "keyboard": qta.icon("fa6s.keyboard", color="#FBBF24"),
