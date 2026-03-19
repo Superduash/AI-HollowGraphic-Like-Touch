@@ -7,6 +7,14 @@ from dataclasses import dataclass
 
 import cv2
 
+try:
+    cv2.setLogLevel(0)
+except Exception:
+    try:
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+    except Exception:
+        pass
+
 from .tuning import (
     CAMERA_FAIL_SLEEP_S,
     CAMERA_LOOP_IDLE_S,
@@ -54,7 +62,7 @@ class CameraThread:
 
     def _backend_candidates(self) -> list[int]:
         if self._is_windows:
-            return [cv2.CAP_MSMF, cv2.CAP_DSHOW, cv2.CAP_ANY]
+            return [cv2.CAP_DSHOW, cv2.CAP_MSMF]
         return [cv2.CAP_ANY]
 
     @staticmethod
@@ -122,7 +130,7 @@ class CameraThread:
                     )
                     return cap
 
-        self._last_error = f"Cannot open camera index {idx} on MSMF/DSHOW/ANY at 1280x720 or 640x480"
+        self._last_error = f"Cannot open camera index {idx} on DSHOW/MSMF at 1280x720 or 640x480"
         return None
 
     # ------------------------------------------------------------------
@@ -163,8 +171,16 @@ class CameraThread:
 
     def enumerate_cameras(self, max_index: int = 8) -> list[CameraDevice]:
         """Probe camera indices with the same backend policy as runtime open."""
+        candidate_indices = list(range(max_index))
+        if self._is_windows:
+            known_names = self._dshow_camera_names() or self._system_camera_names()
+            if known_names:
+                # Keep one extra slot because device-index order can drift on some drivers.
+                probe_count = max(1, min(max_index, len(known_names) + 1))
+                candidate_indices = list(range(probe_count))
+
         open_indices: list[int] = []
-        for idx in range(max_index):
+        for idx in candidate_indices:
             found = False
             for backend in self._backend_candidates():
                 if found:
