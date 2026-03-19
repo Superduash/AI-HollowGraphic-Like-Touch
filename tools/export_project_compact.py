@@ -4,6 +4,10 @@ import argparse
 from pathlib import Path
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_OUTPUT = PROJECT_ROOT / "docs" / "artifacts" / "project_compact_export.txt"
+
+
 DEFAULT_EXCLUDE_DIRS = {
     ".git",
     ".venv",
@@ -114,14 +118,14 @@ def main() -> int:
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path(__file__).resolve().parent,
-        help="Project root to scan (default: script directory)",
+        default=PROJECT_ROOT,
+        help="Project root to scan (default: repo root)",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("project_compact_export.txt"),
-        help="Output text file path",
+        default=DEFAULT_OUTPUT,
+        help="Output text file path (default: docs/artifacts/project_compact_export.txt)",
     )
     parser.add_argument(
         "--max-bytes-per-file",
@@ -133,6 +137,8 @@ def main() -> int:
     args = parser.parse_args()
     root = args.root.resolve()
     output = args.output.resolve()
+
+    output.parent.mkdir(parents=True, exist_ok=True)
 
     count = export_project(root=root, output=output, max_bytes_per_file=args.max_bytes_per_file)
     print(f"Export complete: {count} files written to {output}")

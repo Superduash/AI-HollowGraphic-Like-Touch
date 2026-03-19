@@ -136,6 +136,7 @@ class GestureDetector:
             d_pip_wrist = self._distance(pip, wrist)
             d_tip_mcp = self._distance(tip, mcp)
             min_ext = 0.40 * self._hand_scale
+            
             return d_tip_wrist > d_pip_wrist and d_tip_mcp > min_ext
 
         index = is_extended(8, 6, 5)
@@ -151,7 +152,9 @@ class GestureDetector:
         last = self._last_action_time.get(gesture, 0.0)
         if now - last < cooldown:
             return False
-        if gesture in self._gesture_entry_set:
+        # If we're still in the same gesture state, allow it (continuous fire during hold)
+        # Only block if this is a NEW gesture attempt while the OLD one is still in cooldown
+        if gesture in self._gesture_entry_set and self._state != gesture:
             return False
         return True
 
@@ -335,6 +338,10 @@ class GestureDetector:
                 self._left_pinch_since = now
         else:
             self._left_pinch_since = None
+            # Clear gesture memory when pinch released
+            self._gesture_entry_set.discard(GestureType.LEFT_CLICK)
+            self._gesture_entry_set.discard(GestureType.DOUBLE_CLICK)
+            self._gesture_entry_set.discard(GestureType.DRAG)
 
         pinch_guard_active = (
             self._left_pinch_active
@@ -351,6 +358,12 @@ class GestureDetector:
 
         raw_state = GestureType.PAUSE
         media_delta = 0
+        
+        # Debug disabled
+        _debug = False
+        
+        if _debug:
+            print(f"[ROUTING] hand_label={hand_label}, left_pinch={self._left_pinch_active}, right_pinch={self._right_pinch_active}, move_pose={move_pose}, scroll_pose={scroll_pose}")
 
         if hand_label == "Left":
             self._dragging = False

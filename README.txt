@@ -3,6 +3,14 @@ Windows Hover (USB build)
 Run on Windows:
 1) Double-click run.bat
 
+Run tests:
+- Double-click QUICK_TEST.bat
+- Or run: python -X utf8 tests/run_tests.py
+
+Project layout:
+- docs/ contains reports, checklists, and verification notes
+- tools/ contains one-off helper scripts (exports, sanitizers, legacy scripts)
+
 Notes:
 - Uses the best available Python via the Windows 'py' launcher (prefers 3.12).
 - Creates a local .venv and installs requirements automatically on first run.
