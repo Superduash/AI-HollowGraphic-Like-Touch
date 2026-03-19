@@ -33,6 +33,14 @@ class HandTracker:
             min_tracking_confidence=0.5,
         )
 
+        # ── BUG B FIX: Grace period for hand loss ──
+        self._frames_no_hand = 0
+        self._grace_frames = 8
+        self._last_valid_result: tuple | None = None  # (hand_data, hand_proto)
+        self._log_cooldown_s = 0.6
+        self._last_log_ts = 0.0
+        self._last_logged_label = ""
+
     def set_processing_size(self, size: tuple[int, int] | None) -> None:
         if size is None:
             self._process_size = None
@@ -52,8 +60,16 @@ class HandTracker:
         result = self._hands.process(rgb)
 
         if not result.multi_hand_landmarks or not result.multi_handedness:
+            # ── BUG B FIX: Grace period — emit last known hand for 8 frames ──
+            self._frames_no_hand += 1
+            if self._frames_no_hand < self._grace_frames and self._last_valid_result is not None:
+                return self._last_valid_result
             self._label_history.clear()
+            self._last_valid_result = None
             return None, None
+
+        # Hand detected — reset grace counter
+        self._frames_no_hand = 0
 
         hand = result.multi_hand_landmarks[0]
         raw_label = result.multi_handedness[0].classification[0].label
@@ -68,9 +84,21 @@ class HandTracker:
         self._label_history.append(label)
         label = max(set(self._label_history), key=list(self._label_history).count)
 
-        print(f"[HAND] Raw={raw_label} Mirrored={is_mirrored} Final={label}")
+        now = cv2.getTickCount() / cv2.getTickFrequency()
+        if label != self._last_logged_label or (now - self._last_log_ts) >= self._log_cooldown_s:
+            print(f"[HAND] Raw={raw_label} Mirrored={is_mirrored} Final={label}")
+            self._last_logged_label = label
+            self._last_log_ts = now
 
         confidence = result.multi_handedness[0].classification[0].score
+
+        # ── BUG B FIX: Confidence gate lowered from 0.6 → 0.4 ──
+        if confidence < 0.4:
+            self._frames_no_hand += 1
+            if self._frames_no_hand < self._grace_frames and self._last_valid_result is not None:
+                return self._last_valid_result
+            return None, None
+
         if self._process_size is None:
             xy = [(int(lm.x * src_w), int(lm.y * src_h)) for lm in hand.landmark]
         else:
@@ -78,13 +106,18 @@ class HandTracker:
             sy = float(src_h) / float(max(1, h))
             xy = [(int(lm.x * w * sx), int(lm.y * h * sy)) for lm in hand.landmark]
         z = [float(lm.z) for lm in hand.landmark]
-        return {
+        hand_data = {
             "xy": xy,
             "z": z,
             "label": label,
             "confidence": confidence,
             "frame_size": (w, h),
-        }, hand
+        }
+
+        # Save for grace period
+        self._last_valid_result = (hand_data, hand)
+
+        return hand_data, hand
 
     def draw(self, frame_rgb, hand_proto, label: str = "Right") -> None:
         if hand_proto is None:

@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import collections
+import ctypes
 import platform
 import threading
 import time
 from typing import Any, cast
 
 import cv2
+
+# ── BUG C FIX: pyautogui configuration for Windows ──
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = False
+    pyautogui.PAUSE = 0
+except ImportError:
+    pass
 import qtawesome as qta
 from PySide6.QtCore import QMetaObject, QSize, Slot, Qt, QTimer
 from PySide6.QtGui import QAction, QImage, QPixmap
@@ -285,7 +294,7 @@ class SettingsDialog(QDialog):
         self.hold_lbl = QLabel("Confirm hold (ms)")
         self.hold_slider = QSlider(Qt.Orientation.Horizontal)
         self.hold_slider.setRange(50, 500)
-        self.hold_slider.setValue(int(_as_float(settings.get("confirm_hold_s", 0.08), self._mw.gestures._confirm_hold_s) * 1000))
+        self.hold_slider.setValue(int(_as_float(settings.get("confirm_hold_s", 0.06), self._mw.gestures._confirm_hold_s) * 1000))
         self.hold_lbl.setText(f"Hold Time: {self._mw.gestures._confirm_hold_s:.2f}s")
         self.z_tap_chk = QCheckBox("Enable Z-tap (forward air click)")
         self.z_tap_chk.setChecked(bool(settings.get("z_tap_enabled", False)))
@@ -505,6 +514,15 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
+        # ── BUG C FIX: Windows DPI awareness (must be before any GUI/pyautogui calls) ──
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # type: ignore[attr-defined]
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
         _configure_input_latency()
         if platform.system() != "Windows":
             print("Holographic Touch is optimized for Windows.")
@@ -548,9 +566,9 @@ class MainWindow(QMainWindow):
         self.mapper.set_camera_size(640, 480)
         self.mapper.set_frame_margin(_as_int(settings.get("frame_r", 90), 90))
         self.mapper.set_smoothening(_as_float(settings.get("smoothening", 4.8), 4.8))
-        self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.08), 0.08)
-        self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.18), 0.18)
-        self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.05, _as_float(settings.get("pinch_exit_sensitivity", 0.32), 0.32))
+        self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.06), 0.06)
+        self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.30), 0.30)
+        self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.08, _as_float(settings.get("pinch_exit_sensitivity", 0.45), 0.45))
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
         self._scroll_multiplier: float = _as_float(settings.get("scroll_multiplier", 1.0), 1.0)
         self.debug = _as_bool(settings.get("debug_overlay", False), False)
@@ -1114,9 +1132,9 @@ class MainWindow(QMainWindow):
             return
 
         self.gestures = GestureDetector()
-        self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.08), 0.08)
-        self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.18), 0.18)
-        self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.05, _as_float(settings.get("pinch_exit_sensitivity", 0.32), 0.32))
+            self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.06), 0.06)
+            self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.30), 0.30)
+            self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.08, _as_float(settings.get("pinch_exit_sensitivity", 0.45), 0.45))
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
 
         if _as_bool(settings.get("performance_mode", False), False):
@@ -1315,7 +1333,14 @@ class MainWindow(QMainWindow):
                 gesture = result.gesture
                 gesture_changed = gesture != last_action
                 label = str(hand_data.get("label", "None")) if hand_data else "None"
-                print("HAND:", label, "GESTURE:", result.gesture, "VALUE:", result.value)
+                    now_dbg = time.monotonic()
+                    if (
+                        gesture != self._last_debug_label
+                        or (now_dbg - self._last_debug_print_ts) >= 0.75
+                    ):
+                        print("HAND:", label, "GESTURE:", result.gesture, "VALUE:", result.value)
+                        self._last_debug_label = gesture
+                        self._last_debug_print_ts = now_dbg
 
                 if self.mouse_enabled and gesture == GestureType.KEYBOARD and gesture_changed:
                     self._launch_keyboard()
