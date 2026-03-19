@@ -58,7 +58,7 @@ class GestureDetector:
         self._last_media_next_time = 0.0
         self._last_media_prev_time = 0.0
         self._last_double_click_time = 0.0
-        self._left_click_release_time = 0.0
+        self._left_click_release_time = -float('inf')
         self._task_view_since: float | None = None
         self._keyboard_hold_start: float | None = None
         self._keyboard_fired = False
@@ -144,24 +144,7 @@ class GestureDetector:
         pinky = is_extended(20, 18, 17)
         return FingerStates(thumb, index, middle, ring, pinky)
 
-    @staticmethod
-    def finger_count(hand_data: dict | None) -> int:
-        if not hand_data:
-            return 0
-        xy = hand_data["xy"]
-        thumb_tip = xy[4]
-        thumb_ip = xy[3]
-        index_mcp = xy[5]
-        dx_tip = thumb_tip[0] - index_mcp[0]
-        dy_tip = thumb_tip[1] - index_mcp[1]
-        dx_ip = thumb_ip[0] - index_mcp[0]
-        dy_ip = thumb_ip[1] - index_mcp[1]
-        thumb = (dx_tip * dx_tip + dy_tip * dy_tip) > (dx_ip * dx_ip + dy_ip * dy_ip)
-        index = xy[8][1] < xy[6][1]
-        middle = xy[12][1] < xy[10][1]
-        ring = xy[16][1] < xy[14][1]
-        pinky = xy[20][1] < xy[18][1]
-        return int(thumb) + int(index) + int(middle) + int(ring) + int(pinky)
+    # REMOVED: finger_count() — use _finger_states() instead (line 128)
 
     def _check_action_cooldown(self, gesture: GestureType, now: float) -> bool:
         cooldown = self._per_action_cooldown.get(gesture, self._action_cooldown_s)
@@ -233,7 +216,8 @@ class GestureDetector:
         self._scroll_velocity_ema = (1.0 - alpha) * self._scroll_velocity_ema + alpha * dy
         velocity = self._scroll_velocity_ema
 
-        deadband = hand_scale * self._scroll_deadband_factor
+        hand_scale = max(1.0, hand_scale)
+        deadband = max(1.0, min(hand_scale * 0.5, hand_scale * self._scroll_deadband_factor))
         if abs(velocity) <= deadband:
             return 0
 
@@ -327,10 +311,16 @@ class GestureDetector:
             self._clear_transient_motion()
             return self._make_result(GestureType.PAUSE, 0, 0.0)
 
-        xy = hand_data["xy"]
-        wrist = xy[0]
-        middle_mcp = xy[9]
-        self._hand_scale = max(24.0, self._distance(wrist, middle_mcp))
+        xy = hand_data.get("xy")
+        if not xy or len(xy) < 21:
+            return self._make_result(GestureType.PAUSE, 0, 0.0)
+        
+        try:
+            wrist = xy[0]
+            middle_mcp = xy[9]
+            self._hand_scale = max(24.0, self._distance(wrist, middle_mcp))
+        except (IndexError, TypeError):
+            return self._make_result(GestureType.PAUSE, 0, 0.0)
 
         fs = self._finger_states(xy)
         hand_label = str(hand_data.get("label", "Right"))
@@ -457,7 +447,7 @@ class GestureDetector:
 
         if stable_state == GestureType.LEFT_CLICK:
             if self._check_action_cooldown(GestureType.LEFT_CLICK, now):
-                if 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s and self._check_action_cooldown(GestureType.DOUBLE_CLICK, now):
+                if self._left_click_release_time > 0.0 and 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s and self._check_action_cooldown(GestureType.DOUBLE_CLICK, now):
                     self._last_double_click_time = now
                     self._last_click_time = now
                     self._locked_until = now + self._gesture_lock_s

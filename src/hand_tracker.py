@@ -130,11 +130,11 @@ class HandTracker:
             return None, None, False
 
         if self._process_size is None:
-            xy = [(int(lm.x * src_w), int(lm.y * src_h)) for lm in hand.landmark]
+            xy = [(max(0, min(src_w - 1, int(lm.x * src_w))), max(0, min(src_h - 1, int(lm.y * src_h)))) for lm in hand.landmark]
         else:
             sx = float(src_w) / float(max(1, w))
             sy = float(src_h) / float(max(1, h))
-            xy = [(int(lm.x * w * sx), int(lm.y * h * sy)) for lm in hand.landmark]
+            xy = [(max(0, min(src_w - 1, int(lm.x * w * sx))), max(0, min(src_h - 1, int(lm.y * h * sy)))) for lm in hand.landmark]
 
         z = [float(lm.z) for lm in hand.landmark]
         hand_data = {

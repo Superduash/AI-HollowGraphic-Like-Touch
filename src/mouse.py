@@ -97,7 +97,8 @@ class MouseController:
             self._has_target = True
 
     def _cursor_worker(self) -> None:
-        interval = 1.0 / max(30.0, float(MOUSE_WORKER_HZ))
+        hz = max(10.0, min(1000.0, float(MOUSE_WORKER_HZ)))
+        interval = max(0.001, 1.0 / hz)
         while self._running:
             with self._lock:
                 tx = self._target_x

@@ -208,16 +208,18 @@ class CameraThread:
         return names
 
     def enumerate_cameras(self, max_index: int = 8) -> list[CameraDevice]:
-        """Probe camera indices with the same backend policy as runtime open."""
+        """Probe camera indices with multi-backend scanning, matching find_working_camera logic."""
         env_max = os.environ.get("WH_CAM_MAX_INDEX", "").strip()
         if env_max.isdigit():
             max_index = max(max_index, int(env_max))
 
         candidate_indices = list(range(max_index))
+        
+        # Try to expand search if system names are available
         if self._is_windows:
             known_names = self._dshow_camera_names() or self._system_camera_names()
             if known_names:
-                probe_count = max(1, min(max_index, len(known_names) + 2))
+                probe_count = max(1, min(max_index + 3, len(known_names) + 4))
                 candidate_indices = list(range(probe_count))
 
         env_idx = os.environ.get("WH_CAM_INDEX", "").strip()
@@ -226,12 +228,33 @@ class CameraThread:
             if idx not in candidate_indices:
                 candidate_indices.append(idx)
 
+        # Try each index with each backend, requiring actual frame validation
         open_indices: list[int] = []
         for idx in candidate_indices:
-            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW if self._is_windows else cv2.CAP_ANY)
-            if cap.isOpened():
-                open_indices.append(idx)
-                cap.release()
+            found = False
+            for backend in self._backend_candidates():
+                if found:
+                    break
+                cap = cv2.VideoCapture(int(idx), int(backend))
+                if not cap.isOpened():
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    continue
+                
+                # Attempt to read an actual frame to validate
+                ok, frame = cap.read()
+                if ok and self._is_valid_frame(frame):
+                    if idx not in open_indices:
+                        open_indices.append(idx)
+                    found = True
+                
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+            
             time.sleep(0.02)
 
         system_names = self._dshow_camera_names() or self._system_camera_names()

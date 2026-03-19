@@ -1243,9 +1243,11 @@ class MainWindow(QMainWindow):
         self._drag_active = False
 
         if _as_bool(settings.get("performance_mode", False), False):
-            self.tracker.set_processing_size((320, 240))
+            if self.tracker is not None:
+                self.tracker.set_processing_size((320, 240))
         else:
-            self.tracker.set_processing_size(None)
+            if self.tracker is not None:
+                self.tracker.set_processing_size(None)
 
         cameras = self._refresh_camera_cache(force=True)
         if not cameras:
@@ -1487,8 +1489,6 @@ class MainWindow(QMainWindow):
                         last_task_view_action = now
                         self.mouse.open_task_view()
 
-                fingers = GestureDetector.finger_count(hand_data)
-
                 if self.mouse_enabled and gesture in {
                     GestureType.MEDIA_VOL_UP,
                     GestureType.MEDIA_VOL_DOWN,
@@ -1570,11 +1570,11 @@ class MainWindow(QMainWindow):
                     self._frame = frame
                     self._gesture = gesture
                     self._overlay_text = overlay
-                    self._fingers = fingers
                     self._hand_proto = hand_proto
                     self._hand_data = hand_data
             except Exception as exc:
-                print(f"[PROCESS_LOOP ERROR] {exc}")
+                import logging
+                logging.exception(f"Process loop error: {exc}")
                 time.sleep(0.005)
                 continue
 
