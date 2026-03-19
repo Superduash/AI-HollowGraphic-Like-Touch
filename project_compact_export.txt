@@ -739,7 +739,7 @@ Run on Windows:
 1) Double-click run.bat
 
 Notes:
-- Uses the best available Python via the Windows 'py' launcher (prefers 3.11).
+- Uses the best available Python via the Windows 'py' launcher (prefers 3.12).
 - Creates a local .venv and installs requirements automatically on first run.
 - When you click "Enable Mouse", the main window minimizes and a small always-on-top status overlay stays visible.
 
@@ -764,10 +764,10 @@ pynput>=1.7.6
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
-rem Prefer Python 3.11 on Windows 11 (best wheel availability + performance).
+rem Prefer Python 3.12 on Windows 11.
 set "PYEXE="
 set "PYVER="
-for %%V in (3.11 3.12 3.10 3) do (
+for %%V in (3.12 3.11 3.10 3) do (
   if not defined PYEXE (
     py -%%V -c "import sys" >nul 2>&1
     if not errorlevel 1 (
@@ -780,7 +780,7 @@ for %%V in (3.11 3.12 3.10 3) do (
 if not defined PYEXE (
   echo.
   echo ERROR: Python launcher 'py' not found.
-  echo Install Python 3.11+ from https://python.org and re-run.
+    echo Install Python 3.12+ from https://python.org and re-run.
   echo.
   pause
   exit /b 1
@@ -2155,6 +2155,7 @@ class SettingsDialog(QDialog):
         self.smooth_slider = QSlider(Qt.Orientation.Horizontal)
         self.smooth_slider.setRange(10, 100)
         self.smooth_slider.setValue(int(_as_float(settings.get("smoothening", self._mw.mapper.smoothening), self._mw.mapper.smoothening) * 10))
+        self.smooth_lbl.setText(f"Smoothening: {self._mw.mapper.smoothening:.1f}")
         self.margin_lbl = QLabel(f"Control margin: {_as_int(settings.get('frame_r', self._mw.mapper.frame_r), self._mw.mapper.frame_r)}")
         self.margin_slider = QSlider(Qt.Orientation.Horizontal)
         self.margin_slider.setRange(40, 200)
@@ -2178,14 +2179,17 @@ class SettingsDialog(QDialog):
         self.scroll_slider = QSlider(Qt.Orientation.Horizontal)
         self.scroll_slider.setRange(5, 30)
         self.scroll_slider.setValue(int(_as_float(settings.get("scroll_multiplier", self._mw._scroll_multiplier), self._mw._scroll_multiplier) * 10))
+        self.scroll_lbl.setText(f"Scroll Speed: {self._mw._scroll_multiplier:.1f}x")
         self.pinch_lbl = QLabel("Pinch sensitivity")
         self.pinch_slider = QSlider(Qt.Orientation.Horizontal)
         self.pinch_slider.setRange(10, 35)
         self.pinch_slider.setValue(int(_as_float(settings.get("pinch_sensitivity", self._mw.gestures._pinch_enter), self._mw.gestures._pinch_enter) * 100))
+        self.pinch_lbl.setText(f"Pinch Sensitivity: {self._mw.gestures._pinch_enter:.2f}")
         self.hold_lbl = QLabel("Confirm hold (ms)")
         self.hold_slider = QSlider(Qt.Orientation.Horizontal)
         self.hold_slider.setRange(100, 500)
         self.hold_slider.setValue(int(_as_float(settings.get("confirm_hold_s", self._mw.gestures._confirm_hold_s), self._mw.gestures._confirm_hold_s) * 1000))
+        self.hold_lbl.setText(f"Hold Time: {self._mw.gestures._confirm_hold_s:.2f}s")
         self.z_tap_chk = QCheckBox("Enable Z-tap (forward air click)")
         self.z_tap_chk.setChecked(bool(settings.get("z_tap_enabled", False)))
 
@@ -2322,7 +2326,7 @@ class SettingsDialog(QDialog):
     def _on_hold_changed(self, value: int) -> None:
         hold_s = value / 1000.0
         self._mw.gestures._confirm_hold_s = hold_s
-        self.hold_lbl.setText(f"Confirm hold (ms): {value}")
+        self.hold_lbl.setText(f"Hold Time: {hold_s:.2f}s")
         settings.set("confirm_hold_s", hold_s)
 
     def _on_z_tap_changed(self, state: int) -> None:
@@ -2438,7 +2442,8 @@ class MainWindow(QMainWindow):
         wy = _as_int(settings.get("window_y", -1), -1)
         ww = _as_int(settings.get("window_w", 1280), 1280)
         wh = _as_int(settings.get("window_h", 820), 820)
-        self.move(wx, wy)
+        if wx >= 0 and wy >= 0:
+            self.move(wx, wy)
         self.resize(ww, wh)
 
         self.cam_status.setText("Detecting cameras...")
@@ -2963,7 +2968,7 @@ class MainWindow(QMainWindow):
             self._hotkey = hotkey
         except Exception:
             self._hotkey = None
-            self.cam_status.setText("Hotkey unavailable (pynput import failed)")
+            print("Hotkey unavailable")
 
     def _process_loop(self) -> None:
         last_overlay = GestureType.NONE
@@ -3160,7 +3165,7 @@ class MainWindow(QMainWindow):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         tracker = self.tracker
-        if hand_proto is not None and tracker is not None:
+        if self.debug and hand_proto is not None and tracker is not None:
             label = hand_data["label"] if hand_data else "Right"
             tracker.draw(rgb, hand_proto, label)
 

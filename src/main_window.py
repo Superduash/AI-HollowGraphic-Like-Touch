@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import collections
-import os
 import platform
 import threading
 import time
 from typing import Any, cast
 
 import cv2
+import qtawesome as qta
 from PySide6.QtCore import QMetaObject, QSize, Slot, Qt, QTimer
-from PySide6.QtGui import QAction, QIcon, QImage, QPixmap
+from PySide6.QtGui import QAction, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -40,12 +40,6 @@ from .mouse import MouseController
 from .settings_store import settings
 from .utils import _boost_runtime_priority, _configure_input_latency
 
-_ICONS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icons")
-
-
-def _icon(svg_name: str) -> QIcon:
-    return QIcon(os.path.join(_ICONS_DIR, svg_name))
-
 
 def _as_int(value: object, default: int) -> int:
     try:
@@ -69,8 +63,9 @@ def _as_bool(value: object, default: bool) -> bool:
 
 
 class StatusOverlay(QWidget):
-    def __init__(self) -> None:
+    def __init__(self, icons: dict[str, object]) -> None:
         super().__init__(None)
+        self._icons = icons
         self.setWindowTitle("Windows Hover Status")
         self.setWindowFlags(
             Qt.WindowType.Tool
@@ -114,10 +109,12 @@ class StatusOverlay(QWidget):
         btns = QHBoxLayout()
         self.open_btn = QPushButton("Open")
         self.open_btn.setObjectName("ghostButton")
-        self.open_btn.setIcon(_icon("settings.svg"))
+        self.open_btn.setIcon(self._icons["settings"])
+        self.open_btn.setIconSize(QSize(18, 18))
         self.disable_btn = QPushButton("Disable Mouse")
         self.disable_btn.setObjectName("redButton")
-        self.disable_btn.setIcon(_icon("pause.svg"))
+        self.disable_btn.setIcon(self._icons["pause"])
+        self.disable_btn.setIconSize(QSize(18, 18))
         btns.addWidget(self.open_btn)
         btns.addStretch(1)
         btns.addWidget(self.disable_btn)
@@ -182,7 +179,7 @@ class SettingsDialog(QDialog):
 
         title_row = QHBoxLayout()
         title_icon = QLabel()
-        title_icon.setPixmap(_icon("settings.svg").pixmap(QSize(20, 20)))
+        title_icon.setPixmap(self._mw.icons["settings"].pixmap(QSize(20, 20)))
         title = QLabel("Settings")
         title.setObjectName("title")
         title_row.addWidget(title_icon)
@@ -473,6 +470,25 @@ class MainWindow(QMainWindow):
         self.gestures = GestureDetector()
         self.mapper = CursorMapper(640, 480)
         self.mouse = MouseController()
+        self.icons = {
+            "start": qta.icon("fa6s.video", color="#22C55E"),
+            "stop": qta.icon("fa6s.stop", color="#EF4444"),
+            "enable_mouse": qta.icon("fa6s.computer-mouse", color="#3B82F6"),
+            "settings": qta.icon("fa6s.gear", color="#A78BFA"),
+            "move": qta.icon("fa6s.crosshairs", color="#60A5FA"),
+            "left_click": qta.icon("fa6s.arrow-pointer", color="#4ADE80"),
+            "double_click": qta.icon("fa6s.hand-pointer", color="#4ADE80"),
+            "drag": qta.icon("fa6s.hand", color="#A78BFA"),
+            "right_click": qta.icon("fa6s.mouse", color="#4ADE80"),
+            "scroll": qta.icon("fa6s.arrows-up-down", color="#A78BFA"),
+            "task_view": qta.icon("fa6s.table-cells-large", color="#A78BFA"),
+            "keyboard": qta.icon("fa6s.keyboard", color="#FBBF24"),
+            "pause": qta.icon("fa6s.pause", color="#F87171"),
+            "media_vol_up": qta.icon("fa6s.volume-high", color="#F472B6"),
+            "media_vol_down": qta.icon("fa6s.volume-low", color="#F472B6"),
+            "media_next": qta.icon("fa6s.forward", color="#F472B6"),
+            "media_prev": qta.icon("fa6s.backward", color="#F472B6"),
+        }
 
         self.mapper.set_camera_size(640, 480)
         self.mapper.set_frame_margin(_as_int(settings.get("frame_r", 90), 90))
@@ -550,7 +566,7 @@ class MainWindow(QMainWindow):
         header_l.setSpacing(12)
 
         icon_label = QLabel()
-        icon_label.setPixmap(_icon("camera.svg").pixmap(QSize(22, 22)))
+        icon_label.setPixmap(self.icons["start"].pixmap(QSize(22, 22)))
         self.title_lbl = QLabel("Holographic Touch")
         self.title_lbl.setObjectName("title")
 
@@ -616,19 +632,19 @@ class MainWindow(QMainWindow):
         gl.addWidget(guide_title, 0, 0, 1, 3)
 
         guide_rows = [
-            ("mouse.svg", "Index finger", "Move cursor"),
-            ("click.svg", "Thumb + Index pinch", "Left click"),
-            ("click.svg", "Quick double pinch", "Double click"),
-            ("drag.svg", "Hold Thumb + Index pinch", "Drag"),
-            ("click.svg", "Middle down + Thumb pinch", "Right click"),
-            ("scroll.svg", "Peace sign + up/down", "Scroll"),
-            ("move.svg", "Open palm", "Task View (Win+Tab)"),
-            ("settings.svg", "Thumb + Index + Pinky", "On-Screen Keyboard"),
-            ("pause.svg", "No gesture / hand down", "Pause"),
+            ("move", "Index finger", "Move cursor"),
+            ("left_click", "Thumb + Index pinch", "Left click"),
+            ("double_click", "Quick double pinch", "Double click"),
+            ("drag", "Hold Thumb + Index pinch", "Drag"),
+            ("right_click", "Middle down + Thumb pinch", "Right click"),
+            ("scroll", "Peace sign + up/down", "Scroll"),
+            ("task_view", "Open palm", "Task View (Win+Tab)"),
+            ("keyboard", "Thumb + Index + Pinky", "On-Screen Keyboard"),
+            ("pause", "No gesture / hand down", "Pause"),
         ]
-        for i, (svg_name, a, b) in enumerate(guide_rows, start=1):
+        for i, (icon_key, a, b) in enumerate(guide_rows, start=1):
             il = QLabel()
-            il.setPixmap(_icon(svg_name).pixmap(QSize(16, 16)))
+            il.setPixmap(self.icons[icon_key].pixmap(QSize(20, 20)))
             tl = QLabel(a)
             dl = QLabel(b)
             dl.setObjectName("muted")
@@ -671,16 +687,19 @@ class MainWindow(QMainWindow):
         cl.setSpacing(10)
 
         self.start_btn = QPushButton("Start Camera")
-        self.start_btn.setIcon(_icon("camera.svg"))
+        self.start_btn.setIcon(self.icons["start"])
+        self.start_btn.setIconSize(QSize(18, 18))
         self.start_btn.setObjectName("greenButton")
 
         self.stop_btn = QPushButton("Stop Camera")
-        self.stop_btn.setIcon(_icon("stop.svg"))
+        self.stop_btn.setIcon(self.icons["stop"])
+        self.stop_btn.setIconSize(QSize(18, 18))
         self.stop_btn.setObjectName("redButton")
         self.stop_btn.setEnabled(False)
 
         self.mouse_btn = QPushButton("Enable Mouse")
-        self.mouse_btn.setIcon(_icon("mouse.svg"))
+        self.mouse_btn.setIcon(self.icons["enable_mouse"])
+        self.mouse_btn.setIconSize(QSize(18, 18))
         self.mouse_btn.setObjectName("blueButton")
 
         self._region_label = QLabel(f"Control margin: {self.mapper.frame_r}")
@@ -691,7 +710,8 @@ class MainWindow(QMainWindow):
         self._region_slider.setFixedWidth(180)
 
         self.settings_btn = QPushButton("Settings")
-        self.settings_btn.setIcon(_icon("settings.svg"))
+        self.settings_btn.setIcon(self.icons["settings"])
+        self.settings_btn.setIconSize(QSize(18, 18))
         self.settings_btn.setObjectName("purpleButton")
 
         self.start_btn.clicked.connect(self.start_camera)
@@ -754,7 +774,7 @@ class MainWindow(QMainWindow):
 
     def _setup_tray(self) -> None:
         tray = QSystemTrayIcon(self)
-        tray.setIcon(_icon("mouse.svg"))
+        tray.setIcon(self.icons["enable_mouse"])
         tray.setToolTip("Holographic Touch")
 
         tray_menu = QMenu()
@@ -980,7 +1000,7 @@ class MainWindow(QMainWindow):
             self.mouse_lbl.setText("Mouse: ON")
 
             if self._overlay is None:
-                self._overlay = StatusOverlay()
+                self._overlay = StatusOverlay(self.icons)
                 self._overlay.open_btn.clicked.connect(self._show_main_window)
                 self._overlay.disable_btn.clicked.connect(self._disable_mouse_from_overlay)
                 try:
