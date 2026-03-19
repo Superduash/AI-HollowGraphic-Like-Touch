@@ -100,7 +100,7 @@ class HandTracker:
 
         confidence = result.multi_handedness[0].classification[0].score
 
-        # ── BUG B FIX: Confidence gate lowered from 0.6 → 0.4 ──
+        # Reject low-confidence labels to avoid ghost actions.
         if confidence < 0.55:
             # Low confidence — don't use grace period, return nothing
             return None, None

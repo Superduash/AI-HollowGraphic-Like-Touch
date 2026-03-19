@@ -196,14 +196,15 @@ class GestureDetector:
             self._left_pinch_active = True
 
         now = time.monotonic()
+        pending = self._right_pinch_pending_since
         if self._right_pinch_active:
             if right_dist > pinch_exit:
                 self._right_pinch_active = False
                 self._right_pinch_pending_since = None
         elif right_click_pose:
-            if self._right_pinch_pending_since is None:
+            if pending is None:
                 self._right_pinch_pending_since = now
-            elif now - self._right_pinch_pending_since >= self._right_pinch_confirm_s:
+            elif (now - pending) >= self._right_pinch_confirm_s:
                 self._right_pinch_active = True
         else:
             self._right_pinch_pending_since = None
@@ -250,8 +251,12 @@ class GestureDetector:
         return self._state
 
     def _check_action_cooldown(self, gesture: GestureType, now: float) -> bool:
-        cooldown = self._per_action_cooldown.get(gesture, self._action_cooldown_s)
-        last = self._last_action_time.get(gesture, 0.0)
+        cooldown_val = self._per_action_cooldown.get(gesture, self._action_cooldown_s)
+        cooldown = float(cooldown_val) if cooldown_val is not None else self._action_cooldown_s
+        
+        last_val = self._last_action_time.get(gesture, 0.0)
+        last = float(last_val) if last_val is not None else 0.0
+        
         if now - last < cooldown:
             return False
         return True
@@ -261,14 +266,15 @@ class GestureDetector:
         self._last_action_time[gesture] = now
 
     def _resolve_scroll(self, current_y: float, hand_scale: float) -> int:
-        if self._scroll_prev_y is None:
+        prev_y = self._scroll_prev_y
+        if prev_y is None:
             self._scroll_prev_y = current_y
             self._scroll_velocity_ema = 0.0
             self._scroll_direction = 0
             self._scroll_accumulator = 0.0
             return 0
 
-        dy = self._scroll_prev_y - current_y
+        dy = float(prev_y) - current_y
         self._scroll_prev_y = current_y
 
         # Gentler EMA for smoother velocity tracking
@@ -339,11 +345,12 @@ class GestureDetector:
         return False
 
     def _resolve_media_volume(self, current_y: float, hand_scale: float) -> int:
-        if self._left_media_anchor_y is None:
+        anchor_y = self._left_media_anchor_y
+        if anchor_y is None:
             self._left_media_anchor_y = current_y
             return 0
 
-        delta = self._left_media_anchor_y - current_y
+        delta = float(anchor_y) - current_y
         deadband = hand_scale * self._media_deadband_factor
         if abs(delta) <= deadband:
             return 0
@@ -353,18 +360,19 @@ class GestureDetector:
         if steps == 0:
             return 0
 
-        self._left_media_anchor_y -= steps * step
+        self._left_media_anchor_y = float(anchor_y) - (steps * step)
         return steps
 
-    def detect(self, hand_data) -> GestureResult:
+    def detect(self, hand_data: dict | None) -> GestureResult:
         now = time.monotonic()
 
-        if not hand_data:
+        if hand_data is None:
             # ── BUG B FIX: Grace period — don't immediately PAUSE ──
             self._frames_no_hand += 1
-            if self._frames_no_hand < self._grace_frames and self._last_valid_hand_data is not None:
+            last_known = self._last_valid_hand_data
+            if self._frames_no_hand < self._grace_frames and last_known is not None:
                 # Use last known hand data but only for continuous gestures
-                hand_data = self._last_valid_hand_data
+                hand_data = last_known
                 # Force non-action state during grace period to prevent ghost clicks
                 if self._state in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, 
                                    GestureType.DOUBLE_CLICK, GestureType.KEYBOARD,
@@ -399,8 +407,8 @@ class GestureDetector:
         xy = hand_data["xy"]
         fs = self._finger_states(xy)
         hand_label = str(hand_data.get("label", "Right"))
-        # ── BUG B FIX: Confidence gate lowered from 0.6 → 0.4 ──
         confidence = float(hand_data.get("confidence", 0.0))
+
         if confidence < 0.55:
             self._state = GestureType.PAUSE
             self._prev_gesture_state = GestureType.PAUSE
@@ -445,7 +453,7 @@ class GestureDetector:
             self._scroll_accumulator = 0.0
             self._scroll_velocity_ema = 0.0
 
-            # ── BUG B FIX: Confidence gate lowered from 0.6 → 0.4 ──
+            # Confidence gate for low-quality handedness frames.
             confidence = float(hand_data.get("confidence", 0.0))
             if confidence < 0.55:
                 self._left_media_anchor_y = None
@@ -542,20 +550,23 @@ class GestureDetector:
             self._task_view_since = None
 
         raw_state = GestureType.PAUSE
+        since_tv = self._task_view_since
+        since_lp = self._left_pinch_since
+
         if (
-            self._task_view_since is not None
+            since_tv is not None
             and task_view_pose
-            and (now - self._task_view_since >= self._task_view_hold_s)
+            and (now - since_tv >= self._task_view_hold_s)
             and not self._left_pinch_active
             and not self._right_pinch_active
         ):
             raw_state = GestureType.TASK_VIEW
         elif keyboard_pose and not pinch_guard_active:
             raw_state = GestureType.KEYBOARD
-        elif self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):
+        elif self._left_pinch_active and since_lp is not None and (now - since_lp >= self._drag_activate_s):
             raw_state = GestureType.DRAG
         elif self._left_pinch_active and not self._right_pinch_active:
-            raw_state = GestureType.LEFT_CLICK
+                raw_state = GestureType.LEFT_CLICK
         elif self._right_pinch_active and not self._left_pinch_active:
             raw_state = GestureType.RIGHT_CLICK
         elif scroll_pose and not self._left_pinch_active and not self._right_pinch_active:

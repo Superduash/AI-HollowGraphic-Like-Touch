@@ -15,7 +15,8 @@ try:
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
 except ImportError:
-    pass
+    pyautogui = None  # type: ignore
+
 import qtawesome as qta
 from PySide6.QtCore import QMetaObject, QSize, Slot, Qt, QTimer
 from PySide6.QtGui import QAction, QImage, QPixmap

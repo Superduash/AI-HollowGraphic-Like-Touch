@@ -35,10 +35,10 @@ class MouseController:
             try:
                 import ctypes
 
-                self._user32 = ctypes.windll.user32
-                self._mouse_event = self._user32.mouse_event
-                self._mouse_event.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
-                self._mouse_event.restype = None
+                self._user32 = ctypes.windll.user32 # type: ignore
+                self._mouse_event = self._user32.mouse_event # type: ignore
+                self._mouse_event.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p] # type: ignore
+                self._mouse_event.restype = None  # type: ignore
                 self._MOUSEEVENTF_LEFTDOWN = 0x0002
                 self._MOUSEEVENTF_LEFTUP = 0x0004
                 self._MOUSEEVENTF_RIGHTDOWN = 0x0008
@@ -111,7 +111,7 @@ class MouseController:
 
     def _set_cursor_pos(self, x: int, y: int) -> None:
         if self._platform == "Windows" and self._user32 is not None:
-            self._user32.SetCursorPos(int(x), int(y))
+            self._user32.SetCursorPos(int(x), int(y)) # type: ignore
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
@@ -122,6 +122,7 @@ class MouseController:
     def left_click(self) -> None:
         if self._platform == "Windows" and self._user32 is not None:
             self._mouse_event(self._MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)
+            time.sleep(0.01)
             self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)
             return
 
@@ -136,6 +137,7 @@ class MouseController:
     def right_click(self) -> None:
         if self._platform == "Windows" and self._user32 is not None:
             self._mouse_event(self._MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, None)
+            time.sleep(0.01)
             self._mouse_event(self._MOUSEEVENTF_RIGHTUP, 0, 0, 0, None)
             return
 
@@ -149,7 +151,7 @@ class MouseController:
 
     def double_click(self) -> None:
         self.left_click()
-        time.sleep(0.03)
+        time.sleep(0.05)
         self.left_click()
 
     def scroll(self, amount: int) -> None:
@@ -228,11 +230,34 @@ class MouseController:
     def show_osk(self) -> bool:
         if self._platform == "Windows":
             try:
+                # Check for OSK.exe
                 output = subprocess.check_output('tasklist /FI "IMAGENAME eq osk.exe" /NH', shell=True).decode()
                 if "osk.exe" in output.lower():
                     subprocess.run('taskkill /IM osk.exe /F', shell=True)
+                    return True
+                
+                # Check for TabTip.exe (Touch Keyboard) - toggling it is harder, 
+                # but we can try to find window or use specialized command
+                import ctypes
+                hwnd = ctypes.windll.user32.FindWindowW("IPTip_Main_Window", None)
+                if hwnd:
+                    # If found, try to hide it by sending a close command or killing process
+                    # tabtip.exe is usually persistent, so we might just kill it if possible
+                    # but safer to just use osk.exe for reliable toggling.
+                    pass
+
+                # If not running, start OSK
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                # Use sysnative to bypass redirection if on 64-bit Windows
+                import os
+                osk_path = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "osk.exe")
+                if not os.path.exists(osk_path):
+                     # try sysnative for 32-bit processes on 64-bit windows
+                     osk_path = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "sysnative", "osk.exe")
+                
+                if os.path.exists(osk_path):
+                    subprocess.Popen([osk_path], creationflags=flags)
                 else:
-                    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
                     subprocess.Popen(["cmd.exe", "/c", "start", "osk.exe"], creationflags=flags)
                 return True
             except Exception:
@@ -248,6 +273,7 @@ class MouseController:
             except Exception:
                 return False
         return False
+
 
     def open_task_view(self) -> bool:
         if self._platform != "Windows" or self._user32 is None:
