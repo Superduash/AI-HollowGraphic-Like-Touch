@@ -1,7 +1,7 @@
 from .models import GestureType
 
 _OVERLAY_LABELS = {
-    GestureType.NONE: "PAUSED",
+    GestureType.NONE: "NONE",
     GestureType.MOVE: "MOVE",
     GestureType.LEFT_CLICK: "CLICK",
     GestureType.DOUBLE_CLICK: "DOUBLE",
@@ -19,6 +19,7 @@ _OVERLAY_LABELS = {
 
 
 _BADGE_COLORS = {
+    GestureType.NONE: "#64748B",
     GestureType.MOVE: "#60A5FA",
     GestureType.LEFT_CLICK: "#4ADE80",
     GestureType.RIGHT_CLICK: "#4ADE80",
@@ -32,5 +33,4 @@ _BADGE_COLORS = {
     GestureType.MEDIA_VOL_DOWN: "#F472B6",
     GestureType.MEDIA_NEXT: "#F472B6",
     GestureType.MEDIA_PREV: "#F472B6",
-    GestureType.NONE: "#64748B",
 }

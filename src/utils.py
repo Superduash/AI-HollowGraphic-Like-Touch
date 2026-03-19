@@ -21,12 +21,16 @@ def _mediapipe_diagnostic() -> str:
 
 
 def _ensure_mediapipe_solutions() -> None:
+    import os
+
+    py_exe = os.path.join(".venv", "Scripts", "python") if platform.system() == "Windows" else os.path.join(".venv", "bin", "python")
+
     if mp is None:
         raise RuntimeError(
             "MediaPipe is not installed (or failed to import).\n\n"
             "Fix (inside this app's .venv):\n"
             "1) Open a terminal in this folder\n"
-            "2) Run: .venv\\Scripts\\python -m pip install -r requirements.txt\n"
+            f"2) Run: {py_exe} -m pip install -r requirements.txt\n"
         )
 
     if hasattr(mp, "solutions"):
@@ -41,13 +45,22 @@ def _ensure_mediapipe_solutions() -> None:
         "- A broken/partial mediapipe install in the venv.\n\n"
         "Fix (inside this app's .venv):\n"
         "1) Open a terminal in this folder\n"
-        "2) Run: .venv\\Scripts\\python -m pip uninstall -y mediapipe\n"
-        "3) Run: .venv\\Scripts\\python -m pip install mediapipe==0.10.21\n"
+        f"2) Run: {py_exe} -m pip uninstall -y mediapipe\n"
+        f"3) Run: {py_exe} -m pip install mediapipe==0.10.21\n"
     )
 
 
 def _configure_input_latency() -> None:
-    pass
+    """Set Windows multimedia timer to 1 ms resolution for low-latency input."""
+    if platform.system() != "Windows":
+        return
+    try:
+        import ctypes
+
+        winmm = ctypes.windll.winmm
+        winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
 
 
 def _boost_runtime_priority() -> None:
