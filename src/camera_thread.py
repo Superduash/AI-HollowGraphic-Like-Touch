@@ -58,6 +58,7 @@ class CameraThread:
         self.width = width
         self.height = height
         self.camera_index = 0
+        self.camera_backend = cv2.CAP_ANY
         self.actual_width = width
         self.actual_height = height
 
@@ -69,10 +70,11 @@ class CameraThread:
         self._frame_lock = threading.Lock()
         self._last_error = ""
         self._is_windows = platform.system() == "Windows"
+        self._printed_camera_log = False
 
     def _backend_candidates(self) -> list[int]:
         if self._is_windows:
-            return [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
+            return [cv2.CAP_MSMF, cv2.CAP_DSHOW, cv2.CAP_ANY]
         return [cv2.CAP_ANY]
 
     @staticmethod
@@ -94,38 +96,80 @@ class CameraThread:
             return "ANY"
         return str(backend)
 
+    @staticmethod
+    def _is_valid_frame(frame: Any) -> bool:
+        if frame is None:
+            return False
+        shape = getattr(frame, "shape", None)
+        if not shape or len(shape) < 2:
+            return False
+        return int(shape[0]) > 0 and int(shape[1]) > 0
+
+    def find_working_camera(
+        self,
+        preferred_index: int | None = None,
+        min_index: int = 0,
+        max_index: int = 5,
+    ) -> tuple[int, int, cv2.VideoCapture] | None:
+        attempted: list[str] = []
+        indices = list(range(min_index, max_index + 1))
+
+        if preferred_index is not None and preferred_index not in indices:
+            indices = [int(preferred_index)] + indices
+        elif preferred_index is not None:
+            indices.remove(int(preferred_index))
+            indices = [int(preferred_index)] + indices
+
+        for idx in indices:
+            for backend in self._backend_candidates():
+                cap = cv2.VideoCapture(int(idx), int(backend))
+                attempted.append(f"{idx}:{self._backend_name(backend)}")
+                if not cap.isOpened():
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    continue
+
+                if self._is_windows:
+                    cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(self.width))
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(self.height))
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+                ok, frame = cap.read()
+                if ok and self._is_valid_frame(frame):
+                    cap.set(cv2.CAP_PROP_FPS, 60)
+                    self.actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or frame.shape[1])
+                    self.actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or frame.shape[0])
+                    self._last_error = f"Camera ready index={idx} backend={self._backend_name(backend)}"
+                    return int(idx), int(backend), cap
+
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+
+            time.sleep(0.01)
+
+        self._last_error = f"No valid camera found after scanning: {', '.join(attempted)}"
+        return None
+
     def _open_capture(self, camera_index: int) -> cv2.VideoCapture | None:
-        idx = int(camera_index)
-        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-        
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(idx)
-        
-        if not cap.isOpened():
-            self._last_error = f"Cannot open camera index {idx}"
+        found = self.find_working_camera(preferred_index=int(camera_index), min_index=0, max_index=5)
+        if found is None:
             return None
 
-        # Apply standard settings
-        for width, height in CAMERA_TARGET_SIZES:
-            if self._is_windows:
-                cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            cap.set(cv2.CAP_PROP_FPS, 60)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-            time.sleep(0.05)
-            if self._try_read_frames(cap, count=3):
-                self.actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or width)
-                self.actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or height)
-                fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
-                fmt = "MJPG" if fourcc == _MJPG_FOURCC else "DEFAULT"
-                self._last_error = f"Camera #{idx} ready ({self.actual_width}x{self.actual_height})"
-                return cap
-            
-        cap.release()
-        self._last_error = f"Camera #{idx} failed validation"
-        return None
+        idx, backend, cap = found
+        self.camera_index = idx
+        self.camera_backend = backend
+        if not self._printed_camera_log:
+            print(
+                f"[CAMERA] Using index={idx} backend={self._backend_name(backend)} "
+                f"resolution={self.actual_width}x{self.actual_height}"
+            )
+            self._printed_camera_log = True
+        return cap
 
     # ------------------------------------------------------------------
     # Enumeration helpers
@@ -213,34 +257,9 @@ class CameraThread:
 
         cap = self._open_capture(self.camera_index)
         if cap is None:
-            fallback_indices: list[int] = []
-            env_idx = os.environ.get("WH_CAM_INDEX", "").strip()
-            if env_idx.isdigit():
-                fallback_indices.append(int(env_idx))
-
-            for dev in self.enumerate_cameras(max_index=8):
-                if dev.index != self.camera_index and dev.index not in fallback_indices:
-                    fallback_indices.append(dev.index)
-
-            for i in range(8):
-                if i != self.camera_index and i not in fallback_indices:
-                    fallback_indices.append(i)
-
-            attempted: list[int] = [self.camera_index]
-            for idx in fallback_indices:
-                cap = self._open_capture(idx)
-                attempted.append(idx)
-                if cap is not None:
-                    self.camera_index = idx
-                    self._last_error = f"Camera fallback selected index {idx}"
-                    break
-
-            if cap is None:
-                self._last_error = (
-                    f"Cannot open camera. Attempted indices: {attempted}. "
-                    "If using DroidCam, start its camera feed first."
-                )
-                return False
+            print("[ERROR] No valid camera found after scanning")
+            self._last_error = "No valid camera found after scanning"
+            return False
 
         with self._cap_lock:
             self._cap = cap
@@ -272,6 +291,7 @@ class CameraThread:
 
         cap = self._open_capture(self.camera_index)
         if cap is None:
+            print("[ERROR] No valid camera found after scanning")
             return False
 
         with self._cap_lock:
@@ -302,6 +322,8 @@ class CameraThread:
                         except Exception:
                             pass
                         consecutive_failures = 0
+                    else:
+                        print("[ERROR] No valid camera found after scanning")
                     time.sleep(CAMERA_REOPEN_COOLDOWN_S)
                     continue
                 time.sleep(0.01)

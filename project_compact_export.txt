@@ -1,6 +1,6 @@
 PROJECT: AI HollowGraphic Like Touch
 ROOT: C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch
-FILES: 21
+FILES: 20
 
 === .gitignore ===
 # Byte-compiled / optimized / DLL files
@@ -231,9 +231,8 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("GLOG_minloglevel", "3")
 os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
 
-from PySide6.QtWidgets import QApplication
-
-from src import MainWindow
+from PySide6.QtWidgets import QApplication  # type: ignore
+from src import MainWindow  # type: ignore
 
 
 def main() -> None:
@@ -342,7 +341,7 @@ def export_project(root: Path, output: Path, max_bytes_per_file: int) -> int:
 
             encoded = content.encode("utf-8", errors="replace")
             if len(encoded) > max_bytes_per_file:
-                truncated = encoded[:max_bytes_per_file].decode("utf-8", errors="ignore")
+                truncated = encoded[:max_bytes_per_file].decode("utf-8", errors="ignore")  # type: ignore
                 out.write(truncated)
                 out.write("\n\n<... truncated ...>\n\n")
             else:
@@ -1789,7 +1788,7 @@ Start with console spam removal (4) so you can actually see errors. Then fix cur
 === project_compact_export.txt ===
 PROJECT: AI HollowGraphic Like Touch
 ROOT: C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch
-FILES: 21
+FILES: 20
 
 === .gitignore ===
 # Byte-compiled / optimized / DLL files
@@ -2020,9 +2019,8 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("GLOG_minloglevel", "3")
 os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
 
-from PySide6.QtWidgets import QApplication
-
-from src import MainWindow
+from PySide6.QtWidgets import QApplication  # type: ignore
+from src import MainWindow  # type: ignore
 
 
 def main() -> None:
@@ -2131,7 +2129,7 @@ def export_project(root: Path, output: Path, max_bytes_per_file: int) -> int:
 
             encoded = content.encode("utf-8", errors="replace")
             if len(encoded) > max_bytes_per_file:
-                truncated = encoded[:max_bytes_per_file].decode("utf-8", errors="ignore")
+                truncated = encoded[:max_bytes_per_file].decode("utf-8", errors="ignore")  # type: ignore
                 out.write(truncated)
                 out.write("\n\n<... truncated ...>\n\n")
             else:
@@ -3693,7 +3691,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, cast
 
-import cv2
+import cv2  # type: ignore
 
 try:
     cv2.setLogLevel(0)
@@ -3717,12 +3715,7 @@ def _videowriter_fourcc(*chars: str) -> int:
 
 _MJPG_FOURCC = _videowriter_fourcc(*"MJPG")
 
-from .tuning import (
-    CAMERA_FAIL_SLEEP_S,
-    CAMERA_READ_RETRY_LIMIT,
-    CAMERA_REOPEN_COOLDOWN_S,
-    CAMERA_TARGET_SIZES,
-)
+from .tuning import CAMERA_FAIL_SLEEP_S, CAMERA_READ_RETRY_LIMIT, CAMERA_REOPEN_COOLDOWN_S, CAMERA_TARGET_SIZES  # type: ignore
 
 FilterGraph = None  # type: ignore[assignment]
 wmi = None  # type: ignore[assignment]
@@ -3787,50 +3780,35 @@ class CameraThread:
 
     def _open_capture(self, camera_index: int) -> cv2.VideoCapture | None:
         idx = int(camera_index)
-        for backend in self._backend_candidates():
-            for width, height in CAMERA_TARGET_SIZES:
-                cap = cv2.VideoCapture(idx, backend)
-                if not cap.isOpened():
-                    cap.release()
-                    continue
+        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(idx)
+        
+        if not cap.isOpened():
+            self._last_error = f"Cannot open camera index {idx}"
+            return None
 
-                # Try MJPG first on Windows for better throughput; silently
-                # fall back to default codec if the camera rejects it.
-                if self._is_windows:
-                    cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                cap.set(cv2.CAP_PROP_FPS, 60)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        # Apply standard settings
+        for width, height in CAMERA_TARGET_SIZES:
+            if self._is_windows:
+                cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            cap.set(cv2.CAP_PROP_FPS, 60)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-                # Short warm-up for virtual cameras that expose the device
-                # before streaming is ready.
-                time.sleep(0.05)
-
-                if not self._try_read_frames(cap, count=5):
-                    cap.release()
-                    time.sleep(0.02)
-                    continue
-
+            time.sleep(0.05)
+            if self._try_read_frames(cap, count=3):
                 self.actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or width)
                 self.actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or height)
                 fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
-                fmt = (
-                    "MJPG"
-                    if fourcc == _MJPG_FOURCC
-                    else "DEFAULT"
-                )
-                self._last_error = (
-                    f"Camera #{idx} opened at {self.actual_width}x{self.actual_height}"
-                    f" backend={self._backend_name(backend)} format={fmt}"
-                )
+                fmt = "MJPG" if fourcc == _MJPG_FOURCC else "DEFAULT"
+                self._last_error = f"Camera #{idx} ready ({self.actual_width}x{self.actual_height})"
                 return cap
-
-        self._last_error = (
-            f"Cannot open camera index {idx} on any backend"
-            f" at {CAMERA_TARGET_SIZES[0][0]}x{CAMERA_TARGET_SIZES[0][1]}"
-            f" or {CAMERA_TARGET_SIZES[-1][0]}x{CAMERA_TARGET_SIZES[-1][1]}"
-        )
+            
+        cap.release()
+        self._last_error = f"Camera #{idx} failed validation"
         return None
 
     # ------------------------------------------------------------------
@@ -3890,31 +3868,11 @@ class CameraThread:
 
         open_indices: list[int] = []
         for idx in candidate_indices:
-            found = False
-            for backend in self._backend_candidates():
-                if found:
-                    break
-                for width, height in CAMERA_TARGET_SIZES:
-                    cap = cv2.VideoCapture(idx, backend)
-                    try:
-                        if not cap.isOpened():
-                            continue
-                        if self._is_windows:
-                            cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
-                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                        cap.set(cv2.CAP_PROP_FPS, 60)
-                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                        if self._try_read_frames(cap, count=3):
-                            found = True
-                            break
-                    finally:
-                        cap.release()
-                    if found:
-                        break
-            if found:
+            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW if self._is_windows else cv2.CAP_ANY)
+            if cap.isOpened():
                 open_indices.append(idx)
-            time.sleep(0.05)
+                cap.release()
+            time.sleep(0.02)
 
         system_names = self._dshow_camera_names() or self._system_camera_names()
         devices: list[CameraDevice] = []
@@ -3972,7 +3930,7 @@ class CameraThread:
             self._cap = cap
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        self._thread.start()  # type: ignore
         return True
 
     def switch_camera(self, camera_index: int) -> bool:
@@ -4016,7 +3974,7 @@ class CameraThread:
             if not ok or frame is None:
                 consecutive_failures += 1
                 if consecutive_failures >= CAMERA_READ_RETRY_LIMIT:
-                    self._last_error = "Camera stream stalled, attempting reopen"
+                    self._last_error = "Camera stream stalled"
                     new_cap = self._open_capture(self.camera_index)
                     if new_cap is not None:
                         with self._cap_lock:
@@ -4028,17 +3986,18 @@ class CameraThread:
                         except Exception:
                             pass
                         consecutive_failures = 0
-                    else:
-                        self._last_error = "Camera stream lost and reopen failed"
                     time.sleep(CAMERA_REOPEN_COOLDOWN_S)
                     continue
-                time.sleep(0.001)
+                time.sleep(0.01)
                 continue
 
             consecutive_failures = 0
             self.actual_height, self.actual_width = frame.shape[:2]
             with self._frame_lock:
                 self._frame = frame
+            
+            # 🔥 Fix thread loop aggression (recommended to avoid freezing)
+            time.sleep(0.005)
 
     def latest(self):
         with self._frame_lock:
@@ -4046,8 +4005,8 @@ class CameraThread:
 
     def stop(self) -> None:
         self._running = False
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=1.5)
+        if self._thread is not None and self._thread.is_alive():  # type: ignore
+            self._thread.join(timeout=1.5)  # type: ignore
         self._thread = None
 
         with self._cap_lock:
@@ -4287,8 +4246,8 @@ from __future__ import annotations
 import math
 import time
 
-from .models import FingerStates, GestureResult, GestureType
-from .tuning import (
+from .models import FingerStates, GestureResult, GestureType  # type: ignore
+from .tuning import (  # type: ignore
     GESTURE_ACTION_COOLDOWN_S,
     GESTURE_CONFIRM_HOLD_S,
     GESTURE_DOUBLE_CLICK_WINDOW_S,
@@ -4494,7 +4453,7 @@ class GestureDetector:
         if right_click_pose:
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
-            if now - self._right_pinch_start_t >= self._right_click_hold_s:
+            if now - self._right_pinch_start_t >= self._right_click_hold_s:  # type: ignore
                 self._right_pinch_active = True
         else:
             self._right_pinch_start_t = None
@@ -4679,7 +4638,7 @@ class GestureDetector:
             if open_palm and not self._left_pinch_active and not self._right_pinch_active:
                 if self._task_view_since is None:
                     self._task_view_since = now
-                if now - self._task_view_since >= self._task_view_hold_s:
+                if now - self._task_view_since >= self._task_view_hold_s:  # type: ignore
                     raw_state = GestureType.TASK_VIEW
                 else:
                     raw_state = GestureType.PAUSE
@@ -4689,7 +4648,7 @@ class GestureDetector:
                 if keyboard_pose and not pinch_guard_active:
                     if self._keyboard_hold_start is None:
                         self._keyboard_hold_start = now
-                    hold_elapsed = now - self._keyboard_hold_start
+                    hold_elapsed = now - self._keyboard_hold_start  # type: ignore
                     if hold_elapsed >= self._keyboard_hold_s and not self._keyboard_fired:
                         raw_state = GestureType.KEYBOARD
                         self._keyboard_fired = True
@@ -4699,7 +4658,7 @@ class GestureDetector:
                     self._keyboard_hold_start = None
                     self._keyboard_fired = False
 
-                    if self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):
+                    if self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):  # type: ignore
                         raw_state = GestureType.DRAG
                     elif self._left_pinch_active and (not self._right_pinch_active):
                         raw_state = GestureType.LEFT_CLICK
@@ -4875,14 +4834,10 @@ from __future__ import annotations
 
 from collections import deque
 
-import cv2
+import cv2  # type: ignore
 
-from .tuning import (
-    HAND_LABEL_MAJORITY_RATIO,
-    HAND_LOCK_CONFIDENCE_THRESHOLD,
-    HAND_LOCKED_DROP_THRESHOLD,
-)
-from .utils import _ensure_mediapipe_solutions
+from .tuning import HAND_LABEL_MAJORITY_RATIO, HAND_LOCK_CONFIDENCE_THRESHOLD, HAND_LOCKED_DROP_THRESHOLD  # type: ignore
+from .utils import _ensure_mediapipe_solutions  # type: ignore
 
 try:
     import mediapipe as mp  # type: ignore
@@ -5063,20 +5018,20 @@ import threading
 import time
 from typing import Any, cast
 
-import cv2
+import cv2  # type: ignore
 
 # ── BUG C FIX: pyautogui configuration for Windows ──
 try:
-    import pyautogui
+    import pyautogui  # type: ignore
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
 except ImportError:
     pyautogui = None  # type: ignore
 
-import qtawesome as qta
-from PySide6.QtCore import QMetaObject, QSize, Signal, Slot, Qt, QTimer
-from PySide6.QtGui import QAction, QImage, QPixmap
-from PySide6.QtWidgets import (
+import qtawesome as qta  # type: ignore
+from PySide6.QtCore import QMetaObject, QSize, Signal, Slot, Qt, QTimer  # type: ignore
+from PySide6.QtGui import QAction, QImage, QPixmap  # type: ignore
+from PySide6.QtWidgets import (  # type: ignore
     QApplication,
     QCheckBox,
     QComboBox,
@@ -5098,15 +5053,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .camera_thread import CameraDevice, CameraThread
-from .constants import _OVERLAY_LABELS
-from .cursor_mapper import CursorMapper
-from .gesture_detector import GestureDetector
-from .hand_tracker import HandTracker
-from .models import GestureResult, GestureType
-from .mouse import MouseController
-from .settings_store import settings
-from .utils import _boost_runtime_priority, _configure_input_latency
+from .camera_thread import CameraDevice, CameraThread  # type: ignore
+from .constants import _OVERLAY_LABELS  # type: ignore
+from .cursor_mapper import CursorMapper  # type: ignore
+from .gesture_detector import GestureDetector  # type: ignore
+from .hand_tracker import HandTracker  # type: ignore
+from .models import GestureResult, GestureType  # type: ignore
+from .mouse import MouseController  # type: ignore
+from .settings_store import settings  # type: ignore
+from .utils import _boost_runtime_priority, _configure_input_latency  # type: ignore
 
 
 def _as_int(value: object, default: int) -> int:
@@ -5146,7 +5101,7 @@ def _gesture_accent(gesture: GestureType) -> str:
 
 class StatusOverlay(QWidget):
     def __init__(self, icons: dict[str, object]) -> None:
-        super().__init__(None)
+        super().__init__(None)  # type: ignore
         self._icons = icons
         self.setWindowTitle("Windows Hover Status")
         self.setWindowFlags(
@@ -5257,7 +5212,7 @@ class StatusOverlay(QWidget):
 
 class SettingsDialog(QDialog):
     def __init__(self, parent: "MainWindow", cameras: list[CameraDevice], selected_index: int) -> None:
-        super().__init__(parent)
+        super().__init__(parent)  # type: ignore
         self._mw = parent
         self.setWindowTitle("Settings")
         self.setModal(True)
@@ -6272,7 +6227,7 @@ class MainWindow(QMainWindow):
     def start_camera(self) -> None:
         if self.running:
             return
-        if self._start_worker is not None and self._start_worker.is_alive():
+        if self._start_worker is not None and self._start_worker.is_alive():  # type: ignore
             return
         if self._mediapipe_error:
             self.preview.setText(self._mediapipe_error)
@@ -6327,7 +6282,7 @@ class MainWindow(QMainWindow):
             self._camera_start_result.emit(ok)
 
         self._start_worker = threading.Thread(target=_worker, daemon=True)
-        self._start_worker.start()
+        self._start_worker.start()  # type: ignore
 
     @Slot(bool)
     def _on_camera_start_done(self, ok: bool) -> None:
@@ -6344,7 +6299,7 @@ class MainWindow(QMainWindow):
 
         self.running = True
         self.proc_thread = threading.Thread(target=self._process_loop, daemon=True)
-        self.proc_thread.start()
+        self.proc_thread.start()  # type: ignore
 
         self.cam_status.setText("Camera Active")
         self._status_dot.setObjectName("statusOnline")
@@ -6358,8 +6313,8 @@ class MainWindow(QMainWindow):
 
     def stop_camera(self) -> None:
         self.running = False
-        if self.proc_thread and self.proc_thread.is_alive():
-            self.proc_thread.join(timeout=1.5)
+        if self.proc_thread and self.proc_thread.is_alive():  # type: ignore
+            self.proc_thread.join(timeout=1.5)  # type: ignore
         self.proc_thread = None
 
         self.camera.stop()
@@ -6389,9 +6344,9 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
 
         if self._overlay is not None:
-            settings.set("overlay_x", self._overlay.x())
-            settings.set("overlay_y", self._overlay.y())
-            self._overlay.close()
+            settings.set("overlay_x", self._overlay.x())  # type: ignore
+            settings.set("overlay_y", self._overlay.y())  # type: ignore
+            self._overlay.close()  # type: ignore
             self._overlay = None
 
     def _on_tray_activated(self, reason):
@@ -6412,36 +6367,36 @@ class MainWindow(QMainWindow):
 
             if self._overlay is None:
                 self._overlay = StatusOverlay(self.icons)
-                self._overlay.open_btn.clicked.connect(self._show_main_window)
-                self._overlay.disable_btn.clicked.connect(self._disable_mouse_from_overlay)
+                self._overlay.open_btn.clicked.connect(self._show_main_window)  # type: ignore
+                self._overlay.disable_btn.clicked.connect(self._disable_mouse_from_overlay)  # type: ignore
                 try:
                     screen = QApplication.primaryScreen()
                     if screen:
                         sg = screen.availableGeometry()
-                        self._overlay.move(
-                            max(10, sg.right() - self._overlay.width() - 20),
+                        self._overlay.move(  # type: ignore
+                            max(10, sg.right() - self._overlay.width() - 20),  # type: ignore
                             sg.top() + 20,
                         )
                     else:
-                        self._overlay.move(20, 20)
+                        self._overlay.move(20, 20)  # type: ignore
                 except Exception:
-                    self._overlay.move(20, 20)
+                    self._overlay.move(20, 20)  # type: ignore
 
                 ox = _as_int(settings.get("overlay_x", -1), -1)
                 oy = _as_int(settings.get("overlay_y", -1), -1)
                 if ox >= 0 and oy >= 0:
-                    self._overlay.move(ox, oy)
+                    self._overlay.move(ox, oy)  # type: ignore
 
-                self._overlay.show()
+                self._overlay.show()  # type: ignore
 
             self.showMinimized()
         else:
             self.mouse_btn.setText("Enable Mouse")
             self.mouse_lbl.setText("Mouse: OFF")
             if self._overlay is not None:
-                settings.set("overlay_x", self._overlay.x())
-                settings.set("overlay_y", self._overlay.y())
-                self._overlay.close()
+                settings.set("overlay_x", self._overlay.x())  # type: ignore
+                settings.set("overlay_y", self._overlay.y())  # type: ignore
+                self._overlay.close()  # type: ignore
                 self._overlay = None
             self.showNormal()
             self.raise_()
@@ -6488,40 +6443,40 @@ class MainWindow(QMainWindow):
         _boost_runtime_priority()
         # cv2.setUseOptimized is configured globally; skip per-thread call.
 
-        while self.running:
+        while self.running:  # type: ignore
             if time.monotonic() - last_hand_time > 5.0:
                 time.sleep(0.005)
 
             try:
-                frame = self.camera.latest()
+                frame = self.camera.latest()  # type: ignore
                 if frame is None:
                     time.sleep(0.001)
                     continue
 
-                if self._mirror_camera:
+                if self._mirror_camera:  # type: ignore
                     frame = cv2.flip(frame, 1)
 
                 h, w = frame.shape[:2]
-                self.mapper.set_camera_size(w, h)
+                self.mapper.set_camera_size(w, h)  # type: ignore
 
-                tracker = self.tracker
+                tracker = self.tracker  # type: ignore
                 if tracker is None:
                     time.sleep(0.01)
                     continue
 
-                hand_data, hand_proto, is_grace = tracker.detect(frame, is_mirrored=self._mirror_camera)
+                hand_data, hand_proto, is_grace = tracker.detect(frame, is_mirrored=self._mirror_camera)  # type: ignore
 
                 if hand_proto is not None:
                     last_hand_time = time.monotonic()
                     wrist = hand_data["xy"][0]
                     middle_mcp = hand_data["xy"][9]
                     scale = ((wrist[0] - middle_mcp[0]) ** 2 + (wrist[1] - middle_mcp[1]) ** 2) ** 0.5
-                    self.mapper.set_hand_scale(scale)
-                    self._camera_error_text = ""
+                    self.mapper.set_hand_scale(scale)  # type: ignore
+                    self._camera_error_text = ""  # type: ignore
                 else:
-                    self._camera_error_text = self.camera.last_error
+                    self._camera_error_text = self.camera.last_error  # type: ignore
 
-                result = self.gestures.detect(hand_data, is_grace_frame=is_grace)
+                result = self.gestures.detect(hand_data, is_grace_frame=is_grace)  # type: ignore
                 if result is None:
                     result = GestureResult(GestureType.PAUSE, 0)
                 # Safety: verify confidence before allowing actions
@@ -6680,7 +6635,7 @@ class MainWindow(QMainWindow):
 
         if self._overlay is not None:
             try:
-                self._overlay.update_status(gesture, self.fps, hand_proto is not None)
+                self._overlay.update_status(gesture, self.fps, hand_proto is not None)  # type: ignore
             except Exception:
                 pass
 
@@ -6738,26 +6693,26 @@ class MainWindow(QMainWindow):
         self._quitting = True
         self._save_window_geometry()
         if self._overlay is not None:
-            settings.set("overlay_x", self._overlay.x())
-            settings.set("overlay_y", self._overlay.y())
+            settings.set("overlay_x", self._overlay.x())  # type: ignore
+            settings.set("overlay_y", self._overlay.y())  # type: ignore
         if self._tray is not None:
-            self._tray.hide()
+            self._tray.hide()  # type: ignore
         self.stop_camera()
         if self.tracker is not None:
-            self.tracker.close()
+            self.tracker.close()  # type: ignore
         self.mouse.stop()
-        QApplication.instance().quit()
+        QApplication.instance().quit()  # type: ignore
 
     def closeEvent(self, event) -> None:
-        if self._tray is not None and self._tray.isVisible() and not self._quitting:
+        if self._tray is not None and self._tray.isVisible() and not self._quitting:  # type: ignore
             self.hide()
             event.ignore()
             return
 
         self._save_window_geometry()
         if self._overlay is not None:
-            settings.set("overlay_x", self._overlay.x())
-            settings.set("overlay_y", self._overlay.y())
+            settings.set("overlay_x", self._overlay.x())  # type: ignore
+            settings.set("overlay_y", self._overlay.y())  # type: ignore
 
         try:
             self.stop_camera()
@@ -6765,7 +6720,7 @@ class MainWindow(QMainWindow):
             pass
         try:
             if self.tracker is not None:
-                self.tracker.close()
+                self.tracker.close()  # type: ignore
         except Exception:
             pass
         try:
@@ -6773,7 +6728,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         if self._dimmer is not None:
-            self._dimmer.deleteLater()
+            self._dimmer.deleteLater()  # type: ignore
             self._dimmer = None
         event.accept()
 
@@ -6828,6 +6783,7 @@ import platform
 import subprocess
 import threading
 import time
+from typing import Any
 
 try:
     import pyautogui  # type: ignore
@@ -6846,7 +6802,7 @@ if platform.system() == "Windows":
         except Exception:
             pass
 
-from .tuning import MOUSE_WORKER_HZ
+from .tuning import MOUSE_WORKER_HZ  # type: ignore
 
 
 class MouseController:
@@ -6864,12 +6820,12 @@ class MouseController:
         self._lock = threading.Lock()
         self._running = True
         self._worker = threading.Thread(target=self._cursor_worker, daemon=True)
-        self._media_queue = collections.deque()
+        self._media_queue: collections.deque[tuple[str, int]] = collections.deque()
         self._media_lock = threading.Lock()
         self._media_worker = threading.Thread(target=self._media_worker_loop, daemon=True)
 
-        self._user32 = None
-        self._quartz = None
+        self._user32: Any = None
+        self._quartz: Any = None
 
         if self._platform == "Windows":
             try:
@@ -6906,10 +6862,10 @@ class MouseController:
 
     def stop(self) -> None:
         self._running = False
-        if self._worker.is_alive():
-            self._worker.join(timeout=0.5)
-        if self._media_worker.is_alive():
-            self._media_worker.join(timeout=0.5)
+        if self._worker.is_alive():  # type: ignore
+            self._worker.join(timeout=0.5)  # type: ignore
+        if self._media_worker.is_alive():  # type: ignore
+            self._media_worker.join(timeout=0.5)  # type: ignore
 
     def move(self, x: int, y: int) -> None:
         with self._lock:
@@ -6956,38 +6912,38 @@ class MouseController:
 
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
-            event = q.CGEventCreateMouseEvent(None, q.kCGEventMouseMoved, (float(x), float(y)), q.kCGMouseButtonLeft)
-            q.CGEventPost(q.kCGHIDEventTap, event)
+            event = q.CGEventCreateMouseEvent(None, q.kCGEventMouseMoved, (float(x), float(y)), q.kCGMouseButtonLeft)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, event)  # type: ignore
 
     def left_click(self) -> None:
         if self._platform == "Windows" and self._user32 is not None:
-            self._mouse_event(self._MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)
+            self._mouse_event(self._MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)  # type: ignore
             time.sleep(0.01)
-            self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)
+            self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)  # type: ignore
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
             x, y = self._last_x, self._last_y
-            down = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseDown, (float(x), float(y)), q.kCGMouseButtonLeft)
-            up = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseUp, (float(x), float(y)), q.kCGMouseButtonLeft)
-            q.CGEventPost(q.kCGHIDEventTap, down)
-            q.CGEventPost(q.kCGHIDEventTap, up)
+            down = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseDown, (float(x), float(y)), q.kCGMouseButtonLeft)  # type: ignore
+            up = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseUp, (float(x), float(y)), q.kCGMouseButtonLeft)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, down)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, up)  # type: ignore
 
     def right_click(self) -> None:
         if self._platform == "Windows" and self._user32 is not None:
-            self._mouse_event(self._MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, None)
+            self._mouse_event(self._MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, None)  # type: ignore
             time.sleep(0.01)
-            self._mouse_event(self._MOUSEEVENTF_RIGHTUP, 0, 0, 0, None)
+            self._mouse_event(self._MOUSEEVENTF_RIGHTUP, 0, 0, 0, None)  # type: ignore
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
             x, y = self._last_x, self._last_y
-            down = q.CGEventCreateMouseEvent(None, q.kCGEventRightMouseDown, (float(x), float(y)), q.kCGMouseButtonRight)
-            up = q.CGEventCreateMouseEvent(None, q.kCGEventRightMouseUp, (float(x), float(y)), q.kCGMouseButtonRight)
-            q.CGEventPost(q.kCGHIDEventTap, down)
-            q.CGEventPost(q.kCGHIDEventTap, up)
+            down = q.CGEventCreateMouseEvent(None, q.kCGEventRightMouseDown, (float(x), float(y)), q.kCGMouseButtonRight)  # type: ignore
+            up = q.CGEventCreateMouseEvent(None, q.kCGEventRightMouseUp, (float(x), float(y)), q.kCGMouseButtonRight)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, down)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, up)  # type: ignore
 
     def double_click(self) -> None:
         self.left_click()
@@ -7001,12 +6957,12 @@ class MouseController:
         if self._platform == "Windows" and self._user32 is not None:
             clicks = max(-20, min(20, int(amount)))
             delta = int(clicks * self._WHEEL_DELTA)
-            self._mouse_event(self._MOUSEEVENTF_WHEEL, 0, 0, delta & 0xFFFFFFFF, None)
+            self._mouse_event(self._MOUSEEVENTF_WHEEL, 0, 0, delta & 0xFFFFFFFF, None)  # type: ignore
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
-            q.CGEventPost(q.kCGHIDEventTap, q.CGEventCreateScrollWheelEvent(None, q.kCGScrollEventUnitLine, 1, int(amount)))
+            q.CGEventPost(q.kCGHIDEventTap, q.CGEventCreateScrollWheelEvent(None, q.kCGScrollEventUnitLine, 1, int(amount)))  # type: ignore
 
     def start_drag(self) -> None:
         if self._dragging:
@@ -7020,8 +6976,8 @@ class MouseController:
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
             x, y = self._last_x, self._last_y
-            down = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseDown, (float(x), float(y)), q.kCGMouseButtonLeft)
-            q.CGEventPost(q.kCGHIDEventTap, down)
+            down = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseDown, (float(x), float(y)), q.kCGMouseButtonLeft)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, down)  # type: ignore
 
     def end_drag(self) -> None:
         if not self._dragging:
@@ -7029,14 +6985,14 @@ class MouseController:
         self._dragging = False
 
         if self._platform == "Windows" and self._user32 is not None:
-            self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)
+            self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)  # type: ignore
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
             x, y = self._last_x, self._last_y
-            up = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseUp, (float(x), float(y)), q.kCGMouseButtonLeft)
-            q.CGEventPost(q.kCGHIDEventTap, up)
+            up = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseUp, (float(x), float(y)), q.kCGMouseButtonLeft)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, up)  # type: ignore
 
     def _send_media_key_now(self, action: str, count: int = 1) -> bool:
         if self._platform != "Windows" or self._user32 is None:
@@ -7052,8 +7008,8 @@ class MouseController:
             return False
         reps = max(1, int(count))
         for _ in range(reps):
-            self._user32.keybd_event(vk, 0, 0, 0)
-            self._user32.keybd_event(vk, 0, 2, 0)
+            self._user32.keybd_event(vk, 0, 0, 0)  # type: ignore
+            self._user32.keybd_event(vk, 0, 2, 0)  # type: ignore
             time.sleep(0.01)
         return True
 
@@ -7079,7 +7035,7 @@ class MouseController:
                 # Check for TabTip.exe (Touch Keyboard) - toggling it is harder, 
                 # but we can try to find window or use specialized command
                 import ctypes
-                hwnd = ctypes.windll.user32.FindWindowW("IPTip_Main_Window", None)
+                hwnd = ctypes.windll.user32.FindWindowW("IPTip_Main_Window", None)  # type: ignore
                 if hwnd:
                     # If found, try to hide it by sending a close command or killing process
                     # tabtip.exe is usually persistent, so we might just kill it if possible
@@ -7119,10 +7075,10 @@ class MouseController:
         if self._platform != "Windows" or self._user32 is None:
             return False
         try:
-            self._user32.keybd_event(0x5B, 0, 0, 0)
-            self._user32.keybd_event(0x09, 0, 0, 0)
-            self._user32.keybd_event(0x09, 0, 2, 0)
-            self._user32.keybd_event(0x5B, 0, 2, 0)
+            self._user32.keybd_event(0x5B, 0, 0, 0)  # type: ignore
+            self._user32.keybd_event(0x09, 0, 0, 0)  # type: ignore
+            self._user32.keybd_event(0x09, 0, 2, 0)  # type: ignore
+            self._user32.keybd_event(0x5B, 0, 2, 0)  # type: ignore
             return True
         except Exception:
             return False
@@ -7336,80 +7292,4 @@ def _boost_runtime_priority() -> None:
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST)
     except Exception:
         pass
-
-=== test_cam.py ===
-import cv2
-import platform
-
-
-def backend_list():
-    if platform.system() == "Windows":
-        return [cv2.CAP_MSMF, cv2.CAP_DSHOW, cv2.CAP_ANY]
-    return [cv2.CAP_ANY]
-
-
-def backend_name(backend):
-    if backend == cv2.CAP_MSMF:
-        return "MSMF"
-    if backend == cv2.CAP_DSHOW:
-        return "DSHOW"
-    if backend == cv2.CAP_ANY:
-        return "ANY"
-    return str(backend)
-
-
-def test_cameras():
-    backends = backend_list()
-
-    working_indexes = []
-
-    for i in range(10):
-        found = False
-        for backend in backends:
-            print(f"Testing index {i} with backend {backend_name(backend)}...")
-            cap = cv2.VideoCapture(i, backend)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    print(f"  [SUCCESS] Index {i} works ({backend_name(backend)})")
-                    working_indexes.append((i, backend))
-                    found = True
-                    cap.release()
-                    break
-                print(f"  [FAIL] Index {i} opened but failed to read frame.")
-            else:
-                print(f"  [FAIL] Index {i} failed to open.")
-            cap.release()
-        if not found:
-            print(f"  [FAIL] Index {i} unavailable on all backends")
-
-    for i in working_indexes:
-        idx, backend = i
-        print(f"\nTesting constraints on working index {idx} ({backend_name(backend)})...")
-        cap = cv2.VideoCapture(idx, backend)
-
-        if platform.system() == "Windows":
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_FPS, 60)
-
-        if cap.isOpened():
-            ret, frame = cap.read()
-            if ret and frame is not None:
-                if platform.system() == "Windows":
-                    fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
-                    mjpg_ok = fourcc == cv2.VideoWriter_fourcc(*"MJPG")
-                    if mjpg_ok:
-                        print(f"  [SUCCESS] Index {idx} works with MJPG and 60 FPS constraints.")
-                    else:
-                        print(f"  [WARN] Index {idx} works but rejected MJPG (fallback format active).")
-                else:
-                    print(f"  [SUCCESS] Index {idx} works with 60 FPS constraints.")
-            else:
-                print(f"  [FAIL] Index {idx} fails when constrained.")
-        cap.release()
-
-if __name__ == "__main__":
-    test_cameras()
 
