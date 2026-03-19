@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import cv2
+from collections import deque
 
 from .utils import _ensure_mediapipe_solutions
 
@@ -17,6 +18,7 @@ if mp is not None:
 class HandTracker:
     def __init__(self) -> None:
         self._process_size: tuple[int, int] | None = None
+        self._label_history: deque = deque(maxlen=5)
         _ensure_mediapipe_solutions()
 
         self._mp_hands = mp.solutions.hands  # type: ignore[attr-defined]
@@ -38,7 +40,7 @@ class HandTracker:
         w, h = size
         self._process_size = (max(64, int(w)), max(64, int(h)))
 
-    def detect(self, frame_bgr):
+    def detect(self, frame_bgr, is_mirrored=False):
         src_h, src_w = frame_bgr.shape[:2]
 
         detect_frame = frame_bgr
@@ -50,12 +52,23 @@ class HandTracker:
         result = self._hands.process(rgb)
 
         if not result.multi_hand_landmarks or not result.multi_handedness:
+            self._label_history.clear()
             return None, None
 
         hand = result.multi_hand_landmarks[0]
-        label = result.multi_handedness[0].classification[0].label
-        # Fix mirrored webcam handedness from MediaPipe output.
-        label = "Right" if label == "Left" else "Left"
+        raw_label = result.multi_handedness[0].classification[0].label
+        # If the frame is already mirrored (cv2.flip), MediaPipe's label is correct.
+        # If not mirrored, MediaPipe sees a mirror image, so we flip the label.
+        if is_mirrored:
+            label = raw_label
+        else:
+            label = "Right" if raw_label == "Left" else "Left"
+
+        # Smooth label over last 5 frames to suppress single-frame noise.
+        self._label_history.append(label)
+        label = max(set(self._label_history), key=list(self._label_history).count)
+
+        print(f"[HAND] Raw={raw_label} Mirrored={is_mirrored} Final={label}")
 
         confidence = result.multi_handedness[0].classification[0].score
         if self._process_size is None:

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSlider,
     QSystemTrayIcon,
@@ -283,8 +284,8 @@ class SettingsDialog(QDialog):
         self.pinch_lbl.setText(f"Pinch Sensitivity: {self._mw.gestures._pinch_enter:.2f}")
         self.hold_lbl = QLabel("Confirm hold (ms)")
         self.hold_slider = QSlider(Qt.Orientation.Horizontal)
-        self.hold_slider.setRange(100, 500)
-        self.hold_slider.setValue(int(_as_float(settings.get("confirm_hold_s", self._mw.gestures._confirm_hold_s), self._mw.gestures._confirm_hold_s) * 1000))
+        self.hold_slider.setRange(50, 500)
+        self.hold_slider.setValue(int(_as_float(settings.get("confirm_hold_s", 0.08), self._mw.gestures._confirm_hold_s) * 1000))
         self.hold_lbl.setText(f"Hold Time: {self._mw.gestures._confirm_hold_s:.2f}s")
         self.z_tap_chk = QCheckBox("Enable Z-tap (forward air click)")
         self.z_tap_chk.setChecked(bool(settings.get("z_tap_enabled", False)))
@@ -547,9 +548,9 @@ class MainWindow(QMainWindow):
         self.mapper.set_camera_size(640, 480)
         self.mapper.set_frame_margin(_as_int(settings.get("frame_r", 90), 90))
         self.mapper.set_smoothening(_as_float(settings.get("smoothening", 4.8), 4.8))
-        self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.22), 0.22)
-        self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.20), 0.20)
-        self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.05, _as_float(settings.get("pinch_exit_sensitivity", 0.30), 0.30))
+        self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.08), 0.08)
+        self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.18), 0.18)
+        self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.05, _as_float(settings.get("pinch_exit_sensitivity", 0.32), 0.32))
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
         self._scroll_multiplier: float = _as_float(settings.get("scroll_multiplier", 1.0), 1.0)
         self.debug = _as_bool(settings.get("debug_overlay", False), False)
@@ -636,6 +637,9 @@ class MainWindow(QMainWindow):
 
         self.fps_lbl = QLabel("FPS 0")
         self.fps_lbl.setObjectName("secondary")
+        self.title_lbl.setWordWrap(True)
+        self.cam_status.setWordWrap(True)
+        self.fps_lbl.setWordWrap(True)
 
         header_l.addWidget(icon_label)
         header_l.addWidget(self.title_lbl)
@@ -670,9 +674,11 @@ class MainWindow(QMainWindow):
         sl.setSpacing(10)
         status_title = QLabel("System Status")
         status_title.setObjectName("cardTitle")
+        status_title.setWordWrap(True)
         
         self.gesture_lbl = QLabel("STANDBY")
         self.gesture_lbl.setObjectName("badge")
+        self.gesture_lbl.setWordWrap(True)
         
         self.hand_lbl = QLabel("Hand: Not Detected")
         self.hand_lbl.setObjectName("secondary")
@@ -682,6 +688,10 @@ class MainWindow(QMainWindow):
         self.fingers_lbl.setObjectName("secondary")
         self.confidence_lbl = QLabel("Confidence: —")
         self.confidence_lbl.setObjectName("secondary")
+        self.hand_lbl.setWordWrap(True)
+        self.mouse_lbl.setWordWrap(True)
+        self.fingers_lbl.setWordWrap(True)
+        self.confidence_lbl.setWordWrap(True)
         
         sl.addWidget(status_title)
         sl.addWidget(self.gesture_lbl)
@@ -694,6 +704,7 @@ class MainWindow(QMainWindow):
         guide = QFrame()
         guide.setObjectName("sideCard")
         guide.setMinimumWidth(260)
+        guide.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         gl = QGridLayout(guide)
         gl.setContentsMargins(0, 8, 0, 8)
         gl.setHorizontalSpacing(16)
@@ -701,6 +712,7 @@ class MainWindow(QMainWindow):
 
         guide_title = QLabel("Protocol Guide")
         guide_title.setObjectName("cardTitle")
+        guide_title.setWordWrap(True)
         gl.addWidget(guide_title, 0, 0, 1, 3)
 
         guide_rows = [
@@ -723,9 +735,11 @@ class MainWindow(QMainWindow):
             
             tl = QLabel(gesture_desc)
             tl.setObjectName("gestureBold")
+            tl.setWordWrap(True)
             
             dl = QLabel(action_desc)
             dl.setObjectName("mutedAction")
+            dl.setWordWrap(True)
             
             gl.addWidget(il, i, 0)
             gl.addWidget(tl, i, 1)
@@ -741,11 +755,13 @@ class MainWindow(QMainWindow):
         hl.setSpacing(6)
         history_title = QLabel("Audit Log")
         history_title.setObjectName("cardTitle")
+        history_title.setWordWrap(True)
         hl.addWidget(history_title)
         self._history_labels: list[QLabel] = []
         for _ in range(6):
             lbl = QLabel("")
             lbl.setObjectName("historyItem")
+            lbl.setWordWrap(True)
             lbl.setVisible(False)
             hl.addWidget(lbl)
             self._history_labels.append(lbl)
@@ -755,14 +771,27 @@ class MainWindow(QMainWindow):
         self.gesture_guide.setMinimumWidth(260)
         self.audit_log.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
+        # Wrap audit log in a scroll area for readability at all window sizes.
+        audit_scroll = QScrollArea()
+        audit_scroll.setWidgetResizable(True)
+        audit_scroll.setWidget(self.audit_log)
+        audit_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        audit_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+
+        side_content = QVBoxLayout()
+        side_content.setSpacing(12)
+        side_content.addWidget(self.gesture_guide)
+        side_content.addWidget(audit_scroll, 1)
+        side_content.setStretch(0, 2)
+        side_content.setStretch(1, 1)
+
         side.addWidget(status)
-        side.addWidget(self.gesture_guide)
-        side.addWidget(self.audit_log, 1)
+        side.addLayout(side_content, 1)
         side.addStretch(1)
 
         side_wrap = QWidget()
         side_wrap.setLayout(side)
-        side_wrap.setFixedWidth(340)
+        side_wrap.setMinimumWidth(380)
         side_wrap.setObjectName("sideCardWrap")
 
         body_l.addWidget(cam_card, 1)
@@ -1085,9 +1114,9 @@ class MainWindow(QMainWindow):
             return
 
         self.gestures = GestureDetector()
-        self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.22), 0.22)
-        self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.20), 0.20)
-        self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.05, _as_float(settings.get("pinch_exit_sensitivity", 0.30), 0.30))
+        self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.08), 0.08)
+        self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.18), 0.18)
+        self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.05, _as_float(settings.get("pinch_exit_sensitivity", 0.32), 0.32))
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
 
         if _as_bool(settings.get("performance_mode", False), False):
@@ -1270,7 +1299,7 @@ class MainWindow(QMainWindow):
                     time.sleep(0.01)
                     continue
 
-                hand_data, hand_proto = tracker.detect(frame)
+                hand_data, hand_proto = tracker.detect(frame, is_mirrored=self._mirror_camera)
 
                 if hand_proto is not None:
                     last_hand_time = time.monotonic()
