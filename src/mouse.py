@@ -19,7 +19,7 @@ class MouseController:
         self._has_target = False
         self._last_x = -1
         self._last_y = -1
-        self._deadzone_px = 2
+        self._deadzone_px = 1
 
         self._lock = threading.Lock()
         self._running = True
@@ -228,14 +228,22 @@ class MouseController:
     def show_osk(self) -> bool:
         if self._platform == "Windows":
             try:
-                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                subprocess.Popen(["osk.exe"], creationflags=flags)
+                output = subprocess.check_output('tasklist /FI "IMAGENAME eq osk.exe" /NH', shell=True).decode()
+                if "osk.exe" in output.lower():
+                    subprocess.run('taskkill /IM osk.exe /F', shell=True)
+                else:
+                    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    subprocess.Popen(["cmd.exe", "/c", "start", "osk.exe"], creationflags=flags)
                 return True
             except Exception:
                 return False
         if self._platform == "Darwin":
             try:
-                subprocess.Popen(["open", "-a", "Keyboard Viewer"])
+                output = subprocess.check_output(['ps', '-ax']).decode('utf-8')
+                if 'Keyboard Viewer' in output:
+                    subprocess.run(['killall', 'Keyboard Viewer'])
+                else:
+                    subprocess.Popen(["open", "-a", "Keyboard Viewer"])
                 return True
             except Exception:
                 return False

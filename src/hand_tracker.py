@@ -18,7 +18,7 @@ if mp is not None:
 class HandTracker:
     def __init__(self) -> None:
         self._process_size: tuple[int, int] | None = None
-        self._label_history: deque = deque(maxlen=5)
+        self._label_history: deque = deque(maxlen=9)
         _ensure_mediapipe_solutions()
 
         self._mp_hands = mp.solutions.hands  # type: ignore[attr-defined]
@@ -35,9 +35,9 @@ class HandTracker:
 
         # ── BUG B FIX: Grace period for hand loss ──
         self._frames_no_hand = 0
-        self._grace_frames = 8
+        self._grace_frames = 4
         self._last_valid_result: tuple | None = None  # (hand_data, hand_proto)
-        self._log_cooldown_s = 0.6
+        self._log_cooldown_s = 5.0
         self._last_log_ts = 0.0
         self._last_logged_label = ""
 
@@ -80,23 +80,29 @@ class HandTracker:
         else:
             label = "Right" if raw_label == "Left" else "Left"
 
-        # Smooth label over last 5 frames to suppress single-frame noise.
+        # Smooth label over last 9 frames — require 7/9 majority to switch
         self._label_history.append(label)
-        label = max(set(self._label_history), key=list(self._label_history).count)
+        right_count = list(self._label_history).count("Right")
+        left_count = list(self._label_history).count("Left")
+        total = len(self._label_history)
+        # Only switch if strong majority (7+ of 9 frames agree)
+        threshold = max(5, int(total * 0.75))
+        if right_count >= threshold:
+            label = "Right"
+        elif left_count >= threshold:
+            label = "Left"
+        else:
+            # No strong majority — keep previous label
+            label = self._last_logged_label if self._last_logged_label else "Right"
 
-        now = cv2.getTickCount() / cv2.getTickFrequency()
-        if label != self._last_logged_label or (now - self._last_log_ts) >= self._log_cooldown_s:
-            print(f"[HAND] Raw={raw_label} Mirrored={is_mirrored} Final={label}")
-            self._last_logged_label = label
-            self._last_log_ts = now
+        self._last_logged_label = label
+        # Hand label logging disabled for production
 
         confidence = result.multi_handedness[0].classification[0].score
 
         # ── BUG B FIX: Confidence gate lowered from 0.6 → 0.4 ──
-        if confidence < 0.4:
-            self._frames_no_hand += 1
-            if self._frames_no_hand < self._grace_frames and self._last_valid_result is not None:
-                return self._last_valid_result
+        if confidence < 0.55:
+            # Low confidence — don't use grace period, return nothing
             return None, None
 
         if self._process_size is None:

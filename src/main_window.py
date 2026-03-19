@@ -46,7 +46,7 @@ from .constants import _OVERLAY_LABELS
 from .cursor_mapper import CursorMapper
 from .gesture_detector import GestureDetector
 from .hand_tracker import HandTracker
-from .models import GestureType
+from .models import GestureResult, GestureType
 from .mouse import MouseController
 from .settings_store import settings
 from .utils import _boost_runtime_priority, _configure_input_latency
@@ -148,14 +148,17 @@ class StatusOverlay(QWidget):
         self.setStyleSheet(
             """
             * { font-family: "Segoe UI Variable Display", "Segoe UI", "Inter", sans-serif; }
-            #overlayRoot { background: rgba(14, 17, 23, 0.92); border: 1px solid rgba(34, 211, 238, 0.15); border-radius: 16px; }
+            #overlayRoot { background: rgba(9, 9, 11, 0.95); border: 1px solid rgba(34, 211, 238, 0.1); border-radius: 16px; backdrop-filter: blur(20px); }
             QLabel { color: #F1F5F9; font-size: 13px; font-weight: 600; }
             #overlayTitle { font-size: 15px; font-weight: 800; letter-spacing: 0.5px; }
             #muted { color: #8B97B0; }
             #statusOnline { color: #00F0FF; font-size: 18px; }
             #badge {
-                border-radius: 12px; padding: 6px 12px; font-weight: 800;
-                background: rgba(30, 37, 53, 0.8); color: #F1F5F9; text-transform: uppercase; letter-spacing: 1px;
+                border-radius: 10px; padding: 6px 14px; font-weight: 700;
+                background: rgba(15, 18, 25, 0.8); color: #E2E8F0; 
+                text-transform: uppercase; letter-spacing: 1.5px;
+                border: 1px solid rgba(39, 39, 42, 0.4);
+                font-size: 12px;
             }
             QPushButton {
                 border: 0; border-radius: 12px; color: #021820;
@@ -396,21 +399,27 @@ class SettingsDialog(QDialog):
             
             QPushButton {
                 border: none; border-radius: 12px; padding: 10px 20px;
-                color: #F1F5F9; font-weight: 800; font-size: 14px; background: #27272A;
+                color: #021820; font-weight: 700; font-size: 13px; 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0891B2, stop:1 #22D3EE);
             }
-            QPushButton:hover { background: #18181B; border: 1px solid #00F0FF; }
+            QPushButton:hover { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #22D3EE, stop:1 #67E8F9);
+            }
             #ghostButton { background: transparent; color: #8B97B0; }
             #ghostButton:hover { background: rgba(30, 37, 53, 0.5); color: #F1F5F9; }
             
-            QSlider::groove:horizontal { height: 6px; background: #27272A; border-radius: 3px; }
-            QSlider::sub-page:horizontal { background: #00F0FF; border-radius: 3px; }
+            QSlider::groove:horizontal { height: 4px; background: #1E1E24; border-radius: 2px; }
+            QSlider::sub-page:horizontal { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0E7490, stop:1 #22D3EE); 
+                border-radius: 2px; 
+            }
             QSlider::handle:horizontal {
-                background: #F1F5F9; border: 2px solid #00F0FF;
-                width: 16px; height: 16px; margin: -5px 0; border-radius: 8px;
+                background: #F1F5F9; border: 2px solid #22D3EE;
+                width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
             }
             QSlider::handle:horizontal:hover {
-                background: #F1F5F9;
-                width: 20px; height: 20px; margin: -7px 0; border-radius: 10px;
+                background: #FFFFFF; border: 2px solid #67E8F9;
+                width: 16px; height: 16px; margin: -6px 0; border-radius: 8px;
             }
             """
         )
@@ -528,7 +537,7 @@ class MainWindow(QMainWindow):
             print("Holographic Touch is optimized for Windows.")
 
         self.setWindowTitle("Holographic Touch")
-        self.setMinimumSize(1024, 680)
+        self.setMinimumSize(960, 640)
 
         self.camera = CameraThread(640, 480)
         self.camera.camera_index = _as_int(settings.get("camera_index", 0), 0)
@@ -624,7 +633,7 @@ class MainWindow(QMainWindow):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._render)
-        self.timer.start(16)
+        self.timer.start(20)
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -678,7 +687,8 @@ class MainWindow(QMainWindow):
         self.preview = QLabel("NO SIGNAL")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setObjectName("preview")
-        self.preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.preview.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.preview.setMinimumSize(320, 240)
         self.preview.setProperty("active", "false")
         cam_l.addWidget(self.preview, 1)
 
@@ -696,7 +706,8 @@ class MainWindow(QMainWindow):
         
         self.gesture_lbl = QLabel("STANDBY")
         self.gesture_lbl.setObjectName("badge")
-        self.gesture_lbl.setWordWrap(True)
+        self.gesture_lbl.setWordWrap(False)
+        self.gesture_lbl.setMinimumWidth(120)
         
         self.hand_lbl = QLabel("Hand: Not Detected")
         self.hand_lbl.setObjectName("secondary")
@@ -764,6 +775,8 @@ class MainWindow(QMainWindow):
             gl.addWidget(dl, i, 2)
             
         gl.setColumnStretch(2, 1)
+        gl.setColumnStretch(0, 0)
+        gl.setColumnStretch(1, 2)
 
         history_card = QFrame()
         history_card.setObjectName("sideCard")
@@ -779,14 +792,15 @@ class MainWindow(QMainWindow):
         for _ in range(6):
             lbl = QLabel("")
             lbl.setObjectName("historyItem")
-            lbl.setWordWrap(True)
+            lbl.setWordWrap(False)
+            lbl.setMinimumHeight(24)
             lbl.setVisible(False)
             hl.addWidget(lbl)
             self._history_labels.append(lbl)
 
         self.gesture_guide = guide
         self.audit_log = history_card
-        self.gesture_guide.setMinimumWidth(260)
+        self.gesture_guide.setMinimumWidth(240)
         self.audit_log.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # Wrap audit log in a scroll area for readability at all window sizes.
@@ -794,7 +808,18 @@ class MainWindow(QMainWindow):
         audit_scroll.setWidgetResizable(True)
         audit_scroll.setWidget(self.audit_log)
         audit_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        audit_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        audit_scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QScrollBar:vertical {
+                background: transparent; width: 6px; margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background: #27272A; border-radius: 3px; min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover { background: #3F3F46; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+        """)
 
         side_content = QVBoxLayout()
         side_content.setSpacing(12)
@@ -805,15 +830,15 @@ class MainWindow(QMainWindow):
 
         side.addWidget(status)
         side.addLayout(side_content, 1)
-        side.addStretch(1)
 
         side_wrap = QWidget()
         side_wrap.setLayout(side)
-        side_wrap.setMinimumWidth(380)
+        side_wrap.setMinimumWidth(300)
+        side_wrap.setMaximumWidth(420)
         side_wrap.setObjectName("sideCardWrap")
 
-        body_l.addWidget(cam_card, 1)
-        body_l.addWidget(side_wrap)
+        body_l.addWidget(cam_card, 3)
+        body_l.addWidget(side_wrap, 1)
 
         dock_wrap = QWidget()
         dock_wrap_layout = QHBoxLayout(dock_wrap)
@@ -892,15 +917,22 @@ class MainWindow(QMainWindow):
             QMainWindow { background: #09090B; color: #F1F5F9; }
             
             #headerCard {
-                background: transparent;
-                border: none;
+                background: rgba(15, 18, 25, 0.6);
+                border: 1px solid rgba(39, 39, 42, 0.5);
+                border-radius: 14px;
             }
             #floatingDock {
-                background: rgba(20, 24, 32, 0.85);
-                border: 1px solid rgba(34, 211, 238, 0.15);
+                background: rgba(15, 18, 25, 0.9);
+                border: 1px solid rgba(34, 211, 238, 0.12);
                 border-radius: 26px;
             }
-            #sideCard, #sideCardWrap {
+            #sideCard {
+                background: rgba(15, 18, 25, 0.4);
+                border: 1px solid rgba(39, 39, 42, 0.3);
+                border-radius: 12px;
+                padding: 12px;
+            }
+            #sideCardWrap {
                 background: transparent;
                 border: none;
             }
@@ -909,76 +941,126 @@ class MainWindow(QMainWindow):
                 border: none;
             }
             
-            #title { font-size: 20px; font-weight: 800; color: #F1F5F9; letter-spacing: 1px; }
-            #cardTitle { font-size: 14px; font-weight: 800; color: #F1F5F9; text-transform: uppercase; letter-spacing: 1.5px; padding-bottom: 4px; }
+            #title { 
+                font-size: 18px; font-weight: 800; color: #F1F5F9; 
+                letter-spacing: 1.5px; 
+            }
+            #cardTitle { 
+                font-size: 12px; font-weight: 700; color: #64748B; 
+                text-transform: uppercase; letter-spacing: 2px; 
+                padding-bottom: 4px; 
+            }
             
-            #statusOffline { color: #F87171; font-size: 18px; }
-            #statusOnline { color: #00F0FF; font-size: 18px; }
+            #statusOffline { color: #F87171; font-size: 16px; }
+            #statusOnline { color: #22D3EE; font-size: 16px; }
             
             #preview {
-                background: #18181B; 
-                border-radius: 16px; 
-                border: 1px solid #27272A;
-                color: #4A5568; 
-                font-size: 20px;
-                font-weight: bold;
-                letter-spacing: 2px;
+                background: #0F1117; 
+                border-radius: 14px; 
+                border: 1px solid #1E1E24;
+                color: #27272A; 
+                font-size: 16px;
+                font-weight: 700;
+                letter-spacing: 3px;
             }
             #preview[active="true"] {
-                border: 1px solid rgba(34, 211, 238, 0.4);
+                border: 1px solid rgba(34, 211, 238, 0.25);
             }
             
-            #gestureBold { font-weight: 700; color: #F1F5F9; font-size: 14px;}
-            #mutedAction { color: #8B97B0; font-size: 13px; text-align: left; }
+            #gestureBold { 
+                font-weight: 600; color: #E2E8F0; font-size: 13px;
+            }
+            #mutedAction { 
+                color: #64748B; font-size: 12px; text-align: left; 
+            }
             
-            #primaryText { color: #F1F5F9; font-size: 13px; font-weight: 600;}
-            #secondary { color: #8B97B0; font-size: 13px; font-weight: 600;}
-            #muted { color: #4A5568; font-size: 13px; font-weight: 600;}
+            #primaryText { color: #E2E8F0; font-size: 13px; font-weight: 600;}
+            #secondary { color: #94A3B8; font-size: 13px; font-weight: 500;}
+            #muted { color: #475569; font-size: 13px; font-weight: 500;}
             
             #badge {
-                border-radius: 16px; padding: 8px 14px; font-weight: 800;
-                background: #18181B; color: #F1F5F9; max-width: 180px;
-                font-size: 13px; letter-spacing: 1px;
+                border-radius: 10px; padding: 6px 16px; font-weight: 700;
+                background: rgba(15, 18, 25, 0.8); color: #E2E8F0; 
+                max-width: 200px; font-size: 13px; letter-spacing: 1.5px;
+                border: 1px solid rgba(39, 39, 42, 0.4);
             }
-            #historyItem { font-weight: 600; font-family: "Cascadia Code", "Consolas", monospace; }
+            #historyItem { 
+                font-weight: 500; 
+                font-family: "Cascadia Code", "Consolas", "SF Mono", monospace;
+                font-size: 12px;
+                color: #64748B;
+            }
             
             QPushButton {
                 border: none; 
-                border-radius: 20px; 
-                padding: 10px 20px;
-                font-size: 14px;
-                font-weight: 800; 
+                border-radius: 14px; 
+                padding: 10px 22px;
+                font-size: 13px;
+                font-weight: 700; 
                 background: #18181B;
-                color: #F1F5F9;
+                color: #E2E8F0;
+                letter-spacing: 0.5px;
             }
-            QPushButton:disabled { background: #18181B; color: #4A5568; }
+            QPushButton:hover { 
+                background: #27272A; 
+            }
+            QPushButton:disabled { background: #0F0F12; color: #27272A; }
             
-            #startBtn { background: #34D399; color: #031A10; }
-            #startBtn:hover { background: #34D399; border: 1px solid #00F0FF; }
+            #startBtn { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #059669, stop:1 #34D399); 
+                color: #022C22; 
+            }
+            #startBtn:hover { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #34D399, stop:1 #6EE7B7);
+            }
             
-            #stopBtn { background: #F87171; color: #1A0505; }
-            #stopBtn:hover { background: #F87171; border: 1px solid #00F0FF; }
+            #stopBtn { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #DC2626, stop:1 #F87171); 
+                color: #1A0505; 
+            }
+            #stopBtn:hover { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #F87171, stop:1 #FCA5A5);
+            }
             
-            #mouseBtn { background: #00F0FF; color: #021820; }
-            #mouseBtn:hover { background: #00F0FF; border: 1px solid #00F0FF; padding: 9px 21px; }
+            #mouseBtn { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #0891B2, stop:1 #22D3EE); 
+                color: #021820; 
+            }
+            #mouseBtn:hover { 
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #22D3EE, stop:1 #67E8F9);
+            }
             
-            #settingsBtn { background: transparent; padding: 0;}
-            #settingsBtn:hover { background: #18181B; border-radius: 22px; border: 1px solid #00F0FF; }
+            #settingsBtn { 
+                background: transparent; padding: 0;
+                border-radius: 22px;
+            }
+            #settingsBtn:hover { 
+                background: rgba(34, 211, 238, 0.08); 
+                border: 1px solid rgba(34, 211, 238, 0.2); 
+            }
             
             QSlider::groove:horizontal {
-                height: 6px; background: #27272A; border-radius: 3px;
+                height: 4px; background: #1E1E24; border-radius: 2px;
             }
             QSlider::sub-page:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #27272A, stop:1 #00F0FF);
-                border-radius: 3px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                    stop:0 #0E7490, stop:1 #22D3EE);
+                border-radius: 2px;
             }
             QSlider::handle:horizontal {
-                background: #F1F5F9; border: 2px solid #00F0FF;
-                width: 16px; height: 16px; margin: -5px 0; border-radius: 8px;
+                background: #F1F5F9; border: 2px solid #22D3EE;
+                width: 14px; height: 14px; margin: -5px 0; border-radius: 7px;
             }
             QSlider::handle:horizontal:hover {
-                background: #F1F5F9;
-                width: 20px; height: 20px; margin: -7px 0; border-radius: 10px;
+                background: #FFFFFF;
+                border: 2px solid #67E8F9;
+                width: 16px; height: 16px; margin: -6px 0; border-radius: 8px;
             }
             """
         )
@@ -1132,9 +1214,9 @@ class MainWindow(QMainWindow):
             return
 
         self.gestures = GestureDetector()
-            self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.06), 0.06)
-            self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.30), 0.30)
-            self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.08, _as_float(settings.get("pinch_exit_sensitivity", 0.45), 0.45))
+        self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.06), 0.06)
+        self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.30), 0.30)
+        self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.08, _as_float(settings.get("pinch_exit_sensitivity", 0.45), 0.45))
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
 
         if _as_bool(settings.get("performance_mode", False), False):
@@ -1291,14 +1373,11 @@ class MainWindow(QMainWindow):
         last_hand_time = time.monotonic()
 
         _boost_runtime_priority()
-        try:
-            cv2.setUseOptimized(True)
-        except Exception:
-            pass
+        # cv2.setUseOptimized is configured globally; skip per-thread call.
 
         while self.running:
             if time.monotonic() - last_hand_time > 5.0:
-                time.sleep(0.05)
+                time.sleep(0.005)
 
             try:
                 frame = self.camera.latest()
@@ -1330,17 +1409,17 @@ class MainWindow(QMainWindow):
                     self._camera_error_text = self.camera.last_error
 
                 result = self.gestures.detect(hand_data)
+                if result is None:
+                    result = GestureResult(GestureType.PAUSE, 0)
+                # Safety: verify confidence before allowing actions
+                if hand_data and hand_data.get("confidence", 0) < 0.55:
+                    if result.gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
+                                         GestureType.DOUBLE_CLICK}:
+                        result = GestureResult(GestureType.MOVE, 0)
                 gesture = result.gesture
                 gesture_changed = gesture != last_action
-                label = str(hand_data.get("label", "None")) if hand_data else "None"
-                    now_dbg = time.monotonic()
-                    if (
-                        gesture != self._last_debug_label
-                        or (now_dbg - self._last_debug_print_ts) >= 0.75
-                    ):
-                        print("HAND:", label, "GESTURE:", result.gesture, "VALUE:", result.value)
-                        self._last_debug_label = gesture
-                        self._last_debug_print_ts = now_dbg
+                self._last_debug_label = gesture
+                # Debug print disabled for production
 
                 if self.mouse_enabled and gesture == GestureType.KEYBOARD and gesture_changed:
                     self._launch_keyboard()
@@ -1393,12 +1472,18 @@ class MainWindow(QMainWindow):
                     elif gesture == GestureType.SCROLL:
                         self.mouse.scroll(int(result.scroll_delta * self._scroll_multiplier))
                     elif gesture == GestureType.DRAG:
-                        self.mouse.move(sx, sy)
-                        self.mouse.start_drag()
+                        if not self.mouse.is_dragging:
+                            self.mouse.move(sx, sy)
+                            self.mouse.start_drag()
+                        else:
+                            self.mouse.move(sx, sy)
 
                     if gesture != GestureType.DRAG and self.mouse.is_dragging:
                         self.mouse.end_drag()
                 elif self.mouse.is_dragging:
+                    self.mouse.end_drag()
+
+                if not self.mouse_enabled and self.mouse.is_dragging:
                     self.mouse.end_drag()
 
                 if gesture != last_overlay:
@@ -1429,7 +1514,7 @@ class MainWindow(QMainWindow):
                     self._hand_data = hand_data
             except Exception as exc:
                 print(f"[PROCESS_LOOP ERROR] {exc}")
-                time.sleep(0.05)
+                time.sleep(0.005)
                 continue
 
     def _render(self) -> None:

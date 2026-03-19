@@ -27,12 +27,15 @@ class GestureDetector:
         self._dragging = False
         self._left_pinch_active = False
         self._right_pinch_active = False
+        self._right_pinch_pending_since: float | None = None
+        self._right_pinch_confirm_s = 0.12
         self._left_pinch_since: float | None = None
         self._last_pinch_release_time = 0.0
 
         self._scroll_prev_y: float | None = None
         self._scroll_velocity_ema = 0.0
         self._scroll_direction = 0
+        self._scroll_accumulator = 0.0
         self._scroll_last_switch_time = 0.0
         self._left_media_anchor_y: float | None = None
 
@@ -62,7 +65,7 @@ class GestureDetector:
         self._scroll_deadband_factor = 0.06
         self._media_step_factor = 0.11
         self._media_deadband_factor = 0.05
-        self._double_click_window_s = GESTURE_DOUBLE_CLICK_WINDOW_S
+        self._double_click_window_s = 0.50
         self._scroll_gain = int(GESTURE_SCROLL_GAIN)
         self._z_tap_enter = float(GESTURE_Z_TAP_ENTER)
         self._z_tap_exit = float(GESTURE_Z_TAP_EXIT)
@@ -75,9 +78,9 @@ class GestureDetector:
 
         # ── BUG D FIX: Per-action cooldowns + edge detection ──
         self._per_action_cooldown = {
-            GestureType.LEFT_CLICK: 0.4,
-            GestureType.RIGHT_CLICK: 0.4,
-            GestureType.DOUBLE_CLICK: 0.4,
+            GestureType.LEFT_CLICK: 0.30,
+            GestureType.RIGHT_CLICK: 0.50,
+            GestureType.DOUBLE_CLICK: 0.50,
             GestureType.MEDIA_NEXT: 0.8,
             GestureType.MEDIA_PREV: 0.8,
             GestureType.MEDIA_VOL_UP: 0.05,
@@ -96,12 +99,12 @@ class GestureDetector:
 
         # ── BUG B FIX: Grace period for hand loss ──
         self._frames_no_hand = 0
-        self._grace_frames = 8
+        self._grace_frames = 4
         self._last_valid_hand_data: dict | None = None
 
         # Log cooldowns to avoid console spam.
-        self._pinch_log_cooldown_s = 1.2
-        self._gesture_log_cooldown_s = 1.2
+        self._pinch_log_cooldown_s = 5.0
+        self._gesture_log_cooldown_s = 5.0
         self._last_pinch_log_ts = 0.0
         self._last_gesture_log_ts = 0.0
         self._last_logged_state = GestureType.PAUSE
@@ -177,21 +180,14 @@ class GestureDetector:
         left_dist = self._distance(xy[4], xy[8])
         right_dist = self._distance(xy[4], xy[12])
 
-        # ── BUG A FIX: Debug print pinch ratio with cooldown ──
-        pinch_ratio = left_dist / max(1.0, hand_scale)
-        right_pinch_ratio = right_dist / max(1.0, hand_scale)
-        now = time.monotonic()
-        if now - self._last_pinch_log_ts >= self._pinch_log_cooldown_s:
-            print(
-                f"[PINCH] left_dist={left_dist:.1f} right_dist={right_dist:.1f} scale={hand_scale:.1f} "
-                f"left_ratio={pinch_ratio:.3f} right_ratio={right_pinch_ratio:.3f} "
-                f"enter_thresh={self._pinch_enter:.3f} exit_thresh={self._pinch_exit:.3f}"
-            )
-            self._last_pinch_log_ts = now
+        # Pinch debug logging disabled for production.
 
-        # More tolerant anti-cross gating for real webcam jitter.
-        left_click_pose = left_dist <= pinch_enter and right_dist > (pinch_enter * 0.85)
-        right_click_pose = right_dist <= pinch_enter and left_dist > (pinch_enter * 0.85)
+        # Strict anti-cross gating: the OTHER finger pair must be clearly separated.
+        left_click_pose = left_dist <= pinch_enter and right_dist > (pinch_exit * 0.9)
+        right_click_pose = right_dist <= pinch_enter and left_dist > (pinch_exit * 0.9)
+        # Right-click requires index to stay extended to avoid accidental cross-trigger.
+        if right_click_pose and not fs.index:
+            right_click_pose = False
 
         if self._left_pinch_active:
             if left_dist > pinch_exit:
@@ -199,11 +195,18 @@ class GestureDetector:
         elif left_click_pose:
             self._left_pinch_active = True
 
+        now = time.monotonic()
         if self._right_pinch_active:
             if right_dist > pinch_exit:
                 self._right_pinch_active = False
+                self._right_pinch_pending_since = None
         elif right_click_pose:
-            self._right_pinch_active = True
+            if self._right_pinch_pending_since is None:
+                self._right_pinch_pending_since = now
+            elif now - self._right_pinch_pending_since >= self._right_pinch_confirm_s:
+                self._right_pinch_active = True
+        else:
+            self._right_pinch_pending_since = None
 
     def _stable_state(self, raw_state: GestureType, now: float) -> GestureType:
         if raw_state == GestureType.PAUSE:
@@ -221,40 +224,35 @@ class GestureDetector:
         return self._state
 
     def _debounce_check(self, raw_state: GestureType) -> GestureType:
-        """BUG D FIX: Require 4 consecutive matching frames before confirming a
-        gesture change.  Continuous gestures (MOVE, SCROLL, DRAG) pass through
-        immediately once confirmed the first time."""
         if raw_state == self._debounce_gesture:
             self._debounce_count += 1
         else:
             self._debounce_gesture = raw_state
             self._debounce_count = 1
 
-        # Once confirmed, let continuous gestures keep flowing
+        # Continuous gestures pass through immediately once confirmed
         if raw_state == self._state and raw_state in {
             GestureType.MOVE, GestureType.SCROLL, GestureType.DRAG,
             GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN,
         }:
             return raw_state
 
-        if self._debounce_count >= self._debounce_required:
+        # Click gestures need only 2 frames for responsiveness
+        click_gestures = {
+            GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
+            GestureType.DOUBLE_CLICK,
+        }
+        required = 2 if raw_state in click_gestures else self._debounce_required
+
+        if self._debounce_count >= required:
             return raw_state
 
-        # Not enough frames yet — keep the current state
         return self._state
 
     def _check_action_cooldown(self, gesture: GestureType, now: float) -> bool:
-        """BUG D FIX: Return True if this action is allowed (cooldown elapsed).
-        Also enforces edge-detection: action fires only on state ENTRY."""
         cooldown = self._per_action_cooldown.get(gesture, self._action_cooldown_s)
         last = self._last_action_time.get(gesture, 0.0)
         if now - last < cooldown:
-            return False
-        # Edge detection: only fire if this is a NEW entry into this state
-        if gesture == self._prev_gesture_state and gesture not in {
-            GestureType.SCROLL, GestureType.DRAG, GestureType.MOVE,
-            GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN,
-        }:
             return False
         return True
 
@@ -267,23 +265,33 @@ class GestureDetector:
             self._scroll_prev_y = current_y
             self._scroll_velocity_ema = 0.0
             self._scroll_direction = 0
+            self._scroll_accumulator = 0.0
             return 0
 
         dy = self._scroll_prev_y - current_y
         self._scroll_prev_y = current_y
 
-        alpha = 0.35
+        # Gentler EMA for smoother velocity tracking
+        alpha = 0.25
         self._scroll_velocity_ema = (1.0 - alpha) * self._scroll_velocity_ema + alpha * dy
         v = self._scroll_velocity_ema
 
         deadband = hand_scale * self._scroll_deadband_factor
         if abs(v) <= deadband:
+            # Bleed accumulator toward zero when in deadband
+            self._scroll_accumulator *= 0.5
             return 0
 
+        # Accumulate sub-pixel scroll and emit integer steps
         step = max(1.0, hand_scale * self._scroll_step_factor)
-        steps = int(v / step)
+        self._scroll_accumulator += v / step
+
+        steps = int(self._scroll_accumulator)
         if steps == 0:
             return 0
+
+        self._scroll_accumulator -= steps
+
         if steps > self._scroll_step_limit:
             steps = self._scroll_step_limit
         elif steps < -self._scroll_step_limit:
@@ -293,11 +301,14 @@ class GestureDetector:
         if self._scroll_direction == 0:
             self._scroll_direction = direction
         elif direction != self._scroll_direction:
-            if time.monotonic() - self._scroll_last_switch_time < self._scroll_dir_switch_cooldown_s:
+            now = time.monotonic()
+            if now - self._scroll_last_switch_time < self._scroll_dir_switch_cooldown_s:
+                self._scroll_accumulator = 0.0
                 return 0
             self._scroll_direction = direction
-            self._scroll_last_switch_time = time.monotonic()
+            self._scroll_last_switch_time = now
             self._scroll_velocity_ema = 0.0
+            self._scroll_accumulator = 0.0
             return 0
 
         return int(steps * max(1, self._scroll_gain))
@@ -352,8 +363,13 @@ class GestureDetector:
             # ── BUG B FIX: Grace period — don't immediately PAUSE ──
             self._frames_no_hand += 1
             if self._frames_no_hand < self._grace_frames and self._last_valid_hand_data is not None:
-                # Use last known hand data to keep state stable
+                # Use last known hand data but only for continuous gestures
                 hand_data = self._last_valid_hand_data
+                # Force non-action state during grace period to prevent ghost clicks
+                if self._state in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, 
+                                   GestureType.DOUBLE_CLICK, GestureType.KEYBOARD,
+                                   GestureType.TASK_VIEW}:
+                    self._state = GestureType.MOVE
             else:
                 self._state = GestureType.PAUSE
                 self._candidate = GestureType.PAUSE
@@ -363,8 +379,10 @@ class GestureDetector:
                 self._right_pinch_active = False
                 self._left_pinch_since = None
                 self._scroll_prev_y = None
+                self._scroll_accumulator = 0.0
                 self._scroll_velocity_ema = 0.0
                 self._scroll_direction = 0
+                self._scroll_accumulator = 0.0
                 self._left_media_anchor_y = None
                 self._z_tap_active = False
                 self._task_view_since = None
@@ -381,10 +399,9 @@ class GestureDetector:
         xy = hand_data["xy"]
         fs = self._finger_states(xy)
         hand_label = str(hand_data.get("label", "Right"))
-
         # ── BUG B FIX: Confidence gate lowered from 0.6 → 0.4 ──
         confidence = float(hand_data.get("confidence", 0.0))
-        if confidence < 0.4:
+        if confidence < 0.55:
             self._state = GestureType.PAUSE
             self._prev_gesture_state = GestureType.PAUSE
             return GestureResult(GestureType.PAUSE, 0)
@@ -393,8 +410,7 @@ class GestureDetector:
         middle_mcp = xy[9]
         self._hand_scale = max(24.0, self._distance(wrist, middle_mcp))
 
-        if self._state != self._last_logged_state or (now - self._last_gesture_log_ts) >= self._gesture_log_cooldown_s:
-            print(f"[GESTURE] Hand={hand_label} State={self._state} Scale={self._hand_scale:.3f}")
+        if self._state != self._last_logged_state:
             self._last_logged_state = self._state
             self._last_gesture_log_ts = now
 
@@ -426,11 +442,12 @@ class GestureDetector:
         if hand_label == "Left":
             self._dragging = False
             self._scroll_prev_y = None
+            self._scroll_accumulator = 0.0
             self._scroll_velocity_ema = 0.0
 
             # ── BUG B FIX: Confidence gate lowered from 0.6 → 0.4 ──
             confidence = float(hand_data.get("confidence", 0.0))
-            if confidence < 0.4:
+            if confidence < 0.55:
                 self._left_media_anchor_y = None
                 self._state = GestureType.PAUSE
                 self._prev_gesture_state = GestureType.PAUSE
@@ -552,6 +569,7 @@ class GestureDetector:
 
         if stable_state != GestureType.SCROLL and raw_state != GestureType.SCROLL:
             self._scroll_prev_y = None
+            self._scroll_accumulator = 0.0
             self._scroll_velocity_ema = 0.0
             self._scroll_direction = 0
 
@@ -566,7 +584,9 @@ class GestureDetector:
             return GestureResult(GestureType.MOVE, 0)
 
         if stable_state == GestureType.LEFT_CLICK:
-            if self._check_action_cooldown(GestureType.LEFT_CLICK, now):
+            is_new_entry = (self._prev_gesture_state != GestureType.LEFT_CLICK
+                           and self._prev_gesture_state != GestureType.DRAG)
+            if is_new_entry and self._check_action_cooldown(GestureType.LEFT_CLICK, now):
                 if 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s:
                     self._last_double_click_time = now
                     self._last_click_time = now
@@ -587,7 +607,8 @@ class GestureDetector:
             return GestureResult(GestureType.MOVE, 0)
 
         if stable_state == GestureType.RIGHT_CLICK:
-            if self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
+            is_new_entry = self._prev_gesture_state != GestureType.RIGHT_CLICK
+            if is_new_entry and self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
                 self._last_right_click_time = now
                 self._locked_until = now + self._gesture_lock_s
                 self._state = GestureType.RIGHT_CLICK

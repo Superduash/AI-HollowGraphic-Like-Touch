@@ -29,8 +29,8 @@ class CursorMapper:
         self._initialized = False
 
         self._deadzone_px = 2.0
-        self._alpha_min = 0.07
-        self._alpha_max = 0.60
+        self._alpha_min = 0.15
+        self._alpha_max = 0.70
         self._inner_ratio = CURSOR_INNER_RATIO
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
         self._hand_scale_px = 32.0
@@ -90,8 +90,8 @@ class CursorMapper:
         v = max(1.0, min(10.0, float(value)))
         self.smoothening = v
         t = (v - 1.0) / 9.0
-        self._alpha_min = 0.06 + t * 0.14
-        self._alpha_max = 0.40 + t * 0.30
+        self._alpha_min = 0.12 + t * 0.13
+        self._alpha_max = 0.50 + t * 0.25
 
     def set_frame_margin(self, margin_px: int) -> None:
         self.frame_r = max(0, int(margin_px))
@@ -152,8 +152,8 @@ class CursorMapper:
 
         dynamic_deadzone = max(CURSOR_DEADZONE_BASE, self._deadzone_px, self._hand_scale_px * CURSOR_DEADZONE_SCALE_FACTOR)
         if speed <= dynamic_deadzone:
-            self._flt_x = self._flt_x + 0.08 * (raw_x - self._flt_x)
-            self._flt_y = self._flt_y + 0.08 * (raw_y - self._flt_y)
+            self._flt_x = self._flt_x + 0.15 * (raw_x - self._flt_x)
+            self._flt_y = self._flt_y + 0.15 * (raw_y - self._flt_y)
             return int(self._flt_x), int(self._flt_y)
 
         screen_norm = max(60.0, math.sqrt(float(self.scr_w * self.scr_w + self.scr_h * self.scr_h)) * CURSOR_SPEED_NORM_RATIO)

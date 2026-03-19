@@ -68,21 +68,14 @@ class CameraThread:
 
     @staticmethod
     def _drain_and_read(cap: cv2.VideoCapture):
-        # Best-effort stale-frame drop so processing sees the newest image.
-        for _ in range(2):
-            try:
-                if not cap.grab():
-                    break
-            except Exception:
-                break
-
+        # Single grab+retrieve path for low-latency frame acquisition.
         try:
-            ok, frame = cap.retrieve()
-            if ok and frame is not None:
-                return ok, frame
+            if cap.grab():
+                ok, frame = cap.retrieve()
+                if ok and frame is not None:
+                    return ok, frame
         except Exception:
             pass
-
         return cap.read()
 
     def _configure_capture(self, cap: cv2.VideoCapture, width: int, height: int, prefer_mjpg: bool = True) -> None:
@@ -275,7 +268,7 @@ class CameraThread:
             with self._cap_lock:
                 cap = self._cap
                 if cap is None:
-                    time.sleep(CAMERA_LOOP_IDLE_S)
+                    time.sleep(0.001)
                     continue
                 ok, frame = self._drain_and_read(cap)
             if not ok or frame is None:
@@ -297,7 +290,7 @@ class CameraThread:
                         self._last_error = "Camera stream lost and reopen failed"
                     time.sleep(CAMERA_REOPEN_COOLDOWN_S)
                     continue
-                time.sleep(CAMERA_FAIL_SLEEP_S)
+                time.sleep(0.001)
                 continue
 
             consecutive_failures = 0
@@ -305,7 +298,7 @@ class CameraThread:
             with self._frame_lock:
                 self._frame = frame
 
-            time.sleep(CAMERA_LOOP_IDLE_S)
+            # No idle sleep here; camera read path paces the loop.
 
     def latest(self):
         with self._frame_lock:
