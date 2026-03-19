@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import platform
 import subprocess
 import threading
 import time
 
 import cv2
-import qtawesome as qta
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -32,6 +32,12 @@ from .hand_tracker import HandTracker
 from .models import GestureType
 from .mouse import MouseController
 from .utils import _boost_runtime_priority, _configure_input_latency
+
+_ICONS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icons")
+
+
+def _icon(svg_name: str) -> QIcon:
+    return QIcon(os.path.join(_ICONS_DIR, svg_name))
 
 
 class StatusOverlay(QWidget):
@@ -130,7 +136,7 @@ class SettingsDialog(QDialog):
 
         title_row = QHBoxLayout()
         title_icon = QLabel()
-        title_icon.setPixmap(qta.icon("fa5s.cog", color="#A5B4FC").pixmap(QSize(20, 20)))
+        title_icon.setPixmap(_icon("settings.svg").pixmap(QSize(20, 20)))
         title = QLabel("Settings")
         title.setObjectName("title")
         title_row.addWidget(title_icon)
@@ -151,7 +157,7 @@ class SettingsDialog(QDialog):
             self.camera_combo.setCurrentIndex(max(0, match))
 
         close_btn = QPushButton("Close")
-        close_btn.setIcon(qta.icon("fa5s.times-circle", color="#F8FAFC"))
+        close_btn.setIcon(_icon("stop.svg"))
         close_btn.setObjectName("ghostButton")
         close_btn.clicked.connect(self.accept)
 
@@ -223,9 +229,11 @@ class MainWindow(QMainWindow):
         self._overlay_text = _OVERLAY_LABELS.get(GestureType.PAUSE, "PAUSED")
         self._fingers = 0
         self._kbd_locked = False
+        self._camera_cache: list[CameraDevice] = []
+        self._camera_cache_ts = 0.0
 
         self._build_ui()
-        self._populate_cameras()
+        self._refresh_camera_cache(force=True)
 
         if self._mediapipe_error:
             self.cam_status.setText("MediaPipe Error")
@@ -235,9 +243,6 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._render)
         self.timer.start(16)
-
-    def _qa(self, icon_name: str, color: str = "#F8FAFC"):
-        return qta.icon(icon_name, color=color)
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -254,7 +259,7 @@ class MainWindow(QMainWindow):
         header_l.setSpacing(12)
 
         icon_label = QLabel()
-        icon_label.setPixmap(self._qa("fa5s.video", "#7DD3FC").pixmap(QSize(22, 22)))
+        icon_label.setPixmap(_icon("camera.svg").pixmap(QSize(22, 22)))
         self.title_lbl = QLabel("Holographic Touch")
         self.title_lbl.setObjectName("title")
 
@@ -318,18 +323,18 @@ class MainWindow(QMainWindow):
         gl.addWidget(guide_title, 0, 0, 1, 3)
 
         guide_rows = [
-            ("fa5s.mouse-pointer", "Index finger", "Move cursor"),
-            ("fa5s.hand-pointer", "Thumb + Index pinch", "Left click"),
-            ("fa5s.arrows-alt", "Hold Thumb + Index pinch", "Drag"),
-            ("fa5s.hand-point-up", "Middle down + Thumb pinch", "Right click"),
-            ("fa5s.arrows-alt-v", "Peace sign + up/down", "Scroll"),
-            ("fa5s.th-large", "Open palm", "Task View (Win+Tab)"),
-            ("fa5s.keyboard", "Thumb + Index + Pinky", "On-Screen Keyboard"),
-            ("fa5s.pause-circle", "No gesture / hand down", "Pause"),
+            ("mouse.svg",    "Index finger",               "Move cursor"),
+            ("click.svg",    "Thumb + Index pinch",         "Left click"),
+            ("drag.svg",     "Hold Thumb + Index pinch",    "Drag"),
+            ("click.svg",    "Middle down + Thumb pinch",   "Right click"),
+            ("scroll.svg",   "Peace sign + up/down",        "Scroll"),
+            ("move.svg",     "Open palm",                   "Task View (Win+Tab)"),
+            ("settings.svg", "Thumb + Index + Pinky",       "On-Screen Keyboard"),
+            ("pause.svg",    "No gesture / hand down",      "Pause"),
         ]
-        for i, (icon_name, a, b) in enumerate(guide_rows, start=1):
+        for i, (svg_name, a, b) in enumerate(guide_rows, start=1):
             il = QLabel()
-            il.setPixmap(self._qa(icon_name, "#93C5FD").pixmap(QSize(16, 16)))
+            il.setPixmap(_icon(svg_name).pixmap(QSize(16, 16)))
             tl = QLabel(a)
             dl = QLabel(b)
             dl.setObjectName("muted")
@@ -354,16 +359,16 @@ class MainWindow(QMainWindow):
         cl.setSpacing(10)
 
         self.start_btn = QPushButton("Start Camera")
-        self.start_btn.setIcon(self._qa("fa5s.video", "#0B1118"))
+        self.start_btn.setIcon(_icon("camera.svg"))
         self.start_btn.setObjectName("greenButton")
 
         self.stop_btn = QPushButton("Stop Camera")
-        self.stop_btn.setIcon(self._qa("fa5s.stop-circle", "#0B1118"))
+        self.stop_btn.setIcon(_icon("stop.svg"))
         self.stop_btn.setObjectName("redButton")
         self.stop_btn.setEnabled(False)
 
         self.mouse_btn = QPushButton("Enable Mouse")
-        self.mouse_btn.setIcon(self._qa("fa5s.mouse-pointer", "#0B1118"))
+        self.mouse_btn.setIcon(_icon("mouse.svg"))
         self.mouse_btn.setObjectName("blueButton")
 
         self._region_label = QLabel(f"Control margin: {self.mapper.frame_r}")
@@ -374,7 +379,7 @@ class MainWindow(QMainWindow):
         self._region_slider.setFixedWidth(180)
 
         self.settings_btn = QPushButton("Settings")
-        self.settings_btn.setIcon(self._qa("fa5s.cog", "#0B1118"))
+        self.settings_btn.setIcon(_icon("settings.svg"))
         self.settings_btn.setObjectName("purpleButton")
 
         self.start_btn.clicked.connect(self.start_camera)
@@ -423,13 +428,13 @@ class MainWindow(QMainWindow):
             }
             QPushButton:hover { background: #394055; }
             QPushButton:disabled { background: #202532; color: #6B7280; }
-            #greenButton { background: #4ADE80; color: #0B1118; }
+            #greenButton { background: #4ADE80; color: #E5E7EB; }
             #greenButton:hover { background: #67E69A; }
-            #redButton { background: #F87171; color: #0B1118; }
+            #redButton { background: #F87171; color: #E5E7EB; }
             #redButton:hover { background: #FA8A8A; }
-            #blueButton { background: #60A5FA; color: #0B1118; }
+            #blueButton { background: #60A5FA; color: #E5E7EB; }
             #blueButton:hover { background: #79B5FB; }
-            #purpleButton { background: #A78BFA; color: #0B1118; }
+            #purpleButton { background: #A78BFA; color: #E5E7EB; }
             #purpleButton:hover { background: #B79EFB; }
             """
         )
@@ -449,15 +454,24 @@ class MainWindow(QMainWindow):
         if self._dimmer is not None:
             self._dimmer.setGeometry(self.rect())
 
+    def _refresh_camera_cache(self, force: bool = False) -> list[CameraDevice]:
+        now = time.monotonic()
+        if not force and self._camera_cache and now - self._camera_cache_ts < 8.0:
+            return self._camera_cache
+        self._camera_cache = self.camera.enumerate_cameras()
+        self._camera_cache_ts = now
+        return self._camera_cache
+
     def _populate_cameras(self) -> list[CameraDevice]:
-        return self.camera.enumerate_cameras()
+        return self._refresh_camera_cache(force=False)
 
     def _open_settings_dialog(self) -> None:
         cameras = self._populate_cameras()
         self._show_dimmer()
 
         dlg = SettingsDialog(self, cameras, self.camera.camera_index)
-        dlg.camera_combo.currentIndexChanged.connect(
+        # Use activated for snappier UX and to avoid extra no-op switch events.
+        dlg.camera_combo.activated.connect(
             lambda idx: self._on_camera_selected(dlg.camera_combo.itemData(idx))
         )
         dlg.exec()
@@ -478,7 +492,9 @@ class MainWindow(QMainWindow):
 
         ok = self.camera.switch_camera(index)
         if not ok:
-            self.cam_status.setText("Cannot open selected camera")
+            detail = self.camera.last_error or f"Cannot open selected camera index {index}"
+            self.cam_status.setText("Camera switch failed")
+            self.preview.setText(detail)
 
     def _osk_running(self) -> bool:
         try:
@@ -536,7 +552,8 @@ class MainWindow(QMainWindow):
 
         self.gestures = GestureDetector()
         if not self.camera.start():
-            self.preview.setText("Cannot open camera")
+            detail = self.camera.last_error or "Cannot open camera"
+            self.preview.setText(detail)
             return
 
         self.running = True

@@ -7,9 +7,24 @@ from dataclasses import dataclass
 import cv2
 
 try:
+    from pygrabber.dshow_graph import FilterGraph  # type: ignore
+except Exception:
+    FilterGraph = None  # type: ignore[assignment]
+
+try:
     import wmi  # type: ignore
 except Exception:
     wmi = None  # type: ignore[assignment]
+
+
+# Backend fallback chain used by both _open_capture() and enumerate_cameras().
+# Each entry is (backend_constant, label, try_mjpg).
+_BACKEND_CHAIN = [
+    (cv2.CAP_DSHOW, "CAP_DSHOW", True),   # fast path, real webcams on Windows
+    (cv2.CAP_DSHOW, "CAP_DSHOW", False),   # DShow without MJPG
+    (cv2.CAP_MSMF,  "CAP_MSMF",  False),  # Windows Media Foundation (OBS Virtual Cam)
+    (cv2.CAP_ANY,   "CAP_ANY",   False),   # universal fallback
+]
 
 
 @dataclass
@@ -30,27 +45,78 @@ class CameraThread:
         self._thread: threading.Thread | None = None
         self._cap_lock = threading.Lock()
         self._frame_lock = threading.Lock()
+        self._last_error = ""
 
+    # ------------------------------------------------------------------
+    # Capture helpers
+    # ------------------------------------------------------------------
     @staticmethod
-    def _configure_capture(cap: cv2.VideoCapture, width: int, height: int) -> None:
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    def _configure_capture(
+        cap: cv2.VideoCapture,
+        width: int,
+        height: int,
+        use_fourcc: bool = True,
+    ) -> None:
+        """Configure resolution, FPS, and buffer.  Optionally set MJPG FOURCC."""
+        if use_fourcc:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         cap.set(cv2.CAP_PROP_FPS, 60)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-    def _open_capture(self, camera_index: int) -> cv2.VideoCapture | None:
-        cap = cv2.VideoCapture(int(camera_index), cv2.CAP_DSHOW)
-        self._configure_capture(cap, self.width, self.height)
-
-        for _ in range(12):
+    @staticmethod
+    def _try_read_frames(cap: cv2.VideoCapture, count: int = 5) -> bool:
+        """Read *count* frames; return True if at least one is valid."""
+        for _ in range(count):
             ok, frame = cap.read()
             if ok and frame is not None:
-                return cap
+                return True
             time.sleep(0.02)
+        return False
 
-        cap.release()
+    def _open_capture(self, camera_index: int) -> cv2.VideoCapture | None:
+        """Try each backend in _BACKEND_CHAIN until one delivers frames."""
+        idx = int(camera_index)
+
+        for backend, label, try_mjpg in _BACKEND_CHAIN:
+            cap = cv2.VideoCapture(idx, backend)
+            if not cap.isOpened():
+                cap.release()
+                continue
+
+            self._configure_capture(cap, self.width, self.height, use_fourcc=try_mjpg)
+
+            if self._try_read_frames(cap, count=5):
+                mjpg_note = "MJPG" if try_mjpg else "MJPG not set"
+                self._last_error = (
+                    f"Camera #{idx} opened via {label} ({mjpg_note})"
+                )
+                return cap
+
+            cap.release()
+            time.sleep(0.05)
+
+        self._last_error = (
+            f"Cannot open camera index {idx} with any backend "
+            f"(tried {', '.join(l for _, l, _ in _BACKEND_CHAIN)})"
+        )
         return None
+
+    # ------------------------------------------------------------------
+    # Enumeration helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _dshow_camera_names() -> list[str]:
+        if FilterGraph is None:
+            return []
+
+        try:
+            graph = FilterGraph()
+            names = [str(n).strip() for n in graph.get_input_devices() if str(n).strip()]
+            return names
+        except Exception:
+            return []
 
     @staticmethod
     def _system_camera_names() -> list[str]:
@@ -73,34 +139,43 @@ class CameraThread:
             return names
         return names
 
-    def enumerate_cameras(self, max_index: int = 10) -> list[CameraDevice]:
+    def enumerate_cameras(self, max_index: int = 8) -> list[CameraDevice]:
+        """Probe indices 0‥max_index using the backend fallback chain."""
         open_indices: list[int] = []
         for idx in range(max_index):
-            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
-            try:
-                self._configure_capture(cap, self.width, self.height)
-                ok = cap.isOpened()
-                if ok:
-                    read_ok, frame = cap.read()
-                    ok = bool(read_ok and frame is not None)
-                if ok:
-                    open_indices.append(idx)
-            finally:
-                cap.release()
+            found = False
+            for backend, _label, try_mjpg in _BACKEND_CHAIN:
+                cap = cv2.VideoCapture(idx, backend)
+                try:
+                    if not cap.isOpened():
+                        continue
+                    self._configure_capture(
+                        cap, self.width, self.height, use_fourcc=try_mjpg,
+                    )
+                    if self._try_read_frames(cap, count=5):
+                        found = True
+                        break
+                finally:
+                    cap.release()
+            if found:
+                open_indices.append(idx)
 
-        system_names = self._system_camera_names()
+        system_names = self._dshow_camera_names() or self._system_camera_names()
         devices: list[CameraDevice] = []
         for pos, idx in enumerate(open_indices):
             if pos < len(system_names):
-                name = system_names[pos]
+                name = f"{system_names[pos]} [#{idx}]"
             else:
-                name = f"Camera {idx}"
+                name = f"Camera #{idx}"
             devices.append(CameraDevice(index=idx, name=name))
 
         if not devices:
-            devices.append(CameraDevice(index=0, name="Camera 0"))
+            devices.append(CameraDevice(index=0, name="Camera #0"))
         return devices
 
+    # ------------------------------------------------------------------
+    # Thread lifecycle (unchanged)
+    # ------------------------------------------------------------------
     def start(self, camera_index: int | None = None) -> bool:
         if camera_index is not None:
             self.camera_index = int(camera_index)
@@ -122,6 +197,13 @@ class CameraThread:
     def switch_camera(self, camera_index: int) -> bool:
         self.camera_index = int(camera_index)
 
+        if not self._running:
+            cap = self._open_capture(self.camera_index)
+            if cap is None:
+                return False
+            cap.release()
+            return True
+
         # Hard release before re-init to avoid stale DirectShow handles.
         with self._cap_lock:
             old_cap = self._cap
@@ -131,6 +213,7 @@ class CameraThread:
                 old_cap.release()
             except Exception:
                 pass
+        time.sleep(0.08)
 
         cap = self._open_capture(self.camera_index)
         if cap is None:
@@ -144,11 +227,10 @@ class CameraThread:
         while self._running:
             with self._cap_lock:
                 cap = self._cap
-            if cap is None:
-                time.sleep(0.005)
-                continue
-
-            ok, frame = cap.read()
+                if cap is None:
+                    time.sleep(0.005)
+                    continue
+                ok, frame = cap.read()
             if not ok or frame is None:
                 time.sleep(0.005)
                 continue
@@ -177,3 +259,7 @@ class CameraThread:
 
         with self._frame_lock:
             self._frame = None
+
+    @property
+    def last_error(self) -> str:
+        return self._last_error

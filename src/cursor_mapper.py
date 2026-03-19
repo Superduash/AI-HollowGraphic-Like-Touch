@@ -22,9 +22,6 @@ class CursorMapper:
         self._ploc_y = -1.0
         self._exp_x = -1.0
         self._exp_y = -1.0
-        self._kalman_x = -1.0
-        self._kalman_y = -1.0
-        self._kalman_gain = 0.52
 
     def set_camera_size(self, w: int, h: int) -> None:
         self.cam_w = max(1, int(w))
@@ -47,15 +44,14 @@ class CursorMapper:
     def reset(self) -> None:
         self._ploc_x = self._ploc_y = -1.0
         self._exp_x = self._exp_y = -1.0
-        self._kalman_x = self._kalman_y = -1.0
 
     def map_point(self, cam_x: int, cam_y: int) -> tuple[int, int]:
         # Map center 80% of camera region to the full virtual desktop.
         x1, y1, x2, y2 = self.control_region()
 
         if cam_x < x1 or cam_x > x2 or cam_y < y1 or cam_y > y2:
-            if self._kalman_x >= 0:
-                return int(self._kalman_x), int(self._kalman_y)
+            if self._exp_x >= 0:
+                return int(self._exp_x), int(self._exp_y)
             return int(self._screen_x + self.scr_w // 2), int(self._screen_y + self.scr_h // 2)
 
         cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
@@ -72,25 +68,26 @@ class CursorMapper:
         if self._ploc_x < 0:
             self._ploc_x, self._ploc_y = x3, y3
             self._exp_x, self._exp_y = x3, y3
-            self._kalman_x, self._kalman_y = x3, y3
             return int(x3), int(y3)
 
         dx = x3 - self._ploc_x
         dy = y3 - self._ploc_y
         d2 = dx * dx + dy * dy
-        if d2 < 4:
-            return int(self._kalman_x), int(self._kalman_y)
 
         cloc_x = self._ploc_x + dx / self.smoothening
         cloc_y = self._ploc_y + dy / self.smoothening
 
         speed = math.sqrt(d2)
-        alpha = 0.25 if speed < 20 else 0.7
+        # Micro-movement: use lower alpha to reduce jitter without freezing.
+        if d2 < 4:
+            alpha = 0.15
+        elif speed < 15:
+            alpha = 0.2
+        else:
+            alpha = 0.65
+
         self._exp_x = self._exp_x + alpha * (cloc_x - self._exp_x)
         self._exp_y = self._exp_y + alpha * (cloc_y - self._exp_y)
 
-        self._kalman_x = self._kalman_x + self._kalman_gain * (self._exp_x - self._kalman_x)
-        self._kalman_y = self._kalman_y + self._kalman_gain * (self._exp_y - self._kalman_y)
-
         self._ploc_x, self._ploc_y = cloc_x, cloc_y
-        return int(self._kalman_x), int(self._kalman_y)
+        return int(self._exp_x), int(self._exp_y)

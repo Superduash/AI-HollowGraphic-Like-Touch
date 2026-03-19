@@ -11,6 +11,8 @@ class GestureDetector:
         self._candidate = GestureType.NONE
         self._candidate_since = 0.0
         self._confirmed = GestureType.NONE
+        self._prev_confirmed = GestureType.NONE  # for drag-release lockout
+        self._drag_release_time = 0.0             # timestamp of last DRAG→non-DRAG
 
         self._dragging = False
         self._left_pinch_active = False
@@ -39,7 +41,12 @@ class GestureDetector:
         self._task_view_cooldown = 1.0
         self._task_view_confirm_frames = 6
         self._click_cooldown = 0.25
-        self._confirm_hold_s = 0.15
+        self._confirm_hold_s = 0.22               # was 0.15
+        self._drag_confirm_frames = 8              # NEW – consecutive left-pinch frames before drag
+        self._right_pinch_min_frames = 4           # NEW – was 2
+        self._drag_release_lockout_s = 0.15        # NEW – 150 ms post-drag lockout
+
+        self.debug = False                         # NEW – print gesture transitions
 
     @property
     def dragging(self) -> bool:
@@ -207,7 +214,7 @@ class GestureDetector:
             self._prev_scroll_y = None
             self._smooth_scroll = 0.0
             self._right_pinch_frames += 1
-            if not self._right_click_fired and self._right_pinch_frames >= 2 and now - self._last_right >= self._click_cooldown:
+            if not self._right_click_fired and self._right_pinch_frames >= self._right_pinch_min_frames and now - self._last_right >= self._click_cooldown:
                 self._right_click_fired = True
                 self._last_right = now
                 return self._confirm(GestureType.RIGHT_CLICK, 0)
@@ -231,7 +238,7 @@ class GestureDetector:
             if self._left_pinch_start == 0.0:
                 self._left_pinch_start = now
 
-            if now - self._left_pinch_start >= 0.30:
+            if now - self._left_pinch_start >= 0.30 and self._left_pinch_frames >= self._drag_confirm_frames:
                 self._dragging = True
                 return self._confirm(GestureType.DRAG, 0)
 
@@ -242,20 +249,22 @@ class GestureDetector:
         self._left_pinch_start = 0.0
         self._dragging = False
 
+        # Scroll: only when neither pinch is active
         if fs.index and fs.middle and not fs.ring and not fs.pinky:
-            y = 0.5 * (xy[8][1] + xy[12][1])
-            if self._prev_scroll_y is None:
+            if not self._left_pinch_active and not self._right_pinch_active:
+                y = 0.5 * (xy[8][1] + xy[12][1])
+                if self._prev_scroll_y is None:
+                    self._prev_scroll_y = y
+                    return self._confirm(GestureType.SCROLL, 0)
+
+                dy = y - self._prev_scroll_y
                 self._prev_scroll_y = y
-                return self._confirm(GestureType.SCROLL, 0)
+                if abs(dy) < self._scroll_motion_threshold:
+                    return self._confirm(GestureType.SCROLL, 0)
 
-            dy = y - self._prev_scroll_y
-            self._prev_scroll_y = y
-            if abs(dy) < self._scroll_motion_threshold:
-                return self._confirm(GestureType.SCROLL, 0)
-
-            raw = -dy * 2.0
-            self._smooth_scroll = 0.6 * self._smooth_scroll + 0.4 * raw
-            return self._confirm(GestureType.SCROLL, int(self._smooth_scroll))
+                raw = -dy * 2.0
+                self._smooth_scroll = 0.6 * self._smooth_scroll + 0.4 * raw
+                return self._confirm(GestureType.SCROLL, int(self._smooth_scroll))
 
         self._prev_scroll_y = None
         self._smooth_scroll = 0.0
@@ -278,10 +287,19 @@ class GestureDetector:
             self._candidate_since = now
             held = 0.0
 
+        # Drag-release lockout: after leaving DRAG, block new gestures for 150 ms
+        if self._prev_confirmed == GestureType.DRAG and raw != GestureType.DRAG:
+            if self._drag_release_time == 0.0:
+                self._drag_release_time = now
+            if now - self._drag_release_time < self._drag_release_lockout_s:
+                return GestureResult(GestureType.MOVE, 0)
+        else:
+            self._drag_release_time = 0.0
+
         if raw in {GestureType.PAUSE, GestureType.MOVE}:
-            self._confirmed = raw
+            self._set_confirmed(raw)
         elif held >= self._confirm_hold_s:
-            self._confirmed = raw
+            self._set_confirmed(raw)
         elif raw in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DRAG}:
             return GestureResult(GestureType.MOVE, 0)
         else:
@@ -290,3 +308,11 @@ class GestureDetector:
         if self._confirmed in {GestureType.SCROLL, GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN}:
             return GestureResult(self._confirmed, scroll_delta)
         return GestureResult(self._confirmed, 0)
+
+    def _set_confirmed(self, gesture: GestureType) -> None:
+        """Update _confirmed and track transitions for debug logging."""
+        old = self._confirmed
+        self._prev_confirmed = old
+        self._confirmed = gesture
+        if self.debug and old != gesture:
+            print(f"[GESTURE] {old.name} \u2192 {gesture.name}")
