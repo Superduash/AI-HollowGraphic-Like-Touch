@@ -610,6 +610,7 @@ class MainWindow(QMainWindow):
         self._gesture_history: collections.deque = collections.deque(maxlen=6)
         self._last_debug_print_ts = 0.0
         self._last_debug_label: str = ""
+        self._drag_active = False
 
         self._build_ui()
         self._setup_tray()
@@ -707,7 +708,7 @@ class MainWindow(QMainWindow):
         self.gesture_lbl = QLabel("STANDBY")
         self.gesture_lbl.setObjectName("badge")
         self.gesture_lbl.setWordWrap(False)
-        self.gesture_lbl.setMinimumWidth(120)
+        self.gesture_lbl.setMinimumWidth(140)
         
         self.hand_lbl = QLabel("Hand: Not Detected")
         self.hand_lbl.setObjectName("secondary")
@@ -775,8 +776,8 @@ class MainWindow(QMainWindow):
             gl.addWidget(dl, i, 2)
             
         gl.setColumnStretch(2, 1)
-        gl.setColumnStretch(0, 0)
         gl.setColumnStretch(1, 2)
+        gl.setColumnStretch(0, 0)
 
         history_card = QFrame()
         history_card.setObjectName("sideCard")
@@ -1232,6 +1233,8 @@ class MainWindow(QMainWindow):
         self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.30), 0.30)
         self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.08, _as_float(settings.get("pinch_exit_sensitivity", 0.45), 0.45))
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
+        self.gestures.reset_cooldowns()
+        self._drag_active = False
 
         if _as_bool(settings.get("performance_mode", False), False):
             self.tracker.set_processing_size((320, 240))
@@ -1268,6 +1271,7 @@ class MainWindow(QMainWindow):
         self.camera.stop()
         if self.mouse.is_dragging:
             self.mouse.end_drag()
+        self._drag_active = False
 
         self.mapper.reset()
         with self._lock:
@@ -1358,6 +1362,7 @@ class MainWindow(QMainWindow):
 
     def _cancel_actions(self) -> None:
         self._end_drag_now()
+        self._drag_active = False
         self.mapper.reset()
         self.gestures._state = GestureType.PAUSE
 
@@ -1410,7 +1415,7 @@ class MainWindow(QMainWindow):
                     time.sleep(0.01)
                     continue
 
-                hand_data, hand_proto = tracker.detect(frame, is_mirrored=self._mirror_camera)
+                hand_data, hand_proto, is_grace = tracker.detect(frame, is_mirrored=self._mirror_camera)
 
                 if hand_proto is not None:
                     last_hand_time = time.monotonic()
@@ -1422,7 +1427,7 @@ class MainWindow(QMainWindow):
                 else:
                     self._camera_error_text = self.camera.last_error
 
-                result = self.gestures.detect(hand_data)
+                result = self.gestures.detect(hand_data, is_grace_frame=is_grace)
                 if result is None:
                     result = GestureResult(GestureType.PAUSE, 0)
                 # Safety: verify confidence before allowing actions
@@ -1486,19 +1491,23 @@ class MainWindow(QMainWindow):
                     elif gesture == GestureType.SCROLL:
                         self.mouse.scroll(int(result.scroll_delta * self._scroll_multiplier))
                     elif gesture == GestureType.DRAG:
-                        if not self.mouse.is_dragging:
+                        if not self._drag_active:
                             self.mouse.move(sx, sy)
                             self.mouse.start_drag()
+                            self._drag_active = True
                         else:
                             self.mouse.move(sx, sy)
 
                     if gesture != GestureType.DRAG and self.mouse.is_dragging:
                         self.mouse.end_drag()
+                        self._drag_active = False
                 elif self.mouse.is_dragging:
                     self.mouse.end_drag()
+                    self._drag_active = False
 
                 if not self.mouse_enabled and self.mouse.is_dragging:
                     self.mouse.end_drag()
+                    self._drag_active = False
 
                 if gesture != last_overlay:
                     overlay = _OVERLAY_LABELS.get(gesture, "")

@@ -1,10 +1,28 @@
 from __future__ import annotations
 
 import collections
+import ctypes
 import platform
 import subprocess
 import threading
 import time
+
+try:
+    import pyautogui  # type: ignore
+
+    pyautogui.FAILSAFE = False
+    pyautogui.PAUSE = 0.0
+except Exception:
+    pyautogui = None  # type: ignore[assignment]
+
+if platform.system() == "Windows":
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # type: ignore[attr-defined]
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
 from .tuning import MOUSE_WORKER_HZ
 

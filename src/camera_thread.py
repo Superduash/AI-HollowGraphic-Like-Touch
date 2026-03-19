@@ -68,14 +68,6 @@ class CameraThread:
 
     @staticmethod
     def _drain_and_read(cap: cv2.VideoCapture):
-        # Single grab+retrieve path for low-latency frame acquisition.
-        try:
-            if cap.grab():
-                ok, frame = cap.retrieve()
-                if ok and frame is not None:
-                    return ok, frame
-        except Exception:
-            pass
         return cap.read()
 
     def _configure_capture(self, cap: cv2.VideoCapture, width: int, height: int, prefer_mjpg: bool = True) -> None:

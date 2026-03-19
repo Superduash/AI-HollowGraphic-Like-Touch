@@ -4,9 +4,8 @@ import math
 import platform
 
 from .tuning import (
-    CURSOR_DEADZONE_BASE,
-    CURSOR_DEADZONE_SCALE_FACTOR,
     CURSOR_INNER_RATIO,
+    CURSOR_SOFT_DEADZONE_PX,
     CURSOR_SPEED_NORM_RATIO,
 )
 
@@ -28,9 +27,9 @@ class CursorMapper:
         self._flt_y = -1.0
         self._initialized = False
 
-        self._deadzone_px = 2.0
-        self._alpha_min = 0.15
-        self._alpha_max = 0.70
+        self._deadzone_px = float(CURSOR_SOFT_DEADZONE_PX)
+        self._alpha_min = 0.18
+        self._alpha_max = 0.55
         self._inner_ratio = CURSOR_INNER_RATIO
         self._max_inner_margin_ratio = 0.35
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
@@ -91,8 +90,8 @@ class CursorMapper:
         v = max(1.0, min(10.0, float(value)))
         self.smoothening = v
         t = (v - 1.0) / 9.0
-        self._alpha_min = 0.12 + t * 0.13
-        self._alpha_max = 0.50 + t * 0.25
+        self._alpha_min = 0.18 + t * 0.12
+        self._alpha_max = 0.55 + t * 0.20
 
     def set_frame_margin(self, margin_px: int) -> None:
         self.frame_r = max(0, min(int(margin_px), self.max_effective_margin_px()))
@@ -157,11 +156,14 @@ class CursorMapper:
         self._raw_x = raw_x
         self._raw_y = raw_y
 
-        dynamic_deadzone = max(CURSOR_DEADZONE_BASE, self._deadzone_px, self._hand_scale_px * CURSOR_DEADZONE_SCALE_FACTOR)
-        if speed <= dynamic_deadzone:
-            self._flt_x = self._flt_x + 0.15 * (raw_x - self._flt_x)
-            self._flt_y = self._flt_y + 0.15 * (raw_y - self._flt_y)
-            return int(self._flt_x), int(self._flt_y)
+        # Soft deadzone: suppress micro-jitter without fully blocking intentional movement.
+        if speed < self._deadzone_px:
+            scale = (speed / self._deadzone_px) ** 2
+            raw_x = self._raw_x + dx * scale
+            raw_y = self._raw_y + dy * scale
+            dx = raw_x - self._raw_x
+            dy = raw_y - self._raw_y
+            speed = math.sqrt(dx * dx + dy * dy)
 
         screen_norm = max(60.0, math.sqrt(float(self.scr_w * self.scr_w + self.scr_h * self.scr_h)) * CURSOR_SPEED_NORM_RATIO)
         v_norm = min(1.0, speed / screen_norm)
