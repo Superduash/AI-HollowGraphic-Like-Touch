@@ -3,6 +3,7 @@ from __future__ import annotations
 import platform
 import threading
 import time
+import os
 from dataclasses import dataclass
 
 import cv2
@@ -10,10 +11,7 @@ import cv2
 try:
     cv2.setLogLevel(0)
 except Exception:
-    try:
-        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
-    except Exception:
-        pass
+    pass
 
 from .tuning import (
     CAMERA_FAIL_SLEEP_S,
@@ -62,7 +60,9 @@ class CameraThread:
 
     def _backend_candidates(self) -> list[int]:
         if self._is_windows:
-            return [cv2.CAP_DSHOW, cv2.CAP_MSMF]
+            # CAP_ANY stays as a last fallback because some virtual cams expose
+            # only a generic backend path on certain Windows builds.
+            return [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
         return [cv2.CAP_ANY]
 
     @staticmethod
@@ -71,7 +71,7 @@ class CameraThread:
             ok, frame = cap.read()
             if ok and frame is not None:
                 return True
-            time.sleep(0.01)
+            time.sleep(0.03)
         return False
 
     @staticmethod
@@ -109,6 +109,9 @@ class CameraThread:
 
                     self._configure_capture(cap, width, height, prefer_mjpg=prefer_mjpg)
 
+                    # Virtual cams may expose the device before streaming is ready.
+                    time.sleep(0.12)
+
                     if prefer_mjpg and self._is_windows:
                         fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
                         if fourcc != cv2.VideoWriter_fourcc(*"MJPG"):
@@ -116,7 +119,7 @@ class CameraThread:
                             time.sleep(0.01)
                             continue
 
-                    if not self._try_read_frames(cap):
+                    if not self._try_read_frames(cap, count=14):
                         cap.release()
                         time.sleep(0.03)
                         continue
@@ -130,7 +133,7 @@ class CameraThread:
                     )
                     return cap
 
-        self._last_error = f"Cannot open camera index {idx} on DSHOW/MSMF at 1280x720 or 640x480"
+        self._last_error = f"Cannot open camera index {idx} on DSHOW/MSMF/ANY at 1280x720 or 640x480"
         return None
 
     # ------------------------------------------------------------------
@@ -171,13 +174,24 @@ class CameraThread:
 
     def enumerate_cameras(self, max_index: int = 8) -> list[CameraDevice]:
         """Probe camera indices with the same backend policy as runtime open."""
+        env_max = os.environ.get("WH_CAM_MAX_INDEX", "").strip()
+        if env_max.isdigit():
+            max_index = max(max_index, int(env_max))
+
         candidate_indices = list(range(max_index))
         if self._is_windows:
             known_names = self._dshow_camera_names() or self._system_camera_names()
             if known_names:
-                # Keep one extra slot because device-index order can drift on some drivers.
-                probe_count = max(1, min(max_index, len(known_names) + 1))
+                # Keep extra slots because Windows backend index order often drifts
+                # with virtual camera drivers.
+                probe_count = max(1, min(max_index, len(known_names) + 6))
                 candidate_indices = list(range(probe_count))
+
+        env_idx = os.environ.get("WH_CAM_INDEX", "").strip()
+        if env_idx.isdigit():
+            idx = int(env_idx)
+            if idx not in candidate_indices:
+                candidate_indices.append(idx)
 
         open_indices: list[int] = []
         for idx in candidate_indices:
@@ -232,7 +246,24 @@ class CameraThread:
 
         cap = self._open_capture(self.camera_index)
         if cap is None:
-            return False
+            fallback_indices: list[int] = []
+            env_idx = os.environ.get("WH_CAM_INDEX", "").strip()
+            if env_idx.isdigit():
+                fallback_indices.append(int(env_idx))
+
+            for i in range(16):
+                if i != self.camera_index and i not in fallback_indices:
+                    fallback_indices.append(i)
+
+            for idx in fallback_indices:
+                cap = self._open_capture(idx)
+                if cap is not None:
+                    self.camera_index = idx
+                    self._last_error = f"Camera fallback selected index {idx}"
+                    break
+
+            if cap is None:
+                return False
 
         with self._cap_lock:
             self._cap = cap
