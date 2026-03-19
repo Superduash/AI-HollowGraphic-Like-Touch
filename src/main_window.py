@@ -602,7 +602,7 @@ class MainWindow(QMainWindow):
         self._gesture = GestureType.PAUSE
         self._overlay_text = _OVERLAY_LABELS.get(GestureType.PAUSE, "PAUSED")
         self._fingers = 0
-        self._kbd_locked = False
+        self._kbd_lock_until = 0.0
         self._camera_cache: list[CameraDevice] = []
         self._camera_cache_ts = 0.0
         self._camera_error_text = ""
@@ -1162,15 +1162,12 @@ class MainWindow(QMainWindow):
             self.preview.setText(detail)
 
     def _launch_keyboard(self) -> None:
-        if self._kbd_locked:
+        now = time.monotonic()
+        if now < self._kbd_lock_until:
             return
 
-        self._kbd_locked = True
+        self._kbd_lock_until = now + 0.8
         self.mouse.show_osk()
-        QTimer.singleShot(800, self._unlock_keyboard)
-
-    def _unlock_keyboard(self) -> None:
-        self._kbd_locked = False
 
     def _set_control_margin(self, value: int) -> None:
         v = int(value)

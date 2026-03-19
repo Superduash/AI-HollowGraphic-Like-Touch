@@ -11,9 +11,9 @@ class SettingsStore:
         "smoothening": 4.8,
         "debug_overlay": False,
         "scroll_multiplier": 1.0,
-        "pinch_sensitivity": 0.20,
-        "pinch_exit_sensitivity": 0.30,
-        "confirm_hold_s": 0.22,
+        "pinch_sensitivity": 0.30,
+        "pinch_exit_sensitivity": 0.45,
+        "confirm_hold_s": 0.06,
         "z_tap_enabled": False,
         "auto_start_camera": False,
         "show_control_region": True,
@@ -53,6 +53,17 @@ class SettingsStore:
                     for k, v in raw.items():
                         if k in self.DEFAULTS:
                             merged[k] = v
+
+                    # Migrate previously regressed gesture defaults to stable values.
+                    if (
+                        merged.get("pinch_sensitivity") == 0.20
+                        and merged.get("pinch_exit_sensitivity") == 0.30
+                    ):
+                        merged["pinch_sensitivity"] = 0.30
+                        merged["pinch_exit_sensitivity"] = 0.45
+
+                    if merged.get("confirm_hold_s") == 0.22:
+                        merged["confirm_hold_s"] = 0.06
         except Exception:
             pass
         self._data = merged
