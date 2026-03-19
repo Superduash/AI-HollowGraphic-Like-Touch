@@ -32,6 +32,7 @@ class CursorMapper:
         self._alpha_min = 0.15
         self._alpha_max = 0.70
         self._inner_ratio = CURSOR_INNER_RATIO
+        self._max_inner_margin_ratio = 0.35
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
         self._hand_scale_px = 32.0
 
@@ -94,13 +95,19 @@ class CursorMapper:
         self._alpha_max = 0.50 + t * 0.25
 
     def set_frame_margin(self, margin_px: int) -> None:
-        self.frame_r = max(0, int(margin_px))
+        self.frame_r = max(0, min(int(margin_px), self.max_effective_margin_px()))
         px = float(min(self.cam_w, self.cam_h))
         if px <= 1.0:
             return
-        ratio = max(0.0, min(0.35, self.frame_r / px))
+        ratio = max(0.0, min(self._max_inner_margin_ratio, self.frame_r / px))
         self._inner_margin_ratio = ratio
         self._inner_ratio = max(0.30, 1.0 - (2.0 * self._inner_margin_ratio))
+
+    def max_effective_margin_px(self) -> int:
+        px = float(min(self.cam_w, self.cam_h))
+        if px <= 1.0:
+            return 0
+        return int(px * self._max_inner_margin_ratio)
 
     def set_hand_scale(self, hand_scale_px: float) -> None:
         self._hand_scale_px = max(8.0, float(hand_scale_px))

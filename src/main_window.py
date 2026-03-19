@@ -267,8 +267,9 @@ class SettingsDialog(QDialog):
         self.smooth_lbl.setText(f"Smoothening: {self._mw.mapper.smoothening:.1f}")
         self.margin_lbl = QLabel(f"Control margin: {_as_int(settings.get('frame_r', self._mw.mapper.frame_r), self._mw.mapper.frame_r)}")
         self.margin_slider = QSlider(Qt.Orientation.Horizontal)
-        self.margin_slider.setRange(40, 200)
-        self.margin_slider.setValue(_as_int(settings.get("frame_r", self._mw.mapper.frame_r), self._mw.mapper.frame_r))
+        margin_max = max(40, min(260, self._mw.mapper.max_effective_margin_px()))
+        self.margin_slider.setRange(40, margin_max)
+        self.margin_slider.setValue(min(_as_int(settings.get("frame_r", self._mw.mapper.frame_r), self._mw.mapper.frame_r), margin_max))
 
         cursor_layout.addWidget(cursor_title)
         cursor_layout.addWidget(self.smooth_lbl)
@@ -450,11 +451,9 @@ class SettingsDialog(QDialog):
         settings.set("smoothening", smooth)
 
     def _on_margin_changed(self, value: int) -> None:
-        self._mw.mapper.set_frame_margin(int(value))
-        self.margin_lbl.setText(f"Control margin: {int(value)}")
-        self._mw._region_slider.setValue(int(value))
-        self._mw._region_label.setText(f"Control margin: {int(value)}")
-        settings.set("frame_r", int(value))
+        self._mw._set_control_margin(int(value))
+        self.margin_slider.setValue(self._mw.mapper.frame_r)
+        self.margin_lbl.setText(f"Control margin: {self._mw.mapper.frame_r}")
 
     def _on_scroll_changed(self, value: int) -> None:
         mult = value / 10.0
@@ -870,8 +869,8 @@ class MainWindow(QMainWindow):
         self._region_label = QLabel(f"Field Margin: {self.mapper.frame_r}")
         self._region_label.setObjectName("primaryText")
         self._region_slider = QSlider(Qt.Orientation.Horizontal)
-        self._region_slider.setRange(40, 200)
-        self._region_slider.setValue(int(self.mapper.frame_r))
+        self._region_slider.setRange(40, max(40, min(260, self.mapper.max_effective_margin_px())))
+        self._region_slider.setValue(min(int(self.mapper.frame_r), self._region_slider.maximum()))
         self._region_slider.setFixedWidth(160)
 
         self.settings_btn = QPushButton()
@@ -1174,9 +1173,26 @@ class MainWindow(QMainWindow):
 
     def _set_control_margin(self, value: int) -> None:
         v = int(value)
-        self.mapper.set_frame_margin(max(10, min(260, v)))
+        max_margin = max(40, min(260, self.mapper.max_effective_margin_px()))
+        self.mapper.set_frame_margin(max(10, min(max_margin, v)))
+        clamped = self.mapper.frame_r
         self._region_label.setText(f"Field Margin: {self.mapper.frame_r}")
+        if self._region_slider.maximum() != max_margin:
+            self._region_slider.setMaximum(max_margin)
+        if self._region_slider.value() != clamped:
+            self._region_slider.setValue(clamped)
         settings.set("frame_r", self.mapper.frame_r)
+
+    def _sync_margin_controls(self) -> None:
+        max_margin = max(40, min(260, self.mapper.max_effective_margin_px()))
+        if self._region_slider.maximum() != max_margin:
+            self._region_slider.setMaximum(max_margin)
+        if self.mapper.frame_r > max_margin:
+            self.mapper.set_frame_margin(max_margin)
+            settings.set("frame_r", self.mapper.frame_r)
+        if self._region_slider.value() != self.mapper.frame_r:
+            self._region_slider.setValue(self.mapper.frame_r)
+        self._region_label.setText(f"Field Margin: {self.mapper.frame_r}")
 
     def _apply_performance_mode(self, enabled: bool) -> None:
         settings.set("performance_mode", bool(enabled))
@@ -1570,7 +1586,13 @@ class MainWindow(QMainWindow):
         if self.isMinimized() or frame is None:
             return
 
+        self._sync_margin_controls()
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        if self._show_control_region:
+            left, top, right, bottom = self.mapper.control_region()
+            cv2.rectangle(rgb, (left, top), (right, bottom), (34, 211, 238), 2, cv2.LINE_AA)
 
         tracker = self.tracker
         if self.debug and hand_proto is not None and tracker is not None:
