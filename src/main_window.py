@@ -268,7 +268,7 @@ class SettingsDialog(QDialog):
         self.smooth_lbl.setText(f"Smoothening: {self._mw.mapper.smoothening:.1f}")
         self.margin_lbl = QLabel(f"Control margin: {_as_int(settings.get('frame_r', self._mw.mapper.frame_r), self._mw.mapper.frame_r)}")
         self.margin_slider = QSlider(Qt.Orientation.Horizontal)
-        margin_max = max(40, min(260, self._mw.mapper.max_effective_margin_px()))
+        margin_max = max(40, self._mw.mapper.max_effective_margin_px())
         self.margin_slider.setRange(40, margin_max)
         self.margin_slider.setValue(min(_as_int(settings.get("frame_r", self._mw.mapper.frame_r), self._mw.mapper.frame_r), margin_max))
 
@@ -875,7 +875,7 @@ class MainWindow(QMainWindow):
         self._region_label = QLabel(f"Field Margin: {self.mapper.frame_r}")
         self._region_label.setObjectName("primaryText")
         self._region_slider = QSlider(Qt.Orientation.Horizontal)
-        self._region_slider.setRange(40, max(40, min(260, self.mapper.max_effective_margin_px())))
+        self._region_slider.setRange(40, max(40, self.mapper.max_effective_margin_px()))
         self._region_slider.setValue(min(int(self.mapper.frame_r), self._region_slider.maximum()))
         self._region_slider.setFixedWidth(160)
 
@@ -1176,7 +1176,7 @@ class MainWindow(QMainWindow):
 
     def _set_control_margin(self, value: int) -> None:
         v = int(value)
-        max_margin = max(40, min(260, self.mapper.max_effective_margin_px()))
+        max_margin = max(40, self.mapper.max_effective_margin_px())
         self.mapper.set_frame_margin(max(10, min(max_margin, v)))
         clamped = self.mapper.frame_r
         self._region_label.setText(f"Field Margin: {self.mapper.frame_r}")
@@ -1187,7 +1187,7 @@ class MainWindow(QMainWindow):
         settings.set("frame_r", self.mapper.frame_r)
 
     def _sync_margin_controls(self) -> None:
-        max_margin = max(40, min(260, self.mapper.max_effective_margin_px()))
+        max_margin = max(40, self.mapper.max_effective_margin_px())
         if self._region_slider.maximum() != max_margin:
             self._region_slider.setMaximum(max_margin)
         if self.mapper.frame_r > max_margin:
