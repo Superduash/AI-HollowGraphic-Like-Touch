@@ -44,7 +44,7 @@ class GestureDetector:
         # Compatibility with existing settings bindings.
         self._pinch_enter = 0.20
         self._pinch_exit = 0.30
-        self._confirm_hold_s = GESTURE_CONFIRM_HOLD_S
+        self._confirm_hold_s = 0.05
 
         self._last_click_time = 0.0
         self._last_right_click_time = 0.0
@@ -116,19 +116,19 @@ class GestureDetector:
         left_dist = self._distance(xy[4], xy[8])
         right_dist = self._distance(xy[4], xy[12])
 
+        left_click_pose = left_dist <= pinch_enter and right_dist > pinch_exit
+        right_click_pose = right_dist <= pinch_enter and left_dist > pinch_exit
+
         if self._left_pinch_active:
             if left_dist > pinch_exit:
                 self._left_pinch_active = False
-        elif left_dist < pinch_enter:
+        elif left_click_pose:
             self._left_pinch_active = True
 
-        right_pose = fs.middle and (not fs.ring) and (not fs.pinky)
-        if not right_pose:
-            self._right_pinch_active = False
-        elif self._right_pinch_active:
+        if self._right_pinch_active:
             if right_dist > pinch_exit:
                 self._right_pinch_active = False
-        elif right_dist < pinch_enter:
+        elif right_click_pose:
             self._right_pinch_active = True
 
     def _stable_state(self, raw_state: GestureType, now: float) -> GestureType:
