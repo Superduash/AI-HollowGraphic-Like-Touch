@@ -27,8 +27,8 @@ class HandTracker:
             static_image_mode=False,
             max_num_hands=1,
             model_complexity=0,
-            min_detection_confidence=0.45,
-            min_tracking_confidence=0.45,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
         )
 
     def set_processing_size(self, size: tuple[int, int] | None) -> None:
@@ -54,6 +54,8 @@ class HandTracker:
 
         hand = result.multi_hand_landmarks[0]
         label = result.multi_handedness[0].classification[0].label
+        # Fix mirrored webcam handedness from MediaPipe output.
+        label = "Right" if label == "Left" else "Left"
 
         confidence = result.multi_handedness[0].classification[0].score
         if self._process_size is None:

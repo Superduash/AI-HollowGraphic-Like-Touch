@@ -133,8 +133,6 @@ class GestureDetector:
 
     def _stable_state(self, raw_state: GestureType, now: float) -> GestureType:
         if raw_state == GestureType.PAUSE:
-            if self._state == GestureType.SCROLL:
-                return GestureType.SCROLL
             self._candidate = GestureType.PAUSE
             self._candidate_since = now
             return GestureType.PAUSE
@@ -258,7 +256,10 @@ class GestureDetector:
         middle_mcp = xy[9]
         hand_scale = max(24.0, self._distance(wrist, middle_mcp))
 
+        prev_left_pinch_active = self._left_pinch_active
         self._update_pinch_states(xy, fs, hand_scale)
+        if prev_left_pinch_active and not self._left_pinch_active:
+            self._left_click_release_time = now
         pinch_guard_active = (
             self._left_pinch_active
             or self._right_pinch_active
@@ -285,6 +286,18 @@ class GestureDetector:
             self._scroll_prev_y = None
             self._scroll_velocity_ema = 0.0
 
+            confidence = float(hand_data.get("confidence", 0.0))
+            if confidence < 0.6:
+                self._left_media_anchor_y = None
+                self._state = GestureType.PAUSE
+                return GestureResult(GestureType.PAUSE, 0)
+
+            left_dist = self._distance(xy[4], xy[8])
+            right_dist = self._distance(xy[4], xy[12])
+            strong_pinch_enter = hand_scale * max(0.06, self._pinch_enter * 0.75)
+            strong_left_pinch = left_dist <= strong_pinch_enter and right_dist > (hand_scale * self._pinch_exit)
+            strong_right_pinch = right_dist <= strong_pinch_enter and left_dist > (hand_scale * self._pinch_exit)
+
             raw_media = GestureType.PAUSE
             if scroll_pose and (not self._left_pinch_active) and (not self._right_pinch_active):
                 vol_delta = self._resolve_media_volume(current_y=float(xy[8][1]), hand_scale=hand_scale)
@@ -296,12 +309,15 @@ class GestureDetector:
                     raw_media = GestureType.PAUSE
             else:
                 self._left_media_anchor_y = None
-                if self._left_pinch_active and (not self._right_pinch_active):
+                if self._left_pinch_active and (not self._right_pinch_active) and strong_left_pinch:
                     raw_media = GestureType.MEDIA_NEXT
-                elif self._right_pinch_active and (not self._left_pinch_active):
+                elif self._right_pinch_active and (not self._left_pinch_active) and strong_right_pinch:
                     raw_media = GestureType.MEDIA_PREV
 
-            stable_media = self._stable_state(raw_media, now)
+            if raw_media in {GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN}:
+                stable_media = raw_media
+            else:
+                stable_media = self._stable_state(raw_media, now)
 
             if stable_media == GestureType.MEDIA_NEXT:
                 if now - self._last_media_next_time >= self._action_cooldown_s:
@@ -320,14 +336,20 @@ class GestureDetector:
                 return GestureResult(GestureType.PAUSE, 0)
 
             if stable_media == GestureType.MEDIA_VOL_UP:
-                vol_delta = self._resolve_media_volume(current_y=float(xy[8][1]), hand_scale=hand_scale)
+                if now - self._last_media_next_time < self._action_cooldown_s:
+                    self._state = GestureType.PAUSE
+                    return GestureResult(GestureType.PAUSE, 0)
+                self._last_media_next_time = now
                 self._state = GestureType.MEDIA_VOL_UP
-                return GestureResult(GestureType.MEDIA_VOL_UP, max(1, abs(vol_delta)))
+                return GestureResult(GestureType.MEDIA_VOL_UP, 1)
 
             if stable_media == GestureType.MEDIA_VOL_DOWN:
-                vol_delta = self._resolve_media_volume(current_y=float(xy[8][1]), hand_scale=hand_scale)
+                if now - self._last_media_prev_time < self._action_cooldown_s:
+                    self._state = GestureType.PAUSE
+                    return GestureResult(GestureType.PAUSE, 0)
+                self._last_media_prev_time = now
                 self._state = GestureType.MEDIA_VOL_DOWN
-                return GestureResult(GestureType.MEDIA_VOL_DOWN, max(1, abs(vol_delta)))
+                return GestureResult(GestureType.MEDIA_VOL_DOWN, 1)
 
             self._state = GestureType.PAUSE
             return GestureResult(GestureType.PAUSE, 0)
@@ -369,7 +391,14 @@ class GestureDetector:
             self._scroll_velocity_ema = 0.0
             self._scroll_direction = 0
 
-        if now < self._locked_until and self._state in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}:
+        if self._state == GestureType.LEFT_CLICK and stable_state != GestureType.LEFT_CLICK:
+            self._left_click_release_time = now
+
+        if (
+            now < self._locked_until
+            and self._state in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}
+            and stable_state not in {GestureType.LEFT_CLICK, GestureType.DRAG}
+        ):
             return GestureResult(GestureType.MOVE, 0)
 
         if stable_state == GestureType.LEFT_CLICK:
@@ -414,8 +443,6 @@ class GestureDetector:
             return GestureResult(GestureType.DRAG, 0)
 
         self._dragging = False
-        if self._state == GestureType.LEFT_CLICK and stable_state != GestureType.LEFT_CLICK:
-            self._left_click_release_time = now
 
         if stable_state == GestureType.SCROLL:
             scroll_delta = self._resolve_scroll(current_y=float(xy[8][1]), hand_scale=hand_scale)

@@ -26,6 +26,10 @@ class GestureResult:
     gesture: GestureType = GestureType.NONE
     scroll_delta: int = 0
 
+    @property
+    def value(self) -> int:
+        return self.scroll_delta
+
 
 @dataclass
 class FingerStates:

@@ -1458,7 +1458,7 @@ class GestureDetector:
         # Compatibility with existing settings bindings.
         self._pinch_enter = 0.20
         self._pinch_exit = 0.30
-        self._confirm_hold_s = GESTURE_CONFIRM_HOLD_S
+        self._confirm_hold_s = 0.05
 
         self._last_click_time = 0.0
         self._last_right_click_time = 0.0
@@ -1530,19 +1530,19 @@ class GestureDetector:
         left_dist = self._distance(xy[4], xy[8])
         right_dist = self._distance(xy[4], xy[12])
 
+        left_click_pose = left_dist <= pinch_enter and right_dist > pinch_exit
+        right_click_pose = right_dist <= pinch_enter and left_dist > pinch_exit
+
         if self._left_pinch_active:
             if left_dist > pinch_exit:
                 self._left_pinch_active = False
-        elif left_dist < pinch_enter:
+        elif left_click_pose:
             self._left_pinch_active = True
 
-        right_pose = fs.middle and (not fs.ring) and (not fs.pinky)
-        if not right_pose:
-            self._right_pinch_active = False
-        elif self._right_pinch_active:
+        if self._right_pinch_active:
             if right_dist > pinch_exit:
                 self._right_pinch_active = False
-        elif right_dist < pinch_enter:
+        elif right_click_pose:
             self._right_pinch_active = True
 
     def _stable_state(self, raw_state: GestureType, now: float) -> GestureType:
@@ -1976,6 +1976,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSystemTrayIcon,
     QTabWidget,
@@ -2017,7 +2018,7 @@ def _as_bool(value: object, default: bool) -> bool:
 
 def _gesture_accent(gesture: GestureType) -> str:
     if gesture in {GestureType.MOVE}:
-        return "#22D3EE"
+        return "#00F0FF"
     if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK, GestureType.DRAG}:
         return "#34D399"
     if gesture in {GestureType.SCROLL, GestureType.TASK_VIEW, GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN, GestureType.MEDIA_NEXT, GestureType.MEDIA_PREV}:
@@ -2094,18 +2095,18 @@ class StatusOverlay(QWidget):
             QLabel { color: #F1F5F9; font-size: 13px; font-weight: 600; }
             #overlayTitle { font-size: 15px; font-weight: 800; letter-spacing: 0.5px; }
             #muted { color: #8B97B0; }
-            #statusOnline { color: #22D3EE; font-size: 18px; }
+            #statusOnline { color: #00F0FF; font-size: 18px; }
             #badge {
                 border-radius: 12px; padding: 6px 12px; font-weight: 800;
                 background: rgba(30, 37, 53, 0.8); color: #F1F5F9; text-transform: uppercase; letter-spacing: 1px;
             }
             QPushButton {
                 border: 0; border-radius: 12px; color: #021820;
-                padding: 8px 12px; font-weight: 700; background: #22D3EE;
+                padding: 8px 12px; font-weight: 700; background: #00F0FF;
             }
-            QPushButton:hover { background: #22D3EE; border: 1px solid #22D3EE; }
-            #ghostButton { background: #1E2535; color: #F1F5F9; }
-            #ghostButton:hover { background: #141820; }
+            QPushButton:hover { background: #00F0FF; border: 1px solid #00F0FF; }
+            #ghostButton { background: #27272A; color: #F1F5F9; }
+            #ghostButton:hover { background: #18181B; }
             #redButton { background: #F87171; color: #1A0505; }
             #redButton:hover { background: #F87171; border: 1px solid #F87171; }
             """
@@ -2119,7 +2120,7 @@ class StatusOverlay(QWidget):
             self._last_badge_gesture = gesture
             color = _gesture_accent(gesture)
             if gesture == GestureType.PAUSE:
-                self._badge.setStyleSheet("border-radius: 12px; padding: 6px 12px; font-weight: 800; background: #141820; color: #F1F5F9;")
+                self._badge.setStyleSheet("border-radius: 12px; padding: 6px 12px; font-weight: 800; background: #18181B; color: #F1F5F9;")
             else:
                 self._badge.setStyleSheet(
                     f"border-radius: 12px; padding: 6px 12px; font-weight: 800; background: {color}33; border: 1px solid {color}66; color: {color};"
@@ -2305,49 +2306,49 @@ class SettingsDialog(QDialog):
             * {
                 font-family: "Segoe UI Variable Display", "Segoe UI", "Inter", sans-serif;
             }
-            QDialog { background: #0E1117; color: #F1F5F9; border: 1px solid #1E2535; border-radius: 16px; }
+            QDialog { background: #18181B; color: #F1F5F9; border: 1px solid #27272A; border-radius: 16px; }
             QLabel { color: #F1F5F9; font-size: 13px; font-weight: 500; }
             #title { font-size: 20px; font-weight: 800; color: #F1F5F9; letter-spacing: 1px;}
             #section { font-size: 13px; color: #8B97B0; font-weight: 800; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 1px;}
             
-            QTabWidget::pane { border: none; border-top: 1px solid #1E2535; margin-top: -1px; }
+            QTabWidget::pane { border: none; border-top: 1px solid #27272A; margin-top: -1px; }
             QTabBar::tab {
                 background: transparent; color: #8B97B0; padding: 12px 20px;
                 border: none; font-weight: 700; font-size: 14px;
             }
-            QTabBar::tab:selected { color: #22D3EE; border-bottom: 2px solid #22D3EE; }
+            QTabBar::tab:selected { color: #00F0FF; border-bottom: 2px solid #00F0FF; }
             QTabBar::tab:hover { color: #F1F5F9; }
             
             QComboBox {
-                background: #141820; border: 1px solid #1E2535; border-radius: 8px; padding: 10px; color: #F1F5F9; font-weight: 600;
+                background: #18181B; border: 1px solid #27272A; border-radius: 8px; padding: 10px; color: #F1F5F9; font-weight: 600;
             }
             QComboBox::drop-down { border: none; }
             QComboBox QAbstractItemView {
-                background: #141820; border: 1px solid #1E2535; border-radius: 8px;
-                selection-background-color: #22D3EE; selection-color: #021820;
+                background: #18181B; border: 1px solid #27272A; border-radius: 8px;
+                selection-background-color: #00F0FF; selection-color: #021820;
             }
             
             QCheckBox { font-weight: 600; spacing: 12px; color: #8B97B0; }
             QCheckBox::indicator {
                 width: 36px; height: 18px; border-radius: 9px;
-                background: #141820; border: 2px solid #1E2535;
+                background: #18181B; border: 2px solid #27272A;
             }
             QCheckBox::indicator:checked {
-                background: #22D3EE; border: 2px solid #22D3EE;
+                background: #00F0FF; border: 2px solid #00F0FF;
             }
             
             QPushButton {
                 border: none; border-radius: 12px; padding: 10px 20px;
-                color: #F1F5F9; font-weight: 800; font-size: 14px; background: #1E2535;
+                color: #F1F5F9; font-weight: 800; font-size: 14px; background: #27272A;
             }
-            QPushButton:hover { background: #141820; border: 1px solid #22D3EE; }
+            QPushButton:hover { background: #18181B; border: 1px solid #00F0FF; }
             #ghostButton { background: transparent; color: #8B97B0; }
             #ghostButton:hover { background: rgba(30, 37, 53, 0.5); color: #F1F5F9; }
             
-            QSlider::groove:horizontal { height: 6px; background: #1E2535; border-radius: 3px; }
-            QSlider::sub-page:horizontal { background: #22D3EE; border-radius: 3px; }
+            QSlider::groove:horizontal { height: 6px; background: #27272A; border-radius: 3px; }
+            QSlider::sub-page:horizontal { background: #00F0FF; border-radius: 3px; }
             QSlider::handle:horizontal {
-                background: #F1F5F9; border: 2px solid #22D3EE;
+                background: #F1F5F9; border: 2px solid #00F0FF;
                 width: 16px; height: 16px; margin: -5px 0; border-radius: 8px;
             }
             QSlider::handle:horizontal:hover {
@@ -2606,7 +2607,7 @@ class MainWindow(QMainWindow):
         self.preview = QLabel("NO SIGNAL")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setObjectName("preview")
-        self.preview.setMinimumSize(760, 520)
+        self.preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.preview.setProperty("active", "false")
         cam_l.addWidget(self.preview, 1)
 
@@ -2705,7 +2706,7 @@ class MainWindow(QMainWindow):
 
         side_wrap = QWidget()
         side_wrap.setLayout(side)
-        side_wrap.setMinimumWidth(380)
+        side_wrap.setFixedWidth(340)
         side_wrap.setObjectName("sideCardWrap")
 
         body_l.addWidget(cam_card, 1)
@@ -2764,7 +2765,7 @@ class MainWindow(QMainWindow):
 
         divider = QFrame()
         divider.setFrameShape(QFrame.Shape.VLine)
-        divider.setStyleSheet("border-left: 1px solid #1E2535; margin: 0 8px;")
+        divider.setStyleSheet("border-left: 1px solid #27272A; margin: 0 8px;")
         cl.addWidget(divider)
 
         cl.addWidget(self._region_label)
@@ -2785,7 +2786,7 @@ class MainWindow(QMainWindow):
             * {
                 font-family: "Segoe UI Variable Display", "Segoe UI", "Inter", sans-serif;
             }
-            QMainWindow { background: #07090D; color: #F1F5F9; }
+            QMainWindow { background: #09090B; color: #F1F5F9; }
             
             #headerCard {
                 background: transparent;
@@ -2809,12 +2810,12 @@ class MainWindow(QMainWindow):
             #cardTitle { font-size: 14px; font-weight: 800; color: #F1F5F9; text-transform: uppercase; letter-spacing: 1.5px; padding-bottom: 4px; }
             
             #statusOffline { color: #F87171; font-size: 18px; }
-            #statusOnline { color: #22D3EE; font-size: 18px; }
+            #statusOnline { color: #00F0FF; font-size: 18px; }
             
             #preview {
-                background: #0E1117; 
+                background: #18181B; 
                 border-radius: 16px; 
-                border: 1px solid #1E2535;
+                border: 1px solid #27272A;
                 color: #4A5568; 
                 font-size: 20px;
                 font-weight: bold;
@@ -2833,43 +2834,43 @@ class MainWindow(QMainWindow):
             
             #badge {
                 border-radius: 16px; padding: 8px 14px; font-weight: 800;
-                background: #141820; color: #F1F5F9; max-width: 180px;
+                background: #18181B; color: #F1F5F9; max-width: 180px;
                 font-size: 13px; letter-spacing: 1px;
             }
             #historyItem { font-weight: 600; font-family: "Cascadia Code", "Consolas", monospace; }
             
             QPushButton {
                 border: none; 
-                border-radius: 18px; 
+                border-radius: 20px; 
                 padding: 10px 20px;
                 font-size: 14px;
                 font-weight: 800; 
-                background: #141820;
+                background: #18181B;
                 color: #F1F5F9;
             }
-            QPushButton:disabled { background: #141820; color: #4A5568; }
+            QPushButton:disabled { background: #18181B; color: #4A5568; }
             
             #startBtn { background: #34D399; color: #031A10; }
-            #startBtn:hover { background: #34D399; border: 1px solid #22D3EE; }
+            #startBtn:hover { background: #34D399; border: 1px solid #00F0FF; }
             
             #stopBtn { background: #F87171; color: #1A0505; }
-            #stopBtn:hover { background: #F87171; border: 1px solid #22D3EE; }
+            #stopBtn:hover { background: #F87171; border: 1px solid #00F0FF; }
             
-            #mouseBtn { background: #22D3EE; color: #021820; }
-            #mouseBtn:hover { background: #22D3EE; border: 1px solid #22D3EE; padding: 9px 21px; }
+            #mouseBtn { background: #00F0FF; color: #021820; }
+            #mouseBtn:hover { background: #00F0FF; border: 1px solid #00F0FF; padding: 9px 21px; }
             
             #settingsBtn { background: transparent; padding: 0;}
-            #settingsBtn:hover { background: #141820; border-radius: 22px; border: 1px solid #22D3EE; }
+            #settingsBtn:hover { background: #18181B; border-radius: 22px; border: 1px solid #00F0FF; }
             
             QSlider::groove:horizontal {
-                height: 6px; background: #1E2535; border-radius: 3px;
+                height: 6px; background: #27272A; border-radius: 3px;
             }
             QSlider::sub-page:horizontal {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1E2535, stop:1 #22D3EE);
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #27272A, stop:1 #00F0FF);
                 border-radius: 3px;
             }
             QSlider::handle:horizontal {
-                background: #F1F5F9; border: 2px solid #22D3EE;
+                background: #F1F5F9; border: 2px solid #00F0FF;
                 width: 16px; height: 16px; margin: -5px 0; border-radius: 8px;
             }
             QSlider::handle:horizontal:hover {
@@ -3341,7 +3342,7 @@ class MainWindow(QMainWindow):
             self._last_badge_gesture = gesture
             color = _gesture_accent(gesture)
             if gesture == GestureType.PAUSE:
-                self.gesture_lbl.setStyleSheet("border-radius: 16px; padding: 8px 14px; font-weight: 800; background: #141820; color: #F1F5F9;")
+                self.gesture_lbl.setStyleSheet("border-radius: 16px; padding: 8px 14px; font-weight: 800; background: #18181B; color: #F1F5F9;")
             else:
                 self.gesture_lbl.setStyleSheet(
                     f"border-radius: 16px; padding: 8px 14px; font-weight: 800;"
@@ -3389,7 +3390,7 @@ class MainWindow(QMainWindow):
         pix = QPixmap.fromImage(qimg)
         self.preview.setPixmap(
             pix.scaled(
-                self.preview.size(),
+                self.preview.contentsRect().size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )

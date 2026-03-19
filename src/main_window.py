@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSystemTrayIcon,
     QTabWidget,
@@ -579,6 +580,8 @@ class MainWindow(QMainWindow):
         self._camera_error_text = ""
         self._last_badge_gesture: GestureType = GestureType.NONE
         self._gesture_history: collections.deque = collections.deque(maxlen=6)
+        self._last_debug_print_ts = 0.0
+        self._last_debug_label: str = ""
 
         self._build_ui()
         self._setup_tray()
@@ -690,6 +693,7 @@ class MainWindow(QMainWindow):
 
         guide = QFrame()
         guide.setObjectName("sideCard")
+        guide.setMinimumWidth(260)
         gl = QGridLayout(guide)
         gl.setContentsMargins(0, 8, 0, 8)
         gl.setHorizontalSpacing(16)
@@ -731,6 +735,7 @@ class MainWindow(QMainWindow):
 
         history_card = QFrame()
         history_card.setObjectName("sideCard")
+        history_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         hl = QVBoxLayout(history_card)
         hl.setContentsMargins(0, 8, 0, 8)
         hl.setSpacing(6)
@@ -745,9 +750,14 @@ class MainWindow(QMainWindow):
             hl.addWidget(lbl)
             self._history_labels.append(lbl)
 
+        self.gesture_guide = guide
+        self.audit_log = history_card
+        self.gesture_guide.setMinimumWidth(260)
+        self.audit_log.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
         side.addWidget(status)
-        side.addWidget(guide)
-        side.addWidget(history_card)
+        side.addWidget(self.gesture_guide)
+        side.addWidget(self.audit_log, 1)
         side.addStretch(1)
 
         side_wrap = QWidget()
@@ -1261,11 +1271,6 @@ class MainWindow(QMainWindow):
                     continue
 
                 hand_data, hand_proto = tracker.detect(frame)
-                if hand_data and self._mirror_camera:
-                    if hand_data.get("label") == "Left":
-                        hand_data["label"] = "Right"
-                    elif hand_data.get("label") == "Right":
-                        hand_data["label"] = "Left"
 
                 if hand_proto is not None:
                     last_hand_time = time.monotonic()
@@ -1280,6 +1285,8 @@ class MainWindow(QMainWindow):
                 result = self.gestures.detect(hand_data)
                 gesture = result.gesture
                 gesture_changed = gesture != last_action
+                label = str(hand_data.get("label", "None")) if hand_data else "None"
+                print("HAND:", label, "GESTURE:", result.gesture, "VALUE:", result.value)
 
                 if self.mouse_enabled and gesture == GestureType.KEYBOARD and gesture_changed:
                     self._launch_keyboard()
