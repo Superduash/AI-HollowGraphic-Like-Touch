@@ -249,39 +249,57 @@ class MouseController:
 
     def show_osk(self) -> bool:
         if self._platform == "Windows":
-            try:
-                # Check for OSK.exe
-                output = subprocess.check_output('tasklist /FI "IMAGENAME eq osk.exe" /NH', shell=True).decode()
-                if "osk.exe" in output.lower():
-                    subprocess.run('taskkill /IM osk.exe /F', shell=True)
-                    return True
-                
-                # Check for TabTip.exe (Touch Keyboard) - toggling it is harder, 
-                # but we can try to find window or use specialized command
-                import ctypes
-                hwnd = ctypes.windll.user32.FindWindowW("IPTip_Main_Window", None)  # type: ignore
-                if hwnd:
-                    # If found, try to hide it by sending a close command or killing process
-                    # tabtip.exe is usually persistent, so we might just kill it if possible
-                    # but safer to just use osk.exe for reliable toggling.
-                    pass
+            import os
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+            sys_root = os.environ.get("SystemRoot", "C:\\Windows")
 
-                # If not running, start OSK
-                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-                # Use sysnative to bypass redirection if on 64-bit Windows
-                import os
-                osk_path = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "osk.exe")
-                if not os.path.exists(osk_path):
-                     # try sysnative for 32-bit processes on 64-bit windows
-                     osk_path = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "sysnative", "osk.exe")
-                
+            # Candidate keyboard executables in priority order:
+            # 1. TabTip.exe — Windows Accessibility Touch Keyboard (works on Win10/11, no UAC)
+            # 2. osk.exe via System32
+            # 3. osk.exe via sysnative (32-bit host on 64-bit Windows)
+            tabtip = os.path.join(sys_root, "System32", "InputApp", "TabTip.exe")
+            if not os.path.exists(tabtip):
+                tabtip = os.path.join(sys_root, "System32", "TabTip.exe")
+
+            osk_path = os.path.join(sys_root, "System32", "osk.exe")
+            if not os.path.exists(osk_path):
+                osk_path = os.path.join(sys_root, "sysnative", "osk.exe")
+
+            try:
+                # Check running keyboards and toggle
+                tasklist = subprocess.check_output(
+                    'tasklist /NH', shell=True, creationflags=flags
+                ).decode(errors="replace").lower()
+
+                if "tabtip.exe" in tasklist:
+                    subprocess.run('taskkill /IM TabTip.exe /F', shell=True,
+                                   capture_output=True, creationflags=flags)
+                    return True
+                if "osk.exe" in tasklist:
+                    subprocess.run('taskkill /IM osk.exe /F', shell=True,
+                                   capture_output=True, creationflags=flags)
+                    return True
+
+                # Not running — launch preferred keyboard
+                if os.path.exists(tabtip):
+                    subprocess.Popen([tabtip], creationflags=flags,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return True
                 if os.path.exists(osk_path):
-                    subprocess.Popen([osk_path], creationflags=flags)
-                else:
-                    subprocess.Popen(["cmd.exe", "/c", "start", "osk.exe"], creationflags=flags)
+                    subprocess.Popen([osk_path], creationflags=flags,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return True
+
+                # Last resort: shell start
+                subprocess.Popen(
+                    ["cmd.exe", "/c", "start", "", "osk.exe"],
+                    creationflags=flags,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
                 return True
             except Exception:
                 return False
+
         if self._platform == "Darwin":
             try:
                 output = subprocess.check_output(['ps', '-ax']).decode('utf-8')

@@ -228,6 +228,81 @@ def test_reset_cooldowns():
     print("[PASS] Cooldown reset works")
 
 
+def test_left_hand_moves_cursor():
+    """Left hand with index extended should produce MOVE gesture (not media)."""
+    detector = GestureDetector()
+    hand_xy = [
+        (250, 400),
+        (220, 390), (200, 370), (190, 350), (180, 340),
+        (280, 350), (300, 300), (315, 200), (320, 120),
+        (290, 390), (300, 400), (305, 395), (306, 392),
+        (280, 390), (285, 400), (288, 395), (289, 392),
+        (270, 390), (270, 400), (271, 395), (271, 392),
+    ]
+    hand = {"xy": hand_xy, "z": [0.0]*21, "label": "Left", "confidence": 0.9}
+    result = None
+    for _ in range(6):
+        result = detector.detect(hand)
+        time.sleep(0.02)
+    assert result.gesture == GestureType.MOVE, f"Left hand MOVE expected, got {result.gesture}"
+    print("[PASS] Left hand cursor control")
+
+
+def test_keyboard_pose_pinky_index_thumb():
+    """Pinky+index+thumb extended (middle+ring curled) should arm keyboard gesture."""
+    detector = GestureDetector()
+    # index up, pinky up, thumb out, middle/ring curled (tips very close to MCP)
+    hand_xy = [
+        (250, 400),
+        (220, 370), (210, 350), (205, 330), (200, 310),  # thumb extended
+        (280, 350), (300, 300), (315, 200), (320, 120),  # index extended
+        (290, 390), (291, 391), (292, 391), (293, 392),  # middle curled (tip 3px from MCP)
+        (280, 390), (281, 391), (282, 391), (283, 392),  # ring curled (tip 3px from MCP)
+        (270, 350), (270, 300), (271, 200), (271, 130),  # pinky extended
+    ]
+    hand = {"xy": hand_xy, "z": [0.0]*21, "label": "Right", "confidence": 0.9}
+    fs = detector._finger_states(hand_xy)
+    keyboard_pose = (
+        fs.index and fs.pinky and fs.thumb
+        and (not fs.middle) and (not fs.ring)
+    )
+    assert keyboard_pose, f"keyboard_pose should be True, finger states: {fs}"
+    print("[PASS] Keyboard pose (pinky+index+thumb) detected")
+
+
+def test_fast_move_no_v_jump():
+    """Cursor mapper should clamp single-frame jumps to prevent V-shaped movements."""
+    from src.cursor_mapper import CursorMapper
+    import math
+    mapper = CursorMapper()
+    mapper.set_camera_size(640, 480)
+    # Simulate normal position
+    x1, y1 = mapper.map_point(320, 240)
+    # Simulate extreme teleport (blurry frame: landmark flies to corner)
+    x2, y2 = mapper.map_point(1, 1)
+    dist = math.sqrt((x2-x1)**2 + (y2-y1)**2)
+    scr_diag = math.sqrt(mapper.scr_w**2 + mapper.scr_h**2)
+    max_allowed = scr_diag * 0.20  # allow slight overshoot due to EMA
+    assert dist < max_allowed, (
+        f"V-jump too large: {dist:.0f}px > {max_allowed:.0f}px limit"
+    )
+    print(f"[PASS] Fast-move clamp: jump={dist:.0f}px < {max_allowed:.0f}px limit")
+
+
+def test_osk_keyboard_not_none():
+    """show_osk() should return bool and not raise."""
+    from src.mouse import MouseController
+    import platform
+    mc = MouseController()
+    # Just check it doesn't throw — actual open/close skipped in CI
+    try:
+        result = mc.show_osk()
+        assert isinstance(result, bool), f"show_osk returned {type(result)}"
+        print(f"[PASS] show_osk() returned {result} (platform={platform.system()})")
+    finally:
+        mc.stop()
+
+
 if __name__ == "__main__":
     test_gesture_detector_init()
     test_hand_loss_detection()
@@ -238,4 +313,8 @@ if __name__ == "__main__":
     test_scroll_gesture()
     test_cooldown_system()
     test_reset_cooldowns()
+    test_left_hand_moves_cursor()
+    test_keyboard_pose_pinky_index_thumb()
+    test_fast_move_no_v_jump()
+    test_osk_keyboard_not_none()
     print("\n[SUCCESS] All gesture detector tests passed!")

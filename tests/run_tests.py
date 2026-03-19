@@ -33,8 +33,10 @@ class TestRunner:
         
         test_suites = [
             ("Unit Tests: Models", lambda: self._run_test_module("tests.test_models")),
+            ("Unit Tests: Hand Tracker", lambda: self._run_test_module("tests.test_hand_tracker")),
             ("Unit Tests: Gesture Detector", lambda: self._run_test_module("tests.test_gesture_detector")),
             ("Unit Tests: Camera", lambda: self._run_test_module("tests.test_camera")),
+            ("Unit Tests: Cursor Mapper", lambda: self._run_test_module("tests.test_cursor_mapper")),
             ("Unit Tests: Mouse Controller", lambda: self._run_test_module("tests.test_mouse")),
             ("Integration Tests", lambda: self._run_test_module("tests.test_integration")),
         ]

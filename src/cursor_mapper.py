@@ -140,6 +140,8 @@ class CursorMapper:
 
     def map_point(self, cam_x: int, cam_y: int) -> tuple[int, int]:
         raw_x, raw_y = self._map_to_screen(cam_x, cam_y)
+        true_raw_x = raw_x
+        true_raw_y = raw_y
 
         if not self._initialized:
             self._raw_x = raw_x
@@ -149,25 +151,40 @@ class CursorMapper:
             self._initialized = True
             return int(raw_x), int(raw_y)
 
-        dx = raw_x - self._raw_x
-        dy = raw_y - self._raw_y
+        prev_raw_x = self._raw_x
+        prev_raw_y = self._raw_y
+        dx = raw_x - prev_raw_x
+        dy = raw_y - prev_raw_y
         speed = math.sqrt(dx * dx + dy * dy)
-
-        self._raw_x = raw_x
-        self._raw_y = raw_y
 
         # Soft deadzone: suppress micro-jitter without fully blocking intentional movement.
         if speed < self._deadzone_px:
             scale = (speed / self._deadzone_px) ** 2
-            raw_x = self._raw_x + dx * scale
-            raw_y = self._raw_y + dy * scale
-            dx = raw_x - self._raw_x
-            dy = raw_y - self._raw_y
+            raw_x = prev_raw_x + dx * scale
+            raw_y = prev_raw_y + dy * scale
+            dx = raw_x - prev_raw_x
+            dy = raw_y - prev_raw_y
             speed = math.sqrt(dx * dx + dy * dy)
+
+        # Store the true (non-deadzoned) raw point for consistent speed tracking.
+        self._raw_x = true_raw_x
+        self._raw_y = true_raw_y
 
         screen_norm = max(60.0, math.sqrt(float(self.scr_w * self.scr_w + self.scr_h * self.scr_h)) * CURSOR_SPEED_NORM_RATIO)
         v_norm = min(1.0, speed / screen_norm)
         alpha = self._alpha_min + v_norm * (self._alpha_max - self._alpha_min)
+
+        # Clamp max single-frame jump to 15% of screen diagonal to
+        # absorb landmark teleport caused by blur/fast motion.
+        scr_diag = math.sqrt(float(self.scr_w ** 2 + self.scr_h ** 2))
+        max_jump = scr_diag * 0.15
+        jump_dx = raw_x - self._flt_x
+        jump_dy = raw_y - self._flt_y
+        jump_dist = math.sqrt(jump_dx * jump_dx + jump_dy * jump_dy)
+        if jump_dist > max_jump and max_jump > 0:
+            scale = max_jump / jump_dist
+            raw_x = self._flt_x + jump_dx * scale
+            raw_y = self._flt_y + jump_dy * scale
 
         self._flt_x = self._flt_x + alpha * (raw_x - self._flt_x)
         self._flt_y = self._flt_y + alpha * (raw_y - self._flt_y)

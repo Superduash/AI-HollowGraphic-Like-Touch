@@ -115,26 +115,3 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
-        result = detector.detect(hand)
-        time.sleep(0.020)
-    print(f"   Expected: RIGHT_CLICK, Got: {result.gesture}")
-    if result.gesture == GestureType.RIGHT_CLICK:
-        print("   [PASS]")
-    else:
-        print(f"   [FAIL] Expected RIGHT_CLICK")
-
-    print("\n" + "=" * 60)
-    print("Gesture detection test complete!")
-    print("=" * 60)
-    
-if __name__ == "__main__":
-    try:
-        test_gesture_detections()
-    except AssertionError as e:
-        print(f"\n[FAIL] TEST FAILED: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n[ERROR]: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)

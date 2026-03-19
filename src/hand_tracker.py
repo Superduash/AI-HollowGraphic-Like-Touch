@@ -18,6 +18,20 @@ if mp is not None:
 
 
 class HandTracker:
+    @staticmethod
+    def _map_label(raw_label: str, is_mirrored: bool) -> str:
+        """Map MediaPipe handedness to a stable user-facing label.
+
+        MediaPipe's label is relative to the *image*. If we mirror the frame
+        horizontally, left/right are swapped and we must invert the label.
+        """
+        raw = str(raw_label)
+        if raw not in ("Left", "Right"):
+            return raw
+        if is_mirrored:
+            return "Right" if raw == "Left" else "Left"
+        return raw
+
     def __init__(self) -> None:
         self._process_size: tuple[int, int] | None = None
         self._label_history: deque[str] = deque(maxlen=9)
@@ -30,7 +44,7 @@ class HandTracker:
 
         self._hands = self._mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,
+            max_num_hands=2,
             model_complexity=0,
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5,
@@ -116,15 +130,24 @@ class HandTracker:
 
         self._frames_no_hand = 0
 
-        hand = result.multi_hand_landmarks[0]
-        raw_label = result.multi_handedness[0].classification[0].label
-        if is_mirrored:
-            label = raw_label
-        else:
-            label = "Right" if raw_label == "Left" else "Left"
+        # With max_num_hands=2, prefer the Right hand for cursor control.
+        # Pick the hand whose resolved label is "Right" when available,
+        # else fall back to the first detected hand.
+        chosen_idx = 0
+        if len(result.multi_hand_landmarks) > 1:
+            for i, hedness in enumerate(result.multi_handedness):
+                raw = hedness.classification[0].label
+                mapped = self._map_label(raw, is_mirrored=is_mirrored)
+                if mapped == "Right":
+                    chosen_idx = i
+                    break
+
+        hand = result.multi_hand_landmarks[chosen_idx]
+        raw_label = result.multi_handedness[chosen_idx].classification[0].label
+        label = self._map_label(raw_label, is_mirrored=is_mirrored)
 
         label = self._resolve_label(label)
-        confidence = float(result.multi_handedness[0].classification[0].score)
+        confidence = float(result.multi_handedness[chosen_idx].classification[0].score)
 
         if not self._passes_confidence_gate(confidence):
             return None, None, False

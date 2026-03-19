@@ -1480,7 +1480,14 @@ class MainWindow(QMainWindow):
                 self._last_debug_label = gesture
                 # Debug print disabled for production
 
-                if self.mouse_enabled and gesture == GestureType.KEYBOARD and gesture_changed:
+                if (
+                    self.mouse_enabled
+                    and gesture == GestureType.KEYBOARD
+                    and gesture_changed
+                    and hand_data
+                    and hand_data.get("label") == "Right"
+                    and (not is_grace)
+                ):
                     self._launch_keyboard()
 
                 if self.mouse_enabled and gesture == GestureType.TASK_VIEW and gesture_changed:
@@ -1489,19 +1496,25 @@ class MainWindow(QMainWindow):
                         last_task_view_action = now
                         self.mouse.open_task_view()
 
-                if self.mouse_enabled and gesture in {
-                    GestureType.MEDIA_VOL_UP,
-                    GestureType.MEDIA_VOL_DOWN,
-                    GestureType.MEDIA_NEXT,
-                    GestureType.MEDIA_PREV,
-                }:
+                if (
+                    self.mouse_enabled
+                    and hand_data
+                    and hand_data.get("label") == "Left"
+                    and (not is_grace)
+                    and gesture in {
+                        GestureType.MEDIA_VOL_UP,
+                        GestureType.MEDIA_VOL_DOWN,
+                        GestureType.MEDIA_NEXT,
+                        GestureType.MEDIA_PREV,
+                    }
+                ):
                     if gesture_changed or gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN):
                         if gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN) and result.scroll_delta == 0:
                             pass
                         else:
                             self._execute_media(gesture, result.scroll_delta)
 
-                if self.mouse_enabled and hand_data and hand_data.get("label") == "Right" and gesture not in {
+                if self.mouse_enabled and (not is_grace) and hand_data and hand_data.get("label") == "Right" and gesture not in {
                     GestureType.NONE,
                     GestureType.PAUSE,
                     GestureType.TASK_VIEW,
@@ -1640,7 +1653,7 @@ class MainWindow(QMainWindow):
             cv2.rectangle(rgb, (left, top), (right, bottom), (34, 211, 238), 2, cv2.LINE_AA)
 
         tracker = self.tracker
-        if self.debug and hand_proto is not None and tracker is not None:
+        if hand_proto is not None and tracker is not None:
             label = hand_data["label"] if hand_data else "Right"
             tracker.draw(rgb, hand_proto, label)
 

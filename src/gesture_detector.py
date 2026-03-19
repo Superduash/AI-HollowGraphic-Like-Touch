@@ -73,6 +73,7 @@ class GestureDetector:
         self._z_tap_exit = float(GESTURE_Z_TAP_EXIT)
         self._z_tap_active = False
         self._z_tap_enabled = False
+        self._last_move_time: float = 0.0
         self._task_view_hold_s = 0.40
         self._keyboard_after_pinch_s = float(GESTURE_KEYBOARD_AFTER_PINCH_S)
         self._keyboard_hold_s = float(GESTURE_KEYBOARD_HOLD_S)
@@ -353,8 +354,15 @@ class GestureDetector:
         scroll_pose = fs.index and fs.middle and (not fs.ring) and (not fs.pinky)
         open_palm = fs.thumb and fs.index and fs.middle and fs.ring and fs.pinky
 
-        thumb_tucked = self._distance(xy[4], xy[5]) / max(1.0, self._hand_scale) < 0.15
-        keyboard_pose = fs.index and fs.middle and fs.ring and fs.pinky and thumb_tucked
+        # Keyboard gesture: pinky + index extended, thumb extended (three-finger salute)
+        # Middle and ring must be CURLED to avoid false triggers with open palm / scroll.
+        keyboard_pose = (
+            fs.index
+            and fs.pinky
+            and fs.thumb
+            and (not fs.middle)
+            and (not fs.ring)
+        )
 
         raw_state = GestureType.PAUSE
         media_delta = 0
@@ -365,68 +373,50 @@ class GestureDetector:
         if _debug:
             print(f"[ROUTING] hand_label={hand_label}, left_pinch={self._left_pinch_active}, right_pinch={self._right_pinch_active}, move_pose={move_pose}, scroll_pose={scroll_pose}")
 
-        if hand_label == "Left":
-            self._dragging = False
-            self._drag_active = False
-            self._scroll_prev_y = None
-            self._scroll_accumulator = 0.0
-            self._scroll_velocity_ema = 0.0
+        # Both hands share cursor/click/scroll logic.
+        # Left hand additionally supports media controls via open_palm hold.
+        self._left_media_anchor_y = None
 
-            if scroll_pose and (not self._left_pinch_active) and (not self._right_pinch_active):
-                media_delta = self._resolve_media_volume(current_y=float(xy[8][1]), hand_scale=self._hand_scale)
-                if media_delta > 0:
-                    raw_state = GestureType.MEDIA_VOL_UP
-                elif media_delta < 0:
-                    raw_state = GestureType.MEDIA_VOL_DOWN
-                else:
-                    raw_state = GestureType.PAUSE
+        if open_palm and not self._left_pinch_active and not self._right_pinch_active:
+            if self._task_view_since is None:
+                self._task_view_since = now
+            if now - self._task_view_since >= self._task_view_hold_s:  # type: ignore
+                raw_state = GestureType.TASK_VIEW
             else:
-                self._left_media_anchor_y = None
-                if self._left_pinch_active and not self._right_pinch_active:
-                    raw_state = GestureType.MEDIA_NEXT
-                elif self._right_pinch_active and not self._left_pinch_active:
-                    raw_state = GestureType.MEDIA_PREV
-                else:
-                    raw_state = GestureType.PAUSE
-
-            self._keyboard_hold_start = None
-            self._keyboard_fired = False
-            self._task_view_since = None
+                raw_state = GestureType.PAUSE
         else:
-            self._left_media_anchor_y = None
+            self._task_view_since = None
 
-            if open_palm and not self._left_pinch_active and not self._right_pinch_active:
-                if self._task_view_since is None:
-                    self._task_view_since = now
-                if now - self._task_view_since >= self._task_view_hold_s:  # type: ignore
-                    raw_state = GestureType.TASK_VIEW
+            if keyboard_pose and not pinch_guard_active:
+                if self._keyboard_hold_start is None:
+                    self._keyboard_hold_start = now
+                hold_elapsed = now - self._keyboard_hold_start  # type: ignore
+                if hold_elapsed >= self._keyboard_hold_s and not self._keyboard_fired:
+                    raw_state = GestureType.KEYBOARD
+                    self._keyboard_fired = True
                 else:
                     raw_state = GestureType.PAUSE
             else:
-                self._task_view_since = None
+                self._keyboard_hold_start = None
+                self._keyboard_fired = False
 
-                if keyboard_pose and not pinch_guard_active:
-                    if self._keyboard_hold_start is None:
-                        self._keyboard_hold_start = now
-                    hold_elapsed = now - self._keyboard_hold_start  # type: ignore
-                    if hold_elapsed >= self._keyboard_hold_s and not self._keyboard_fired:
-                        raw_state = GestureType.KEYBOARD
-                        self._keyboard_fired = True
-                    else:
-                        raw_state = GestureType.PAUSE
+                if self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):  # type: ignore
+                    raw_state = GestureType.DRAG
+                elif self._left_pinch_active and (not self._right_pinch_active):
+                    raw_state = GestureType.LEFT_CLICK
+                elif self._right_pinch_active and (not self._left_pinch_active):
+                    raw_state = GestureType.RIGHT_CLICK
+                elif scroll_pose and (not self._left_pinch_active) and (not self._right_pinch_active):
+                    raw_state = GestureType.SCROLL
+                elif move_pose:
+                    self._last_move_time = now
+                    raw_state = GestureType.MOVE
                 else:
-                    self._keyboard_hold_start = None
-                    self._keyboard_fired = False
-
-                    if self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):  # type: ignore
-                        raw_state = GestureType.DRAG
-                    elif self._left_pinch_active and (not self._right_pinch_active):
-                        raw_state = GestureType.LEFT_CLICK
-                    elif self._right_pinch_active and (not self._left_pinch_active):
-                        raw_state = GestureType.RIGHT_CLICK
-                    elif scroll_pose and (not self._left_pinch_active) and (not self._right_pinch_active):
-                        raw_state = GestureType.SCROLL
-                    elif move_pose:
+                    # Fast-motion pose dropout grace: if we were just in MOVE
+                    # within the last 80 ms, stay in MOVE to absorb blurry frames.
+                    move_grace_s = 0.08
+                    last_move = getattr(self, "_last_move_time", 0.0)
+                    if self._state == GestureType.MOVE and (now - last_move) < move_grace_s:
                         raw_state = GestureType.MOVE
                     else:
                         raw_state = GestureType.PAUSE
@@ -441,6 +431,14 @@ class GestureDetector:
 
         if is_grace_frame:
             self._stable_start_t = now
+            # During grace period, only allow non-action gestures to prevent
+            # ghost clicks from stale data.
+            if self._state in {
+                GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
+                GestureType.DOUBLE_CLICK, GestureType.KEYBOARD,
+                GestureType.TASK_VIEW,
+            }:
+                self._state = GestureType.MOVE
             stable_state = self._state
             hold_confidence = 0.0
         else:
@@ -480,9 +478,9 @@ class GestureDetector:
                 self._dragging = False
                 return self._make_result(GestureType.LEFT_CLICK, 0, 1.0)
 
-            self._state = GestureType.MOVE
+            self._state = GestureType.PAUSE
             self._dragging = False
-            return self._make_result(GestureType.MOVE, 0, hold_confidence)
+            return self._make_result(GestureType.PAUSE, 0, hold_confidence)
 
         if stable_state == GestureType.RIGHT_CLICK:
             if self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
@@ -494,9 +492,9 @@ class GestureDetector:
                 self._dragging = False
                 return self._make_result(GestureType.RIGHT_CLICK, 0, 1.0)
 
-            self._state = GestureType.MOVE
+            self._state = GestureType.PAUSE
             self._dragging = False
-            return self._make_result(GestureType.MOVE, 0, hold_confidence)
+            return self._make_result(GestureType.PAUSE, 0, hold_confidence)
 
         if stable_state == GestureType.DRAG:
             self._dragging = True
