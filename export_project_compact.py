@@ -93,7 +93,7 @@ def export_project(root: Path, output: Path, max_bytes_per_file: int) -> int:
 
             encoded = content.encode("utf-8", errors="replace")
             if len(encoded) > max_bytes_per_file:
-                truncated = encoded[:max_bytes_per_file].decode("utf-8", errors="ignore")
+                truncated = encoded[:max_bytes_per_file].decode("utf-8", errors="ignore")  # type: ignore
                 out.write(truncated)
                 out.write("\n\n<... truncated ...>\n\n")
             else:
