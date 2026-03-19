@@ -16,7 +16,7 @@ if mp is not None:
 
 class HandTracker:
     def __init__(self) -> None:
-
+        self._process_size: tuple[int, int] | None = None
         _ensure_mediapipe_solutions()
 
         self._mp_hands = mp.solutions.hands  # type: ignore[attr-defined]
@@ -31,9 +31,22 @@ class HandTracker:
             min_tracking_confidence=0.45,
         )
 
+    def set_processing_size(self, size: tuple[int, int] | None) -> None:
+        if size is None:
+            self._process_size = None
+            return
+        w, h = size
+        self._process_size = (max(64, int(w)), max(64, int(h)))
+
     def detect(self, frame_bgr):
-        h, w = frame_bgr.shape[:2]
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        src_h, src_w = frame_bgr.shape[:2]
+
+        detect_frame = frame_bgr
+        if self._process_size is not None:
+            detect_frame = cv2.resize(frame_bgr, self._process_size, interpolation=cv2.INTER_LINEAR)
+
+        h, w = detect_frame.shape[:2]
+        rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
         result = self._hands.process(rgb)
 
         if not result.multi_hand_landmarks or not result.multi_handedness:
@@ -43,7 +56,12 @@ class HandTracker:
         label = result.multi_handedness[0].classification[0].label
 
         confidence = result.multi_handedness[0].classification[0].score
-        xy = [(int(lm.x * w), int(lm.y * h)) for lm in hand.landmark]
+        if self._process_size is None:
+            xy = [(int(lm.x * src_w), int(lm.y * src_h)) for lm in hand.landmark]
+        else:
+            sx = float(src_w) / float(max(1, w))
+            sy = float(src_h) / float(max(1, h))
+            xy = [(int(lm.x * w * sx), int(lm.y * h * sy)) for lm in hand.landmark]
         z = [float(lm.z) for lm in hand.landmark]
         return {
             "xy": xy,

@@ -3,7 +3,6 @@ from __future__ import annotations
 import collections
 import os
 import platform
-import subprocess
 import threading
 import time
 from typing import Any, cast
@@ -233,6 +232,7 @@ class SettingsDialog(QDialog):
         self.smooth_slider = QSlider(Qt.Orientation.Horizontal)
         self.smooth_slider.setRange(10, 100)
         self.smooth_slider.setValue(int(_as_float(settings.get("smoothening", self._mw.mapper.smoothening), self._mw.mapper.smoothening) * 10))
+        self.smooth_lbl.setText(f"Smoothening: {self._mw.mapper.smoothening:.1f}")
         self.margin_lbl = QLabel(f"Control margin: {_as_int(settings.get('frame_r', self._mw.mapper.frame_r), self._mw.mapper.frame_r)}")
         self.margin_slider = QSlider(Qt.Orientation.Horizontal)
         self.margin_slider.setRange(40, 200)
@@ -256,14 +256,19 @@ class SettingsDialog(QDialog):
         self.scroll_slider = QSlider(Qt.Orientation.Horizontal)
         self.scroll_slider.setRange(5, 30)
         self.scroll_slider.setValue(int(_as_float(settings.get("scroll_multiplier", self._mw._scroll_multiplier), self._mw._scroll_multiplier) * 10))
+        self.scroll_lbl.setText(f"Scroll Speed: {self._mw._scroll_multiplier:.1f}x")
         self.pinch_lbl = QLabel("Pinch sensitivity")
         self.pinch_slider = QSlider(Qt.Orientation.Horizontal)
         self.pinch_slider.setRange(10, 35)
         self.pinch_slider.setValue(int(_as_float(settings.get("pinch_sensitivity", self._mw.gestures._pinch_enter), self._mw.gestures._pinch_enter) * 100))
+        self.pinch_lbl.setText(f"Pinch Sensitivity: {self._mw.gestures._pinch_enter:.2f}")
         self.hold_lbl = QLabel("Confirm hold (ms)")
         self.hold_slider = QSlider(Qt.Orientation.Horizontal)
         self.hold_slider.setRange(100, 500)
         self.hold_slider.setValue(int(_as_float(settings.get("confirm_hold_s", self._mw.gestures._confirm_hold_s), self._mw.gestures._confirm_hold_s) * 1000))
+        self.hold_lbl.setText(f"Hold Time: {self._mw.gestures._confirm_hold_s:.2f}s")
+        self.z_tap_chk = QCheckBox("Enable Z-tap (forward air click)")
+        self.z_tap_chk.setChecked(bool(settings.get("z_tap_enabled", False)))
 
         gesture_layout.addWidget(gesture_title)
         gesture_layout.addWidget(self.scroll_lbl)
@@ -272,6 +277,7 @@ class SettingsDialog(QDialog):
         gesture_layout.addWidget(self.pinch_slider)
         gesture_layout.addWidget(self.hold_lbl)
         gesture_layout.addWidget(self.hold_slider)
+        gesture_layout.addWidget(self.z_tap_chk)
         gesture_layout.addStretch(1)
 
         perf_tab = QWidget()
@@ -281,7 +287,7 @@ class SettingsDialog(QDialog):
 
         perf_title = QLabel("Performance / Debug")
         perf_title.setObjectName("section")
-        self.performance_chk = QCheckBox("Performance mode (160x120)")
+        self.performance_chk = QCheckBox("Performance mode (320x240 processing)")
         self.performance_chk.setChecked(bool(settings.get("performance_mode", False)))
         self.debug_chk = QCheckBox("Show debug skeleton")
         self.debug_chk.setChecked(bool(settings.get("debug_overlay", False)))
@@ -316,6 +322,7 @@ class SettingsDialog(QDialog):
         self.scroll_slider.valueChanged.connect(self._on_scroll_changed)
         self.pinch_slider.valueChanged.connect(self._on_pinch_changed)
         self.hold_slider.valueChanged.connect(self._on_hold_changed)
+        self.z_tap_chk.stateChanged.connect(self._on_z_tap_changed)
         self.performance_chk.stateChanged.connect(self._on_performance_toggled)
         self.debug_chk.stateChanged.connect(self._on_debug_changed)
         about_btn.clicked.connect(self._show_about)
@@ -396,8 +403,26 @@ class SettingsDialog(QDialog):
     def _on_hold_changed(self, value: int) -> None:
         hold_s = value / 1000.0
         self._mw.gestures._confirm_hold_s = hold_s
-        self.hold_lbl.setText(f"Confirm hold (ms): {value}")
+        self.hold_lbl.setText(f"Hold Time: {hold_s:.2f}s")
         settings.set("confirm_hold_s", hold_s)
+
+    def _on_z_tap_changed(self, state: int) -> None:
+        enabled = bool(state)
+        if enabled:
+            reply = QMessageBox.warning(
+                self,
+                "Enable Z-tap Click",
+                "Depth tap can increase accidental clicks while moving your hand. Enable anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self.z_tap_chk.blockSignals(True)
+                self.z_tap_chk.setChecked(False)
+                self.z_tap_chk.blockSignals(False)
+                enabled = False
+        self._mw.gestures._z_tap_enabled = enabled
+        settings.set("z_tap_enabled", enabled)
 
     def _on_performance_toggled(self, state: int) -> None:
         value = bool(state)
@@ -455,6 +480,7 @@ class MainWindow(QMainWindow):
         self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.22), 0.22)
         self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.20), 0.20)
         self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.05, _as_float(settings.get("pinch_exit_sensitivity", 0.30), 0.30))
+        self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
         self._scroll_multiplier: float = _as_float(settings.get("scroll_multiplier", 1.0), 1.0)
         self.debug = _as_bool(settings.get("debug_overlay", False), False)
         self._mirror_camera: bool = _as_bool(settings.get("mirror_camera", True), True)
@@ -734,12 +760,18 @@ class MainWindow(QMainWindow):
         tray_menu = QMenu()
         action_show = QAction("Show Window", self)
         action_toggle = QAction("Enable Mouse", self)
+        action_end_drag = QAction("End Drag", self)
+        action_cancel = QAction("Cancel Gesture Actions", self)
         action_quit = QAction("Quit", self)
         action_show.triggered.connect(self._show_main_window)
         action_toggle.triggered.connect(self.toggle_mouse)
+        action_end_drag.triggered.connect(self._end_drag_now)
+        action_cancel.triggered.connect(self._cancel_actions)
         action_quit.triggered.connect(self._quit_app)
         tray_menu.addAction(action_show)
         tray_menu.addAction(action_toggle)
+        tray_menu.addAction(action_end_drag)
+        tray_menu.addAction(action_cancel)
         tray_menu.addSeparator()
         tray_menu.addAction(action_quit)
 
@@ -816,25 +848,8 @@ class MainWindow(QMainWindow):
             self.cam_status.setText("Camera switch failed")
             self.preview.setText(detail)
 
-    def _osk_running(self) -> bool:
-        if platform.system() != "Windows":
-            return False
-        try:
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            out = subprocess.check_output(
-                ["tasklist", "/FI", "IMAGENAME eq osk.exe"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-                creationflags=flags,
-            )
-            return "osk.exe" in out.lower()
-        except Exception:
-            return False
-
     def _launch_keyboard(self) -> None:
         if self._kbd_locked:
-            return
-        if platform.system() == "Windows" and self._osk_running():
             return
 
         self._kbd_locked = True
@@ -855,6 +870,10 @@ class MainWindow(QMainWindow):
         try:
             old = self.tracker
             self.tracker = HandTracker()
+            if enabled:
+                self.tracker.set_processing_size((320, 240))
+            else:
+                self.tracker.set_processing_size(None)
             if old is not None:
                 old.close()
         except Exception as exc:
@@ -885,6 +904,12 @@ class MainWindow(QMainWindow):
         self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.22), 0.22)
         self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.20), 0.20)
         self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.05, _as_float(settings.get("pinch_exit_sensitivity", 0.30), 0.30))
+        self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
+
+        if _as_bool(settings.get("performance_mode", False), False):
+            self.tracker.set_processing_size((320, 240))
+        else:
+            self.tracker.set_processing_size(None)
 
         self.camera.camera_index = _as_int(settings.get("camera_index", self.camera.camera_index), self.camera.camera_index)
         if not self.camera.start():
@@ -994,6 +1019,15 @@ class MainWindow(QMainWindow):
         self.showNormal()
         self.raise_()
 
+    def _end_drag_now(self) -> None:
+        if self.mouse.is_dragging:
+            self.mouse.end_drag()
+
+    def _cancel_actions(self) -> None:
+        self._end_drag_now()
+        self.mapper.reset()
+        self.gestures._state = GestureType.PAUSE
+
     def _disable_mouse_from_overlay(self) -> None:
         if self.mouse_enabled:
             self.toggle_mouse()
@@ -1011,7 +1045,7 @@ class MainWindow(QMainWindow):
             self._hotkey = hotkey
         except Exception:
             self._hotkey = None
-            self.cam_status.setText("Hotkey unavailable (pynput import failed)")
+            print("Hotkey unavailable")
 
     def _process_loop(self) -> None:
         last_overlay = GestureType.NONE
@@ -1047,6 +1081,12 @@ class MainWindow(QMainWindow):
                     continue
 
                 hand_data, hand_proto = tracker.detect(frame)
+                if hand_data and self._mirror_camera:
+                    if hand_data.get("label") == "Left":
+                        hand_data["label"] = "Right"
+                    elif hand_data.get("label") == "Right":
+                        hand_data["label"] = "Left"
+
                 if hand_proto is not None:
                     last_hand_time = time.monotonic()
                     wrist = hand_data["xy"][0]
@@ -1202,7 +1242,7 @@ class MainWindow(QMainWindow):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         tracker = self.tracker
-        if hand_proto is not None and tracker is not None:
+        if self.debug and hand_proto is not None and tracker is not None:
             label = hand_data["label"] if hand_data else "Right"
             tracker.draw(rgb, hand_proto, label)
 
@@ -1232,7 +1272,7 @@ class MainWindow(QMainWindow):
             return
 
         count = max(1, abs(int(delta))) if gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN) else 1
-        threading.Thread(target=lambda: self.mouse.send_media_key(action, count), daemon=True).start()
+        self.mouse.send_media_key(action, count)
 
     def _save_window_geometry(self) -> None:
         settings.set("window_x", self.x())

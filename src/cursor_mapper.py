@@ -26,10 +26,11 @@ class CursorMapper:
         self._raw_y = -1.0
         self._flt_x = -1.0
         self._flt_y = -1.0
+        self._initialized = False
 
         self._deadzone_px = 2.0
-        self._alpha_min = 0.08
-        self._alpha_max = 0.52
+        self._alpha_min = 0.07
+        self._alpha_max = 0.60
         self._inner_ratio = CURSOR_INNER_RATIO
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
         self._hand_scale_px = 32.0
@@ -116,6 +117,7 @@ class CursorMapper:
         self._raw_y = -1.0
         self._flt_x = -1.0
         self._flt_y = -1.0
+        self._initialized = False
 
     def _map_to_screen(self, cam_x: int, cam_y: int) -> tuple[float, float]:
         raw_nx = max(0.0, min(1.0, float(cam_x) / float(max(1, self.cam_w - 1))))
@@ -133,11 +135,12 @@ class CursorMapper:
     def map_point(self, cam_x: int, cam_y: int) -> tuple[int, int]:
         raw_x, raw_y = self._map_to_screen(cam_x, cam_y)
 
-        if self._raw_x < 0.0:
+        if not self._initialized:
             self._raw_x = raw_x
             self._raw_y = raw_y
             self._flt_x = raw_x
             self._flt_y = raw_y
+            self._initialized = True
             return int(raw_x), int(raw_y)
 
         dx = raw_x - self._raw_x
@@ -149,6 +152,8 @@ class CursorMapper:
 
         dynamic_deadzone = max(CURSOR_DEADZONE_BASE, self._deadzone_px, self._hand_scale_px * CURSOR_DEADZONE_SCALE_FACTOR)
         if speed <= dynamic_deadzone:
+            self._flt_x = self._flt_x + 0.08 * (raw_x - self._flt_x)
+            self._flt_y = self._flt_y + 0.08 * (raw_y - self._flt_y)
             return int(self._flt_x), int(self._flt_y)
 
         screen_norm = max(60.0, math.sqrt(float(self.scr_w * self.scr_w + self.scr_h * self.scr_h)) * CURSOR_SPEED_NORM_RATIO)

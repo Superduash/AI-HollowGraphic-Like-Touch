@@ -204,6 +204,7 @@ class CameraThread:
                         break
             if found:
                 open_indices.append(idx)
+            time.sleep(0.05)
 
         system_names = self._dshow_camera_names() or self._system_camera_names()
         devices: list[CameraDevice] = []
@@ -302,7 +303,7 @@ class CameraThread:
             consecutive_failures = 0
             self.actual_height, self.actual_width = frame.shape[:2]
             with self._frame_lock:
-                self._frame = frame.copy()
+                self._frame = frame
 
             time.sleep(CAMERA_LOOP_IDLE_S)
 

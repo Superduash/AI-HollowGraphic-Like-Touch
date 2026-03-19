@@ -1,6 +1,6 @@
 PROJECT: AI HollowGraphic Like Touch
 ROOT: C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch
-FILES: 28
+FILES: 29
 
 === .gitignore ===
 # Byte-compiled / optimized / DLL files
@@ -443,7 +443,7 @@ if __name__ == "__main__":
 === project_compact_export.txt ===
 PROJECT: AI HollowGraphic Like Touch
 ROOT: C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch
-FILES: 28
+FILES: 29
 
 === .gitignore ===
 # Byte-compiled / optimized / DLL files
@@ -739,7 +739,7 @@ Run on Windows:
 1) Double-click run.bat
 
 Notes:
-- Uses the best available Python via the Windows 'py' launcher (prefers 3.12).
+- Uses the best available Python via the Windows 'py' launcher (prefers 3.11).
 - Creates a local .venv and installs requirements automatically on first run.
 - When you click "Enable Mouse", the main window minimizes and a small always-on-top status overlay stays visible.
 
@@ -849,15 +849,26 @@ from dataclasses import dataclass
 
 import cv2
 
-try:
-    from pygrabber.dshow_graph import FilterGraph  # type: ignore
-except Exception:
-    FilterGraph = None  # type: ignore[assignment]
+from .tuning import (
+    CAMERA_FAIL_SLEEP_S,
+    CAMERA_LOOP_IDLE_S,
+    CAMERA_READ_RETRY_LIMIT,
+    CAMERA_REOPEN_COOLDOWN_S,
+    CAMERA_TARGET_SIZES,
+)
 
-try:
-    import wmi  # type: ignore
-except Exception:
-    wmi = None  # type: ignore[assignment]
+FilterGraph = None  # type: ignore[assignment]
+wmi = None  # type: ignore[assignment]
+if platform.system() == "Windows":
+    try:
+        from pygrabber.dshow_graph import FilterGraph  # type: ignore
+    except Exception:
+        FilterGraph = None  # type: ignore[assignment]
+
+    try:
+        import wmi  # type: ignore
+    except Exception:
+        wmi = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -937,7 +948,7 @@ class CameraThread:
     def _open_capture(self, camera_index: int) -> cv2.VideoCapture | None:
         idx = int(camera_index)
         for backend in self._backend_candidates():
-            for width, height in ((1280, 720), (640, 480)):
+            for width, height in CAMERA_TARGET_SIZES:
                 # Attempt MJPG first on Windows; fallback to default format if rejected.
                 for prefer_mjpg in ([True, False] if self._is_windows else [False]):
                     cap = cv2.VideoCapture(idx, backend)
@@ -1015,7 +1026,7 @@ class CameraThread:
             for backend in self._backend_candidates():
                 if found:
                     break
-                for width, height in ((1280, 720), (640, 480)):
+                for width, height in CAMERA_TARGET_SIZES:
                     for prefer_mjpg in ([True, False] if self._is_windows else [False]):
                         cap = cv2.VideoCapture(idx, backend)
                         try:
@@ -1035,6 +1046,7 @@ class CameraThread:
                         break
             if found:
                 open_indices.append(idx)
+            time.sleep(0.05)
 
         system_names = self._dshow_camera_names() or self._system_camera_names()
         devices: list[CameraDevice] = []
@@ -1100,20 +1112,42 @@ class CameraThread:
         return True
 
     def _loop(self) -> None:
+        consecutive_failures = 0
         while self._running:
             with self._cap_lock:
                 cap = self._cap
                 if cap is None:
-                    time.sleep(0.005)
+                    time.sleep(CAMERA_LOOP_IDLE_S)
                     continue
                 ok, frame = self._drain_and_read(cap)
             if not ok or frame is None:
-                time.sleep(0.005)
+                consecutive_failures += 1
+                if consecutive_failures >= CAMERA_READ_RETRY_LIMIT:
+                    self._last_error = "Camera stream stalled, attempting reopen"
+                    new_cap = self._open_capture(self.camera_index)
+                    if new_cap is not None:
+                        with self._cap_lock:
+                            old_cap = self._cap
+                            self._cap = new_cap
+                        try:
+                            if old_cap is not None:
+                                old_cap.release()
+                        except Exception:
+                            pass
+                        consecutive_failures = 0
+                    else:
+                        self._last_error = "Camera stream lost and reopen failed"
+                    time.sleep(CAMERA_REOPEN_COOLDOWN_S)
+                    continue
+                time.sleep(CAMERA_FAIL_SLEEP_S)
                 continue
 
+            consecutive_failures = 0
             self.actual_height, self.actual_width = frame.shape[:2]
             with self._frame_lock:
                 self._frame = frame
+
+            time.sleep(CAMERA_LOOP_IDLE_S)
 
     def latest(self):
         with self._frame_lock:
@@ -1185,6 +1219,13 @@ from __future__ import annotations
 import math
 import platform
 
+from .tuning import (
+    CURSOR_DEADZONE_BASE,
+    CURSOR_DEADZONE_SCALE_FACTOR,
+    CURSOR_INNER_RATIO,
+    CURSOR_SPEED_NORM_RATIO,
+)
+
 
 class CursorMapper:
     def __init__(self, cam_w: int, cam_h: int) -> None:
@@ -1201,12 +1242,14 @@ class CursorMapper:
         self._raw_y = -1.0
         self._flt_x = -1.0
         self._flt_y = -1.0
+        self._initialized = False
 
         self._deadzone_px = 2.0
-        self._alpha_min = 0.08
-        self._alpha_max = 0.52
-        self._inner_ratio = 0.80
+        self._alpha_min = 0.07
+        self._alpha_max = 0.60
+        self._inner_ratio = CURSOR_INNER_RATIO
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
+        self._hand_scale_px = 32.0
 
     @staticmethod
     def _virtual_screen_bounds() -> tuple[int, int, int, int]:
@@ -1275,6 +1318,9 @@ class CursorMapper:
         self._inner_margin_ratio = ratio
         self._inner_ratio = max(0.30, 1.0 - (2.0 * self._inner_margin_ratio))
 
+    def set_hand_scale(self, hand_scale_px: float) -> None:
+        self._hand_scale_px = max(8.0, float(hand_scale_px))
+
     def control_region(self) -> tuple[int, int, int, int]:
         left = int(round(self.cam_w * self._inner_margin_ratio))
         right = int(round(self.cam_w * (1.0 - self._inner_margin_ratio))) - 1
@@ -1287,6 +1333,7 @@ class CursorMapper:
         self._raw_y = -1.0
         self._flt_x = -1.0
         self._flt_y = -1.0
+        self._initialized = False
 
     def _map_to_screen(self, cam_x: int, cam_y: int) -> tuple[float, float]:
         raw_nx = max(0.0, min(1.0, float(cam_x) / float(max(1, self.cam_w - 1))))
@@ -1304,11 +1351,12 @@ class CursorMapper:
     def map_point(self, cam_x: int, cam_y: int) -> tuple[int, int]:
         raw_x, raw_y = self._map_to_screen(cam_x, cam_y)
 
-        if self._raw_x < 0.0:
+        if not self._initialized:
             self._raw_x = raw_x
             self._raw_y = raw_y
             self._flt_x = raw_x
             self._flt_y = raw_y
+            self._initialized = True
             return int(raw_x), int(raw_y)
 
         dx = raw_x - self._raw_x
@@ -1318,10 +1366,14 @@ class CursorMapper:
         self._raw_x = raw_x
         self._raw_y = raw_y
 
-        if speed <= self._deadzone_px:
+        dynamic_deadzone = max(CURSOR_DEADZONE_BASE, self._deadzone_px, self._hand_scale_px * CURSOR_DEADZONE_SCALE_FACTOR)
+        if speed <= dynamic_deadzone:
+            self._flt_x = self._flt_x + 0.08 * (raw_x - self._flt_x)
+            self._flt_y = self._flt_y + 0.08 * (raw_y - self._flt_y)
             return int(self._flt_x), int(self._flt_y)
 
-        v_norm = min(1.0, speed / 80.0)
+        screen_norm = max(60.0, math.sqrt(float(self.scr_w * self.scr_w + self.scr_h * self.scr_h)) * CURSOR_SPEED_NORM_RATIO)
+        v_norm = min(1.0, speed / screen_norm)
         alpha = self._alpha_min + v_norm * (self._alpha_max - self._alpha_min)
 
         self._flt_x = self._flt_x + alpha * (raw_x - self._flt_x)
@@ -1336,6 +1388,18 @@ import math
 import time
 
 from .models import FingerStates, GestureResult, GestureType
+from .tuning import (
+    GESTURE_ACTION_COOLDOWN_S,
+    GESTURE_CONFIRM_HOLD_S,
+    GESTURE_DOUBLE_CLICK_WINDOW_S,
+    GESTURE_DRAG_ACTIVATE_S,
+    GESTURE_KEYBOARD_AFTER_PINCH_S,
+    GESTURE_LOCK_S,
+    GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S,
+    GESTURE_SCROLL_GAIN,
+    GESTURE_Z_TAP_ENTER,
+    GESTURE_Z_TAP_EXIT,
+)
 
 
 class GestureDetector:
@@ -1348,19 +1412,23 @@ class GestureDetector:
         self._left_pinch_active = False
         self._right_pinch_active = False
         self._left_pinch_since: float | None = None
+        self._last_pinch_release_time = 0.0
 
-        self._scroll_anchor_y: float | None = None
+        self._scroll_prev_y: float | None = None
+        self._scroll_velocity_ema = 0.0
+        self._scroll_direction = 0
+        self._scroll_last_switch_time = 0.0
         self._left_media_anchor_y: float | None = None
 
-        self._action_cooldown_s = 0.25
-        self._gesture_lock_s = 0.16
+        self._action_cooldown_s = GESTURE_ACTION_COOLDOWN_S
+        self._gesture_lock_s = GESTURE_LOCK_S
         self._locked_until = 0.0
-        self._drag_activate_s = 0.28
+        self._drag_activate_s = GESTURE_DRAG_ACTIVATE_S
 
         # Compatibility with existing settings bindings.
         self._pinch_enter = 0.20
         self._pinch_exit = 0.30
-        self._confirm_hold_s = 0.18
+        self._confirm_hold_s = GESTURE_CONFIRM_HOLD_S
 
         self._last_click_time = 0.0
         self._last_right_click_time = 0.0
@@ -1368,12 +1436,22 @@ class GestureDetector:
         self._last_media_prev_time = 0.0
         self._last_double_click_time = 0.0
         self._left_click_release_time = 0.0
+        self._task_view_since: float | None = None
 
         self._scroll_step_factor = 0.12
         self._scroll_deadband_factor = 0.06
         self._media_step_factor = 0.11
         self._media_deadband_factor = 0.05
-        self._double_click_window_s = 0.32
+        self._double_click_window_s = GESTURE_DOUBLE_CLICK_WINDOW_S
+        self._scroll_gain = int(GESTURE_SCROLL_GAIN)
+        self._z_tap_enter = float(GESTURE_Z_TAP_ENTER)
+        self._z_tap_exit = float(GESTURE_Z_TAP_EXIT)
+        self._z_tap_active = False
+        self._z_tap_enabled = False
+        self._task_view_hold_s = 0.40
+        self._keyboard_after_pinch_s = float(GESTURE_KEYBOARD_AFTER_PINCH_S)
+        self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
+        self._scroll_step_limit = 4
 
     @property
     def dragging(self) -> bool:
@@ -1455,22 +1533,69 @@ class GestureDetector:
         return self._state
 
     def _resolve_scroll(self, current_y: float, hand_scale: float) -> int:
-        if self._scroll_anchor_y is None:
-            self._scroll_anchor_y = current_y
+        if self._scroll_prev_y is None:
+            self._scroll_prev_y = current_y
+            self._scroll_velocity_ema = 0.0
+            self._scroll_direction = 0
             return 0
 
-        delta = self._scroll_anchor_y - current_y
+        dy = self._scroll_prev_y - current_y
+        self._scroll_prev_y = current_y
+
+        alpha = 0.35
+        self._scroll_velocity_ema = (1.0 - alpha) * self._scroll_velocity_ema + alpha * dy
+        v = self._scroll_velocity_ema
+
         deadband = hand_scale * self._scroll_deadband_factor
-        if abs(delta) <= deadband:
+        if abs(v) <= deadband:
             return 0
 
         step = max(1.0, hand_scale * self._scroll_step_factor)
-        steps = int(delta / step)
+        steps = int(v / step)
         if steps == 0:
             return 0
+        if steps > self._scroll_step_limit:
+            steps = self._scroll_step_limit
+        elif steps < -self._scroll_step_limit:
+            steps = -self._scroll_step_limit
 
-        self._scroll_anchor_y -= steps * step
-        return int(steps * 3)
+        direction = 1 if steps > 0 else -1
+        if self._scroll_direction == 0:
+            self._scroll_direction = direction
+        elif direction != self._scroll_direction:
+            if time.monotonic() - self._scroll_last_switch_time < self._scroll_dir_switch_cooldown_s:
+                return 0
+            self._scroll_direction = direction
+            self._scroll_last_switch_time = time.monotonic()
+            self._scroll_velocity_ema = 0.0
+            return 0
+
+        return int(steps * max(1, self._scroll_gain))
+
+    def _z_tap_triggered(self, hand_data, fs: FingerStates, now: float) -> bool:
+        if not self._z_tap_enabled:
+            self._z_tap_active = False
+            return False
+
+        z = hand_data.get("z")
+        if not isinstance(z, list) or len(z) < 9:
+            self._z_tap_active = False
+            return False
+
+        if not (fs.index and (not fs.middle) and (not fs.ring) and (not fs.pinky)):
+            self._z_tap_active = False
+            return False
+
+        z_rel = float(z[8]) - float(z[5])
+        if self._z_tap_active:
+            if z_rel > self._z_tap_exit:
+                self._z_tap_active = False
+            return False
+
+        if z_rel < self._z_tap_enter and (now - self._last_click_time >= self._action_cooldown_s):
+            self._z_tap_active = True
+            return True
+        return False
 
     def _resolve_media_volume(self, current_y: float, hand_scale: float) -> int:
         if self._left_media_anchor_y is None:
@@ -1501,8 +1626,12 @@ class GestureDetector:
             self._left_pinch_active = False
             self._right_pinch_active = False
             self._left_pinch_since = None
-            self._scroll_anchor_y = None
+            self._scroll_prev_y = None
+            self._scroll_velocity_ema = 0.0
+            self._scroll_direction = 0
             self._left_media_anchor_y = None
+            self._z_tap_active = False
+            self._task_view_since = None
             return GestureResult(GestureType.PAUSE, 0)
 
         xy = hand_data["xy"]
@@ -1514,6 +1643,15 @@ class GestureDetector:
         hand_scale = max(24.0, self._distance(wrist, middle_mcp))
 
         self._update_pinch_states(xy, fs, hand_scale)
+        pinch_guard_active = (
+            self._left_pinch_active
+            or self._right_pinch_active
+            or (now - self._last_pinch_release_time < self._keyboard_after_pinch_s)
+        )
+
+        if not self._left_pinch_active and not self._right_pinch_active:
+            if self._left_pinch_since is not None:
+                self._last_pinch_release_time = now
 
         if self._left_pinch_active:
             if self._left_pinch_since is None:
@@ -1528,7 +1666,8 @@ class GestureDetector:
 
         if hand_label == "Left":
             self._dragging = False
-            self._scroll_anchor_y = None
+            self._scroll_prev_y = None
+            self._scroll_velocity_ema = 0.0
 
             raw_media = GestureType.PAUSE
             if scroll_pose and (not self._left_pinch_active) and (not self._right_pinch_active):
@@ -1579,10 +1718,22 @@ class GestureDetector:
 
         self._left_media_anchor_y = None
 
-        raw_state = GestureType.PAUSE
         if task_view_pose and not self._left_pinch_active and not self._right_pinch_active:
+            if self._task_view_since is None:
+                self._task_view_since = now
+        else:
+            self._task_view_since = None
+
+        raw_state = GestureType.PAUSE
+        if (
+            self._task_view_since is not None
+            and task_view_pose
+            and (now - self._task_view_since >= self._task_view_hold_s)
+            and not self._left_pinch_active
+            and not self._right_pinch_active
+        ):
             raw_state = GestureType.TASK_VIEW
-        elif keyboard_pose and not self._left_pinch_active and not self._right_pinch_active:
+        elif keyboard_pose and not pinch_guard_active:
             raw_state = GestureType.KEYBOARD
         elif self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):
             raw_state = GestureType.DRAG
@@ -1598,7 +1749,9 @@ class GestureDetector:
         stable_state = self._stable_state(raw_state, now)
 
         if stable_state != GestureType.SCROLL and raw_state != GestureType.SCROLL:
-            self._scroll_anchor_y = None
+            self._scroll_prev_y = None
+            self._scroll_velocity_ema = 0.0
+            self._scroll_direction = 0
 
         if now < self._locked_until and self._state in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}:
             return GestureResult(GestureType.MOVE, 0)
@@ -1629,15 +1782,18 @@ class GestureDetector:
 
         if stable_state == GestureType.TASK_VIEW:
             self._state = GestureType.TASK_VIEW
+            self._task_view_since = None
             return GestureResult(GestureType.TASK_VIEW, 0)
 
         if stable_state == GestureType.KEYBOARD:
+            if pinch_guard_active:
+                self._state = GestureType.MOVE
+                return GestureResult(GestureType.MOVE, 0)
             self._state = GestureType.KEYBOARD
             return GestureResult(GestureType.KEYBOARD, 0)
 
         if stable_state == GestureType.DRAG:
             self._dragging = True
-            self._locked_until = now + self._gesture_lock_s
             self._state = GestureType.DRAG
             return GestureResult(GestureType.DRAG, 0)
 
@@ -1651,6 +1807,11 @@ class GestureDetector:
             return GestureResult(GestureType.SCROLL, scroll_delta)
 
         if stable_state == GestureType.MOVE:
+            if self._z_tap_triggered(hand_data, fs, now):
+                self._last_click_time = now
+                self._locked_until = now + self._gesture_lock_s
+                self._state = GestureType.LEFT_CLICK
+                return GestureResult(GestureType.LEFT_CLICK, 0)
             self._state = GestureType.MOVE
             return GestureResult(GestureType.MOVE, 0)
 
@@ -1676,7 +1837,7 @@ if mp is not None:
 
 class HandTracker:
     def __init__(self) -> None:
-
+        self._process_size: tuple[int, int] | None = None
         _ensure_mediapipe_solutions()
 
         self._mp_hands = mp.solutions.hands  # type: ignore[attr-defined]
@@ -1691,9 +1852,22 @@ class HandTracker:
             min_tracking_confidence=0.45,
         )
 
+    def set_processing_size(self, size: tuple[int, int] | None) -> None:
+        if size is None:
+            self._process_size = None
+            return
+        w, h = size
+        self._process_size = (max(64, int(w)), max(64, int(h)))
+
     def detect(self, frame_bgr):
-        h, w = frame_bgr.shape[:2]
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        src_h, src_w = frame_bgr.shape[:2]
+
+        detect_frame = frame_bgr
+        if self._process_size is not None:
+            detect_frame = cv2.resize(frame_bgr, self._process_size, interpolation=cv2.INTER_LINEAR)
+
+        h, w = detect_frame.shape[:2]
+        rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
         result = self._hands.process(rgb)
 
         if not result.multi_hand_landmarks or not result.multi_handedness:
@@ -1703,7 +1877,12 @@ class HandTracker:
         label = result.multi_handedness[0].classification[0].label
 
         confidence = result.multi_handedness[0].classification[0].score
-        xy = [(int(lm.x * w), int(lm.y * h)) for lm in hand.landmark]
+        if self._process_size is None:
+            xy = [(int(lm.x * src_w), int(lm.y * src_h)) for lm in hand.landmark]
+        else:
+            sx = float(src_w) / float(max(1, w))
+            sy = float(src_h) / float(max(1, h))
+            xy = [(int(lm.x * w * sx), int(lm.y * h * sy)) for lm in hand.landmark]
         z = [float(lm.z) for lm in hand.landmark]
         return {
             "xy": xy,
@@ -1747,7 +1926,6 @@ from __future__ import annotations
 import collections
 import os
 import platform
-import subprocess
 import threading
 import time
 from typing import Any, cast
@@ -1859,8 +2037,10 @@ class StatusOverlay(QWidget):
         btns = QHBoxLayout()
         self.open_btn = QPushButton("Open")
         self.open_btn.setObjectName("ghostButton")
+        self.open_btn.setIcon(_icon("settings.svg"))
         self.disable_btn = QPushButton("Disable Mouse")
         self.disable_btn.setObjectName("redButton")
+        self.disable_btn.setIcon(_icon("pause.svg"))
         btns.addWidget(self.open_btn)
         btns.addStretch(1)
         btns.addWidget(self.disable_btn)
@@ -2006,6 +2186,8 @@ class SettingsDialog(QDialog):
         self.hold_slider = QSlider(Qt.Orientation.Horizontal)
         self.hold_slider.setRange(100, 500)
         self.hold_slider.setValue(int(_as_float(settings.get("confirm_hold_s", self._mw.gestures._confirm_hold_s), self._mw.gestures._confirm_hold_s) * 1000))
+        self.z_tap_chk = QCheckBox("Enable Z-tap (forward air click)")
+        self.z_tap_chk.setChecked(bool(settings.get("z_tap_enabled", False)))
 
         gesture_layout.addWidget(gesture_title)
         gesture_layout.addWidget(self.scroll_lbl)
@@ -2014,6 +2196,7 @@ class SettingsDialog(QDialog):
         gesture_layout.addWidget(self.pinch_slider)
         gesture_layout.addWidget(self.hold_lbl)
         gesture_layout.addWidget(self.hold_slider)
+        gesture_layout.addWidget(self.z_tap_chk)
         gesture_layout.addStretch(1)
 
         perf_tab = QWidget()
@@ -2023,7 +2206,7 @@ class SettingsDialog(QDialog):
 
         perf_title = QLabel("Performance / Debug")
         perf_title.setObjectName("section")
-        self.performance_chk = QCheckBox("Performance mode (160x120)")
+        self.performance_chk = QCheckBox("Performance mode (320x240 processing)")
         self.performance_chk.setChecked(bool(settings.get("performance_mode", False)))
         self.debug_chk = QCheckBox("Show debug skeleton")
         self.debug_chk.setChecked(bool(settings.get("debug_overlay", False)))
@@ -2058,6 +2241,7 @@ class SettingsDialog(QDialog):
         self.scroll_slider.valueChanged.connect(self._on_scroll_changed)
         self.pinch_slider.valueChanged.connect(self._on_pinch_changed)
         self.hold_slider.valueChanged.connect(self._on_hold_changed)
+        self.z_tap_chk.stateChanged.connect(self._on_z_tap_changed)
         self.performance_chk.stateChanged.connect(self._on_performance_toggled)
         self.debug_chk.stateChanged.connect(self._on_debug_changed)
         about_btn.clicked.connect(self._show_about)
@@ -2141,6 +2325,24 @@ class SettingsDialog(QDialog):
         self.hold_lbl.setText(f"Confirm hold (ms): {value}")
         settings.set("confirm_hold_s", hold_s)
 
+    def _on_z_tap_changed(self, state: int) -> None:
+        enabled = bool(state)
+        if enabled:
+            reply = QMessageBox.warning(
+                self,
+                "Enable Z-tap Click",
+                "Depth tap can increase accidental clicks while moving your hand. Enable anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self.z_tap_chk.blockSignals(True)
+                self.z_tap_chk.setChecked(False)
+                self.z_tap_chk.blockSignals(False)
+                enabled = False
+        self._mw.gestures._z_tap_enabled = enabled
+        settings.set("z_tap_enabled", enabled)
+
     def _on_performance_toggled(self, state: int) -> None:
         value = bool(state)
         settings.set("performance_mode", value)
@@ -2197,6 +2399,7 @@ class MainWindow(QMainWindow):
         self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.22), 0.22)
         self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.20), 0.20)
         self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.05, _as_float(settings.get("pinch_exit_sensitivity", 0.30), 0.30))
+        self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
         self._scroll_multiplier: float = _as_float(settings.get("scroll_multiplier", 1.0), 1.0)
         self.debug = _as_bool(settings.get("debug_overlay", False), False)
         self._mirror_camera: bool = _as_bool(settings.get("mirror_camera", True), True)
@@ -2223,6 +2426,7 @@ class MainWindow(QMainWindow):
         self._kbd_locked = False
         self._camera_cache: list[CameraDevice] = []
         self._camera_cache_ts = 0.0
+        self._camera_error_text = ""
         self._last_badge_gesture: GestureType = GestureType.NONE
         self._gesture_history: collections.deque = collections.deque(maxlen=6)
 
@@ -2234,8 +2438,7 @@ class MainWindow(QMainWindow):
         wy = _as_int(settings.get("window_y", -1), -1)
         ww = _as_int(settings.get("window_w", 1280), 1280)
         wh = _as_int(settings.get("window_h", 820), 820)
-        if wx >= 0 and wy >= 0:
-            self.move(wx, wy)
+        self.move(wx, wy)
         self.resize(ww, wh)
 
         self.cam_status.setText("Detecting cameras...")
@@ -2475,12 +2678,18 @@ class MainWindow(QMainWindow):
         tray_menu = QMenu()
         action_show = QAction("Show Window", self)
         action_toggle = QAction("Enable Mouse", self)
+        action_end_drag = QAction("End Drag", self)
+        action_cancel = QAction("Cancel Gesture Actions", self)
         action_quit = QAction("Quit", self)
         action_show.triggered.connect(self._show_main_window)
         action_toggle.triggered.connect(self.toggle_mouse)
+        action_end_drag.triggered.connect(self._end_drag_now)
+        action_cancel.triggered.connect(self._cancel_actions)
         action_quit.triggered.connect(self._quit_app)
         tray_menu.addAction(action_show)
         tray_menu.addAction(action_toggle)
+        tray_menu.addAction(action_end_drag)
+        tray_menu.addAction(action_cancel)
         tray_menu.addSeparator()
         tray_menu.addAction(action_quit)
 
@@ -2557,25 +2766,8 @@ class MainWindow(QMainWindow):
             self.cam_status.setText("Camera switch failed")
             self.preview.setText(detail)
 
-    def _osk_running(self) -> bool:
-        if platform.system() != "Windows":
-            return False
-        try:
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            out = subprocess.check_output(
-                ["tasklist", "/FI", "IMAGENAME eq osk.exe"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-                creationflags=flags,
-            )
-            return "osk.exe" in out.lower()
-        except Exception:
-            return False
-
     def _launch_keyboard(self) -> None:
         if self._kbd_locked:
-            return
-        if platform.system() == "Windows" and self._osk_running():
             return
 
         self._kbd_locked = True
@@ -2596,6 +2788,10 @@ class MainWindow(QMainWindow):
         try:
             old = self.tracker
             self.tracker = HandTracker()
+            if enabled:
+                self.tracker.set_processing_size((320, 240))
+            else:
+                self.tracker.set_processing_size(None)
             if old is not None:
                 old.close()
         except Exception as exc:
@@ -2626,11 +2822,18 @@ class MainWindow(QMainWindow):
         self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.22), 0.22)
         self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.20), 0.20)
         self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.05, _as_float(settings.get("pinch_exit_sensitivity", 0.30), 0.30))
+        self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
+
+        if _as_bool(settings.get("performance_mode", False), False):
+            self.tracker.set_processing_size((320, 240))
+        else:
+            self.tracker.set_processing_size(None)
 
         self.camera.camera_index = _as_int(settings.get("camera_index", self.camera.camera_index), self.camera.camera_index)
         if not self.camera.start():
             detail = self.camera.last_error or "Cannot open camera"
             self.preview.setText(detail)
+            self.cam_status.setText(detail)
             return
 
         self.running = True
@@ -2734,6 +2937,15 @@ class MainWindow(QMainWindow):
         self.showNormal()
         self.raise_()
 
+    def _end_drag_now(self) -> None:
+        if self.mouse.is_dragging:
+            self.mouse.end_drag()
+
+    def _cancel_actions(self) -> None:
+        self._end_drag_now()
+        self.mapper.reset()
+        self.gestures._state = GestureType.PAUSE
+
     def _disable_mouse_from_overlay(self) -> None:
         if self.mouse_enabled:
             self.toggle_mouse()
@@ -2787,8 +2999,21 @@ class MainWindow(QMainWindow):
                     continue
 
                 hand_data, hand_proto = tracker.detect(frame)
+                if hand_data and self._mirror_camera:
+                    if hand_data.get("label") == "Left":
+                        hand_data["label"] = "Right"
+                    elif hand_data.get("label") == "Right":
+                        hand_data["label"] = "Left"
+
                 if hand_proto is not None:
                     last_hand_time = time.monotonic()
+                    wrist = hand_data["xy"][0]
+                    middle_mcp = hand_data["xy"][9]
+                    scale = ((wrist[0] - middle_mcp[0]) ** 2 + (wrist[1] - middle_mcp[1]) ** 2) ** 0.5
+                    self.mapper.set_hand_scale(scale)
+                    self._camera_error_text = ""
+                else:
+                    self._camera_error_text = self.camera.last_error
 
                 result = self.gestures.detect(hand_data)
                 gesture = result.gesture
@@ -2894,6 +3119,8 @@ class MainWindow(QMainWindow):
             hand_data = self._hand_data
 
         self.fps_lbl.setText(f"FPS {self.fps:.0f}")
+        if self.running and self._camera_error_text:
+            self.cam_status.setText(self._camera_error_text)
         self.gesture_lbl.setText(gesture.value)
         if gesture != self._last_badge_gesture:
             self._last_badge_gesture = gesture
@@ -2963,7 +3190,7 @@ class MainWindow(QMainWindow):
             return
 
         count = max(1, abs(int(delta))) if gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN) else 1
-        threading.Thread(target=lambda: self.mouse.send_media_key(action, count), daemon=True).start()
+        self.mouse.send_media_key(action, count)
 
     def _save_window_geometry(self) -> None:
         settings.set("window_x", self.x())
@@ -3055,10 +3282,13 @@ class FingerStates:
 === src/mouse.py ===
 from __future__ import annotations
 
+import collections
 import platform
 import subprocess
 import threading
 import time
+
+from .tuning import MOUSE_WORKER_HZ
 
 
 class MouseController:
@@ -3068,6 +3298,7 @@ class MouseController:
 
         self._target_x = -1
         self._target_y = -1
+        self._has_target = False
         self._last_x = -1
         self._last_y = -1
         self._deadzone_px = 2
@@ -3075,6 +3306,9 @@ class MouseController:
         self._lock = threading.Lock()
         self._running = True
         self._worker = threading.Thread(target=self._cursor_worker, daemon=True)
+        self._media_queue = collections.deque()
+        self._media_lock = threading.Lock()
+        self._media_worker = threading.Thread(target=self._media_worker_loop, daemon=True)
 
         self._user32 = None
         self._quartz = None
@@ -3106,6 +3340,7 @@ class MouseController:
                 self._quartz = None
 
         self._worker.start()
+        self._media_worker.start()
 
     @property
     def is_dragging(self) -> bool:
@@ -3115,28 +3350,46 @@ class MouseController:
         self._running = False
         if self._worker.is_alive():
             self._worker.join(timeout=0.5)
+        if self._media_worker.is_alive():
+            self._media_worker.join(timeout=0.5)
 
     def move(self, x: int, y: int) -> None:
         with self._lock:
             self._target_x = int(x)
             self._target_y = int(y)
+            self._has_target = True
 
     def _cursor_worker(self) -> None:
-        interval = 1.0 / 220.0
+        interval = 1.0 / max(30.0, float(MOUSE_WORKER_HZ))
         while self._running:
             with self._lock:
                 tx = self._target_x
                 ty = self._target_y
+                has_target = self._has_target
 
-            if tx != -1 and ty != -1:
-                dx = tx - self._last_x
-                dy = ty - self._last_y
+            if has_target:
+                cx = int(tx)
+                cy = int(ty)
+                dx = cx - self._last_x
+                dy = cy - self._last_y
                 if dx * dx + dy * dy >= self._deadzone_px * self._deadzone_px:
-                    self._set_cursor_pos(tx, ty)
-                    self._last_x = tx
-                    self._last_y = ty
+                    self._set_cursor_pos(cx, cy)
+                    self._last_x = cx
+                    self._last_y = cy
 
             time.sleep(interval)
+
+    def _media_worker_loop(self) -> None:
+        while self._running:
+            item = None
+            with self._media_lock:
+                if self._media_queue:
+                    item = self._media_queue.popleft()
+            if item is None:
+                time.sleep(0.002)
+                continue
+            action, count = item
+            self._send_media_key_now(action, count)
 
     def _set_cursor_pos(self, x: int, y: int) -> None:
         if self._platform == "Windows" and self._user32 is not None:
@@ -3225,7 +3478,7 @@ class MouseController:
             up = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseUp, (float(x), float(y)), q.kCGMouseButtonLeft)
             q.CGEventPost(q.kCGHIDEventTap, up)
 
-    def send_media_key(self, action: str, count: int = 1) -> bool:
+    def _send_media_key_now(self, action: str, count: int = 1) -> bool:
         if self._platform != "Windows" or self._user32 is None:
             return False
         key_map = {
@@ -3241,6 +3494,17 @@ class MouseController:
         for _ in range(reps):
             self._user32.keybd_event(vk, 0, 0, 0)
             self._user32.keybd_event(vk, 0, 2, 0)
+            time.sleep(0.01)
+        return True
+
+    def send_media_key(self, action: str, count: int = 1) -> bool:
+        if self._platform != "Windows" or self._user32 is None:
+            return False
+        with self._media_lock:
+            self._media_queue.append((action, max(1, int(count))))
+            if len(self._media_queue) > 8:
+                while len(self._media_queue) > 8:
+                    self._media_queue.popleft()
         return True
 
     def show_osk(self) -> bool:
@@ -3286,7 +3550,9 @@ class SettingsStore:
         "debug_overlay": False,
         "scroll_multiplier": 1.0,
         "pinch_sensitivity": 0.20,
+        "pinch_exit_sensitivity": 0.30,
         "confirm_hold_s": 0.22,
+        "z_tap_enabled": False,
         "auto_start_camera": False,
         "show_control_region": True,
         "mirror_camera": True,
@@ -3342,6 +3608,37 @@ class SettingsStore:
 
 
 settings = SettingsStore()
+
+=== src/tuning.py ===
+from __future__ import annotations
+
+# Camera
+CAMERA_TARGET_SIZES = ((1280, 720), (640, 480))
+CAMERA_READ_RETRY_LIMIT = 45
+CAMERA_REOPEN_COOLDOWN_S = 0.15
+CAMERA_LOOP_IDLE_S = 0.002
+CAMERA_FAIL_SLEEP_S = 0.005
+
+# Cursor mapper
+CURSOR_INNER_RATIO = 0.80
+CURSOR_SPEED_NORM_RATIO = 0.05
+CURSOR_DEADZONE_BASE = 1.8
+CURSOR_DEADZONE_SCALE_FACTOR = 0.035
+
+# Gesture
+GESTURE_CONFIRM_HOLD_S = 0.18
+GESTURE_ACTION_COOLDOWN_S = 0.25
+GESTURE_LOCK_S = 0.16
+GESTURE_DRAG_ACTIVATE_S = 0.28
+GESTURE_DOUBLE_CLICK_WINDOW_S = 0.32
+GESTURE_SCROLL_GAIN = 1
+GESTURE_Z_TAP_ENTER = -0.06
+GESTURE_Z_TAP_EXIT = -0.03
+GESTURE_KEYBOARD_AFTER_PINCH_S = 0.07
+GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.12
+
+# Mouse worker
+MOUSE_WORKER_HZ = 120.0
 
 === src/utils.py ===
 from __future__ import annotations

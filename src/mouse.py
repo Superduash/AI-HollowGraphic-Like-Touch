@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import collections
 import platform
 import subprocess
 import threading
 import time
 
-from .tuning import MOUSE_CURSOR_INTERP_ALPHA, MOUSE_WORKER_HZ
+from .tuning import MOUSE_WORKER_HZ
 
 
 class MouseController:
@@ -15,8 +16,7 @@ class MouseController:
 
         self._target_x = -1
         self._target_y = -1
-        self._cursor_x = -1.0
-        self._cursor_y = -1.0
+        self._has_target = False
         self._last_x = -1
         self._last_y = -1
         self._deadzone_px = 2
@@ -24,6 +24,9 @@ class MouseController:
         self._lock = threading.Lock()
         self._running = True
         self._worker = threading.Thread(target=self._cursor_worker, daemon=True)
+        self._media_queue = collections.deque()
+        self._media_lock = threading.Lock()
+        self._media_worker = threading.Thread(target=self._media_worker_loop, daemon=True)
 
         self._user32 = None
         self._quartz = None
@@ -55,6 +58,7 @@ class MouseController:
                 self._quartz = None
 
         self._worker.start()
+        self._media_worker.start()
 
     @property
     def is_dragging(self) -> bool:
@@ -64,11 +68,14 @@ class MouseController:
         self._running = False
         if self._worker.is_alive():
             self._worker.join(timeout=0.5)
+        if self._media_worker.is_alive():
+            self._media_worker.join(timeout=0.5)
 
     def move(self, x: int, y: int) -> None:
         with self._lock:
             self._target_x = int(x)
             self._target_y = int(y)
+            self._has_target = True
 
     def _cursor_worker(self) -> None:
         interval = 1.0 / max(30.0, float(MOUSE_WORKER_HZ))
@@ -76,17 +83,11 @@ class MouseController:
             with self._lock:
                 tx = self._target_x
                 ty = self._target_y
+                has_target = self._has_target
 
-            if tx != -1 and ty != -1:
-                if self._cursor_x < 0.0 or self._cursor_y < 0.0:
-                    self._cursor_x = float(tx)
-                    self._cursor_y = float(ty)
-                else:
-                    self._cursor_x = self._cursor_x + (float(tx) - self._cursor_x) * float(MOUSE_CURSOR_INTERP_ALPHA)
-                    self._cursor_y = self._cursor_y + (float(ty) - self._cursor_y) * float(MOUSE_CURSOR_INTERP_ALPHA)
-
-                cx = int(self._cursor_x)
-                cy = int(self._cursor_y)
+            if has_target:
+                cx = int(tx)
+                cy = int(ty)
                 dx = cx - self._last_x
                 dy = cy - self._last_y
                 if dx * dx + dy * dy >= self._deadzone_px * self._deadzone_px:
@@ -95,6 +96,18 @@ class MouseController:
                     self._last_y = cy
 
             time.sleep(interval)
+
+    def _media_worker_loop(self) -> None:
+        while self._running:
+            item = None
+            with self._media_lock:
+                if self._media_queue:
+                    item = self._media_queue.popleft()
+            if item is None:
+                time.sleep(0.002)
+                continue
+            action, count = item
+            self._send_media_key_now(action, count)
 
     def _set_cursor_pos(self, x: int, y: int) -> None:
         if self._platform == "Windows" and self._user32 is not None:
@@ -183,7 +196,7 @@ class MouseController:
             up = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseUp, (float(x), float(y)), q.kCGMouseButtonLeft)
             q.CGEventPost(q.kCGHIDEventTap, up)
 
-    def send_media_key(self, action: str, count: int = 1) -> bool:
+    def _send_media_key_now(self, action: str, count: int = 1) -> bool:
         if self._platform != "Windows" or self._user32 is None:
             return False
         key_map = {
@@ -199,6 +212,17 @@ class MouseController:
         for _ in range(reps):
             self._user32.keybd_event(vk, 0, 0, 0)
             self._user32.keybd_event(vk, 0, 2, 0)
+            time.sleep(0.01)
+        return True
+
+    def send_media_key(self, action: str, count: int = 1) -> bool:
+        if self._platform != "Windows" or self._user32 is None:
+            return False
+        with self._media_lock:
+            self._media_queue.append((action, max(1, int(count))))
+            if len(self._media_queue) > 8:
+                while len(self._media_queue) > 8:
+                    self._media_queue.popleft()
         return True
 
     def show_osk(self) -> bool:

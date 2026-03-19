@@ -9,7 +9,9 @@ from .tuning import (
     GESTURE_CONFIRM_HOLD_S,
     GESTURE_DOUBLE_CLICK_WINDOW_S,
     GESTURE_DRAG_ACTIVATE_S,
+    GESTURE_KEYBOARD_AFTER_PINCH_S,
     GESTURE_LOCK_S,
+    GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S,
     GESTURE_SCROLL_GAIN,
     GESTURE_Z_TAP_ENTER,
     GESTURE_Z_TAP_EXIT,
@@ -26,8 +28,12 @@ class GestureDetector:
         self._left_pinch_active = False
         self._right_pinch_active = False
         self._left_pinch_since: float | None = None
+        self._last_pinch_release_time = 0.0
 
-        self._scroll_anchor_y: float | None = None
+        self._scroll_prev_y: float | None = None
+        self._scroll_velocity_ema = 0.0
+        self._scroll_direction = 0
+        self._scroll_last_switch_time = 0.0
         self._left_media_anchor_y: float | None = None
 
         self._action_cooldown_s = GESTURE_ACTION_COOLDOWN_S
@@ -46,6 +52,7 @@ class GestureDetector:
         self._last_media_prev_time = 0.0
         self._last_double_click_time = 0.0
         self._left_click_release_time = 0.0
+        self._task_view_since: float | None = None
 
         self._scroll_step_factor = 0.12
         self._scroll_deadband_factor = 0.06
@@ -56,6 +63,11 @@ class GestureDetector:
         self._z_tap_enter = float(GESTURE_Z_TAP_ENTER)
         self._z_tap_exit = float(GESTURE_Z_TAP_EXIT)
         self._z_tap_active = False
+        self._z_tap_enabled = False
+        self._task_view_hold_s = 0.40
+        self._keyboard_after_pinch_s = float(GESTURE_KEYBOARD_AFTER_PINCH_S)
+        self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
+        self._scroll_step_limit = 4
 
     @property
     def dragging(self) -> bool:
@@ -137,24 +149,50 @@ class GestureDetector:
         return self._state
 
     def _resolve_scroll(self, current_y: float, hand_scale: float) -> int:
-        if self._scroll_anchor_y is None:
-            self._scroll_anchor_y = current_y
+        if self._scroll_prev_y is None:
+            self._scroll_prev_y = current_y
+            self._scroll_velocity_ema = 0.0
+            self._scroll_direction = 0
             return 0
 
-        delta = self._scroll_anchor_y - current_y
+        dy = self._scroll_prev_y - current_y
+        self._scroll_prev_y = current_y
+
+        alpha = 0.35
+        self._scroll_velocity_ema = (1.0 - alpha) * self._scroll_velocity_ema + alpha * dy
+        v = self._scroll_velocity_ema
+
         deadband = hand_scale * self._scroll_deadband_factor
-        if abs(delta) <= deadband:
+        if abs(v) <= deadband:
             return 0
 
         step = max(1.0, hand_scale * self._scroll_step_factor)
-        steps = int(delta / step)
+        steps = int(v / step)
         if steps == 0:
             return 0
+        if steps > self._scroll_step_limit:
+            steps = self._scroll_step_limit
+        elif steps < -self._scroll_step_limit:
+            steps = -self._scroll_step_limit
 
-        self._scroll_anchor_y -= steps * step
+        direction = 1 if steps > 0 else -1
+        if self._scroll_direction == 0:
+            self._scroll_direction = direction
+        elif direction != self._scroll_direction:
+            if time.monotonic() - self._scroll_last_switch_time < self._scroll_dir_switch_cooldown_s:
+                return 0
+            self._scroll_direction = direction
+            self._scroll_last_switch_time = time.monotonic()
+            self._scroll_velocity_ema = 0.0
+            return 0
+
         return int(steps * max(1, self._scroll_gain))
 
     def _z_tap_triggered(self, hand_data, fs: FingerStates, now: float) -> bool:
+        if not self._z_tap_enabled:
+            self._z_tap_active = False
+            return False
+
         z = hand_data.get("z")
         if not isinstance(z, list) or len(z) < 9:
             self._z_tap_active = False
@@ -204,9 +242,12 @@ class GestureDetector:
             self._left_pinch_active = False
             self._right_pinch_active = False
             self._left_pinch_since = None
-            self._scroll_anchor_y = None
+            self._scroll_prev_y = None
+            self._scroll_velocity_ema = 0.0
+            self._scroll_direction = 0
             self._left_media_anchor_y = None
             self._z_tap_active = False
+            self._task_view_since = None
             return GestureResult(GestureType.PAUSE, 0)
 
         xy = hand_data["xy"]
@@ -218,6 +259,15 @@ class GestureDetector:
         hand_scale = max(24.0, self._distance(wrist, middle_mcp))
 
         self._update_pinch_states(xy, fs, hand_scale)
+        pinch_guard_active = (
+            self._left_pinch_active
+            or self._right_pinch_active
+            or (now - self._last_pinch_release_time < self._keyboard_after_pinch_s)
+        )
+
+        if not self._left_pinch_active and not self._right_pinch_active:
+            if self._left_pinch_since is not None:
+                self._last_pinch_release_time = now
 
         if self._left_pinch_active:
             if self._left_pinch_since is None:
@@ -232,7 +282,8 @@ class GestureDetector:
 
         if hand_label == "Left":
             self._dragging = False
-            self._scroll_anchor_y = None
+            self._scroll_prev_y = None
+            self._scroll_velocity_ema = 0.0
 
             raw_media = GestureType.PAUSE
             if scroll_pose and (not self._left_pinch_active) and (not self._right_pinch_active):
@@ -283,10 +334,22 @@ class GestureDetector:
 
         self._left_media_anchor_y = None
 
-        raw_state = GestureType.PAUSE
         if task_view_pose and not self._left_pinch_active and not self._right_pinch_active:
+            if self._task_view_since is None:
+                self._task_view_since = now
+        else:
+            self._task_view_since = None
+
+        raw_state = GestureType.PAUSE
+        if (
+            self._task_view_since is not None
+            and task_view_pose
+            and (now - self._task_view_since >= self._task_view_hold_s)
+            and not self._left_pinch_active
+            and not self._right_pinch_active
+        ):
             raw_state = GestureType.TASK_VIEW
-        elif keyboard_pose and not self._left_pinch_active and not self._right_pinch_active:
+        elif keyboard_pose and not pinch_guard_active:
             raw_state = GestureType.KEYBOARD
         elif self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):
             raw_state = GestureType.DRAG
@@ -302,7 +365,9 @@ class GestureDetector:
         stable_state = self._stable_state(raw_state, now)
 
         if stable_state != GestureType.SCROLL and raw_state != GestureType.SCROLL:
-            self._scroll_anchor_y = None
+            self._scroll_prev_y = None
+            self._scroll_velocity_ema = 0.0
+            self._scroll_direction = 0
 
         if now < self._locked_until and self._state in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}:
             return GestureResult(GestureType.MOVE, 0)
@@ -333,9 +398,13 @@ class GestureDetector:
 
         if stable_state == GestureType.TASK_VIEW:
             self._state = GestureType.TASK_VIEW
+            self._task_view_since = None
             return GestureResult(GestureType.TASK_VIEW, 0)
 
         if stable_state == GestureType.KEYBOARD:
+            if pinch_guard_active:
+                self._state = GestureType.MOVE
+                return GestureResult(GestureType.MOVE, 0)
             self._state = GestureType.KEYBOARD
             return GestureResult(GestureType.KEYBOARD, 0)
 
