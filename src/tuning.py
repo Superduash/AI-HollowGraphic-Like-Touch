@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 # Camera
-CAMERA_TARGET_SIZES = ((1280, 720), (960, 540), (640, 480), (320, 240))
+CAMERA_TARGET_SIZES = ((1280, 720), (640, 480))
 CAMERA_READ_RETRY_LIMIT = 45
 CAMERA_REOPEN_COOLDOWN_S = 0.15
-CAMERA_LOOP_IDLE_S = 0.0
 CAMERA_FAIL_SLEEP_S = 0.001
 
 # Cursor mapper

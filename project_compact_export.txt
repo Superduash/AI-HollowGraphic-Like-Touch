@@ -219,6 +219,18 @@ Designed for USB portability: one main Python file driving an integrated package
 
 from __future__ import annotations
 
+import os
+
+# Keep OpenCV backend probing quiet in production startup logs.
+os.environ.setdefault("OPENCV_LOG_LEVEL", "SILENT")
+os.environ.setdefault("OPENCV_VIDEOIO_DEBUG", "0")
+
+# Keep Qt/MediaPipe/TFLite startup logs quiet for end users.
+os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.window=false")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
+
 from PySide6.QtWidgets import QApplication
 
 from src import MainWindow
@@ -1996,6 +2008,18 @@ Designed for USB portability: one main Python file driving an integrated package
 
 from __future__ import annotations
 
+import os
+
+# Keep OpenCV backend probing quiet in production startup logs.
+os.environ.setdefault("OPENCV_LOG_LEVEL", "SILENT")
+os.environ.setdefault("OPENCV_VIDEOIO_DEBUG", "0")
+
+# Keep Qt/MediaPipe/TFLite startup logs quiet for end users.
+os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.window=false")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
+
 from PySide6.QtWidgets import QApplication
 
 from src import MainWindow
@@ -3665,13 +3689,36 @@ from __future__ import annotations
 import platform
 import threading
 import time
+import os
 from dataclasses import dataclass
+from typing import Any, cast
 
 import cv2
 
+try:
+    cv2.setLogLevel(0)
+except Exception:
+    pass
+
+
+def _videowriter_fourcc(*chars: str) -> int:
+    fn = getattr(cv2, "VideoWriter_fourcc", None)
+    if callable(fn):
+        value = cast(Any, fn)(*chars)
+        return int(cast(Any, value))
+    writer = getattr(cv2, "VideoWriter", None)
+    if writer is not None:
+        fn2 = getattr(writer, "fourcc", None)
+        if callable(fn2):
+            value = cast(Any, fn2)(*chars)
+            return int(cast(Any, value))
+    return 0
+
+
+_MJPG_FOURCC = _videowriter_fourcc(*"MJPG")
+
 from .tuning import (
     CAMERA_FAIL_SLEEP_S,
-    CAMERA_LOOP_IDLE_S,
     CAMERA_READ_RETRY_LIMIT,
     CAMERA_REOPEN_COOLDOWN_S,
     CAMERA_TARGET_SIZES,
@@ -3716,37 +3763,17 @@ class CameraThread:
 
     def _backend_candidates(self) -> list[int]:
         if self._is_windows:
-            return [cv2.CAP_MSMF, cv2.CAP_DSHOW, cv2.CAP_ANY]
+            return [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
         return [cv2.CAP_ANY]
 
     @staticmethod
-    def _try_read_frames(cap: cv2.VideoCapture, count: int = 8) -> bool:
+    def _try_read_frames(cap: cv2.VideoCapture, count: int = 5) -> bool:
         for _ in range(count):
             ok, frame = cap.read()
             if ok and frame is not None:
                 return True
-            time.sleep(0.01)
+            time.sleep(0.025)
         return False
-
-    @staticmethod
-    def _drain_and_read(cap: cv2.VideoCapture):
-        # Single grab+retrieve path for low-latency frame acquisition.
-        try:
-            if cap.grab():
-                ok, frame = cap.retrieve()
-                if ok and frame is not None:
-                    return ok, frame
-        except Exception:
-            pass
-        return cap.read()
-
-    def _configure_capture(self, cap: cv2.VideoCapture, width: int, height: int, prefer_mjpg: bool = True) -> None:
-        if self._is_windows and prefer_mjpg:
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        cap.set(cv2.CAP_PROP_FPS, 60)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     @staticmethod
     def _backend_name(backend: int) -> str:
@@ -3762,37 +3789,48 @@ class CameraThread:
         idx = int(camera_index)
         for backend in self._backend_candidates():
             for width, height in CAMERA_TARGET_SIZES:
-                # Attempt MJPG first on Windows; fallback to default format if rejected.
-                for prefer_mjpg in ([True, False] if self._is_windows else [False]):
-                    cap = cv2.VideoCapture(idx, backend)
-                    if not cap.isOpened():
-                        cap.release()
-                        continue
+                cap = cv2.VideoCapture(idx, backend)
+                if not cap.isOpened():
+                    cap.release()
+                    continue
 
-                    self._configure_capture(cap, width, height, prefer_mjpg=prefer_mjpg)
+                # Try MJPG first on Windows for better throughput; silently
+                # fall back to default codec if the camera rejects it.
+                if self._is_windows:
+                    cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                cap.set(cv2.CAP_PROP_FPS, 60)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-                    if prefer_mjpg and self._is_windows:
-                        fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
-                        if fourcc != cv2.VideoWriter_fourcc(*"MJPG"):
-                            cap.release()
-                            time.sleep(0.01)
-                            continue
+                # Short warm-up for virtual cameras that expose the device
+                # before streaming is ready.
+                time.sleep(0.05)
 
-                    if not self._try_read_frames(cap):
-                        cap.release()
-                        time.sleep(0.03)
-                        continue
+                if not self._try_read_frames(cap, count=5):
+                    cap.release()
+                    time.sleep(0.02)
+                    continue
 
-                    self.actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or width)
-                    self.actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or height)
-                    fmt = "MJPG" if (prefer_mjpg and self._is_windows) else "DEFAULT"
-                    self._last_error = (
-                        f"Camera #{idx} opened at {self.actual_width}x{self.actual_height}"
-                        f" backend={self._backend_name(backend)} format={fmt}"
-                    )
-                    return cap
+                self.actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or width)
+                self.actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or height)
+                fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
+                fmt = (
+                    "MJPG"
+                    if fourcc == _MJPG_FOURCC
+                    else "DEFAULT"
+                )
+                self._last_error = (
+                    f"Camera #{idx} opened at {self.actual_width}x{self.actual_height}"
+                    f" backend={self._backend_name(backend)} format={fmt}"
+                )
+                return cap
 
-        self._last_error = f"Cannot open camera index {idx} on MSMF/DSHOW/ANY at 1280x720 or 640x480"
+        self._last_error = (
+            f"Cannot open camera index {idx} on any backend"
+            f" at {CAMERA_TARGET_SIZES[0][0]}x{CAMERA_TARGET_SIZES[0][1]}"
+            f" or {CAMERA_TARGET_SIZES[-1][0]}x{CAMERA_TARGET_SIZES[-1][1]}"
+        )
         return None
 
     # ------------------------------------------------------------------
@@ -3833,28 +3871,45 @@ class CameraThread:
 
     def enumerate_cameras(self, max_index: int = 8) -> list[CameraDevice]:
         """Probe camera indices with the same backend policy as runtime open."""
+        env_max = os.environ.get("WH_CAM_MAX_INDEX", "").strip()
+        if env_max.isdigit():
+            max_index = max(max_index, int(env_max))
+
+        candidate_indices = list(range(max_index))
+        if self._is_windows:
+            known_names = self._dshow_camera_names() or self._system_camera_names()
+            if known_names:
+                probe_count = max(1, min(max_index, len(known_names) + 2))
+                candidate_indices = list(range(probe_count))
+
+        env_idx = os.environ.get("WH_CAM_INDEX", "").strip()
+        if env_idx.isdigit():
+            idx = int(env_idx)
+            if idx not in candidate_indices:
+                candidate_indices.append(idx)
+
         open_indices: list[int] = []
-        for idx in range(max_index):
+        for idx in candidate_indices:
             found = False
             for backend in self._backend_candidates():
                 if found:
                     break
                 for width, height in CAMERA_TARGET_SIZES:
-                    for prefer_mjpg in ([True, False] if self._is_windows else [False]):
-                        cap = cv2.VideoCapture(idx, backend)
-                        try:
-                            if not cap.isOpened():
-                                continue
-                            self._configure_capture(cap, width, height, prefer_mjpg=prefer_mjpg)
-                            if prefer_mjpg and self._is_windows:
-                                fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
-                                if fourcc != cv2.VideoWriter_fourcc(*"MJPG"):
-                                    continue
-                            if self._try_read_frames(cap, count=4):
-                                found = True
-                                break
-                        finally:
-                            cap.release()
+                    cap = cv2.VideoCapture(idx, backend)
+                    try:
+                        if not cap.isOpened():
+                            continue
+                        if self._is_windows:
+                            cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
+                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                        cap.set(cv2.CAP_PROP_FPS, 60)
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        if self._try_read_frames(cap, count=3):
+                            found = True
+                            break
+                    finally:
+                        cap.release()
                     if found:
                         break
             if found:
@@ -3870,8 +3925,6 @@ class CameraThread:
                 name = f"Camera #{idx}"
             devices.append(CameraDevice(index=idx, name=name))
 
-        if not devices:
-            devices.append(CameraDevice(index=0, name="Camera #0"))
         return devices
 
     # ------------------------------------------------------------------
@@ -3886,7 +3939,34 @@ class CameraThread:
 
         cap = self._open_capture(self.camera_index)
         if cap is None:
-            return False
+            fallback_indices: list[int] = []
+            env_idx = os.environ.get("WH_CAM_INDEX", "").strip()
+            if env_idx.isdigit():
+                fallback_indices.append(int(env_idx))
+
+            for dev in self.enumerate_cameras(max_index=8):
+                if dev.index != self.camera_index and dev.index not in fallback_indices:
+                    fallback_indices.append(dev.index)
+
+            for i in range(8):
+                if i != self.camera_index and i not in fallback_indices:
+                    fallback_indices.append(i)
+
+            attempted: list[int] = [self.camera_index]
+            for idx in fallback_indices:
+                cap = self._open_capture(idx)
+                attempted.append(idx)
+                if cap is not None:
+                    self.camera_index = idx
+                    self._last_error = f"Camera fallback selected index {idx}"
+                    break
+
+            if cap is None:
+                self._last_error = (
+                    f"Cannot open camera. Attempted indices: {attempted}. "
+                    "If using DroidCam, start its camera feed first."
+                )
+                return False
 
         with self._cap_lock:
             self._cap = cap
@@ -3932,7 +4012,7 @@ class CameraThread:
                 if cap is None:
                     time.sleep(0.001)
                     continue
-                ok, frame = self._drain_and_read(cap)
+                ok, frame = cap.read()
             if not ok or frame is None:
                 consecutive_failures += 1
                 if consecutive_failures >= CAMERA_READ_RETRY_LIMIT:
@@ -3959,8 +4039,6 @@ class CameraThread:
             self.actual_height, self.actual_width = frame.shape[:2]
             with self._frame_lock:
                 self._frame = frame
-
-            # No idle sleep here; camera read path paces the loop.
 
     def latest(self):
         with self._frame_lock:
@@ -4033,9 +4111,8 @@ import math
 import platform
 
 from .tuning import (
-    CURSOR_DEADZONE_BASE,
-    CURSOR_DEADZONE_SCALE_FACTOR,
     CURSOR_INNER_RATIO,
+    CURSOR_SOFT_DEADZONE_PX,
     CURSOR_SPEED_NORM_RATIO,
 )
 
@@ -4057,9 +4134,9 @@ class CursorMapper:
         self._flt_y = -1.0
         self._initialized = False
 
-        self._deadzone_px = 2.0
-        self._alpha_min = 0.15
-        self._alpha_max = 0.70
+        self._deadzone_px = float(CURSOR_SOFT_DEADZONE_PX)
+        self._alpha_min = 0.18
+        self._alpha_max = 0.55
         self._inner_ratio = CURSOR_INNER_RATIO
         self._max_inner_margin_ratio = 0.35
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
@@ -4120,8 +4197,8 @@ class CursorMapper:
         v = max(1.0, min(10.0, float(value)))
         self.smoothening = v
         t = (v - 1.0) / 9.0
-        self._alpha_min = 0.12 + t * 0.13
-        self._alpha_max = 0.50 + t * 0.25
+        self._alpha_min = 0.18 + t * 0.12
+        self._alpha_max = 0.55 + t * 0.20
 
     def set_frame_margin(self, margin_px: int) -> None:
         self.frame_r = max(0, min(int(margin_px), self.max_effective_margin_px()))
@@ -4186,11 +4263,14 @@ class CursorMapper:
         self._raw_x = raw_x
         self._raw_y = raw_y
 
-        dynamic_deadzone = max(CURSOR_DEADZONE_BASE, self._deadzone_px, self._hand_scale_px * CURSOR_DEADZONE_SCALE_FACTOR)
-        if speed <= dynamic_deadzone:
-            self._flt_x = self._flt_x + 0.15 * (raw_x - self._flt_x)
-            self._flt_y = self._flt_y + 0.15 * (raw_y - self._flt_y)
-            return int(self._flt_x), int(self._flt_y)
+        # Soft deadzone: suppress micro-jitter without fully blocking intentional movement.
+        if speed < self._deadzone_px:
+            scale = (speed / self._deadzone_px) ** 2
+            raw_x = self._raw_x + dx * scale
+            raw_y = self._raw_y + dy * scale
+            dx = raw_x - self._raw_x
+            dy = raw_y - self._raw_y
+            speed = math.sqrt(dx * dx + dy * dy)
 
         screen_norm = max(60.0, math.sqrt(float(self.scr_w * self.scr_w + self.scr_h * self.scr_h)) * CURSOR_SPEED_NORM_RATIO)
         v_norm = min(1.0, speed / screen_norm)
@@ -4214,7 +4294,9 @@ from .tuning import (
     GESTURE_DOUBLE_CLICK_WINDOW_S,
     GESTURE_DRAG_ACTIVATE_S,
     GESTURE_KEYBOARD_AFTER_PINCH_S,
+    GESTURE_KEYBOARD_HOLD_S,
     GESTURE_LOCK_S,
+    GESTURE_RIGHT_CLICK_HOLD_S,
     GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S,
     GESTURE_SCROLL_GAIN,
     GESTURE_Z_TAP_ENTER,
@@ -4226,15 +4308,14 @@ class GestureDetector:
     def __init__(self) -> None:
         self._state = GestureType.PAUSE
         self._candidate = GestureType.PAUSE
-        self._candidate_since = 0.0
+        self._stable_start_t = 0.0
 
         self._dragging = False
+        self._drag_active = False
         self._left_pinch_active = False
         self._right_pinch_active = False
-        self._right_pinch_pending_since: float | None = None
-        self._right_pinch_confirm_s = 0.12
         self._left_pinch_since: float | None = None
-        self._last_pinch_release_time = 0.0
+        self._right_pinch_start_t: float | None = None
 
         self._scroll_prev_y: float | None = None
         self._scroll_velocity_ema = 0.0
@@ -4243,15 +4324,14 @@ class GestureDetector:
         self._scroll_last_switch_time = 0.0
         self._left_media_anchor_y: float | None = None
 
-        self._action_cooldown_s = GESTURE_ACTION_COOLDOWN_S
-        self._gesture_lock_s = GESTURE_LOCK_S
+        self._action_cooldown_s = float(GESTURE_ACTION_COOLDOWN_S)
+        self._gesture_lock_s = float(GESTURE_LOCK_S)
         self._locked_until = 0.0
-        self._drag_activate_s = GESTURE_DRAG_ACTIVATE_S
+        self._drag_activate_s = float(GESTURE_DRAG_ACTIVATE_S)
 
-        # ── BUG A FIX: Wider pinch thresholds for Windows cameras ──
         self._pinch_enter = 0.30
         self._pinch_exit = 0.45
-        self._confirm_hold_s = 0.06    # was 0.08
+        self._confirm_hold_s = float(GESTURE_CONFIRM_HOLD_S)
         self._media_cooldown_s = 0.5
         self._last_media_action_time = 0.0
         self._media_edge_state = GestureType.PAUSE
@@ -4264,12 +4344,14 @@ class GestureDetector:
         self._last_double_click_time = 0.0
         self._left_click_release_time = 0.0
         self._task_view_since: float | None = None
+        self._keyboard_hold_start: float | None = None
+        self._keyboard_fired = False
 
-        self._scroll_step_factor = 0.12
+        self._scroll_step_factor = 0.08
         self._scroll_deadband_factor = 0.06
         self._media_step_factor = 0.11
         self._media_deadband_factor = 0.05
-        self._double_click_window_s = 0.50
+        self._double_click_window_s = float(GESTURE_DOUBLE_CLICK_WINDOW_S)
         self._scroll_gain = int(GESTURE_SCROLL_GAIN)
         self._z_tap_enter = float(GESTURE_Z_TAP_ENTER)
         self._z_tap_exit = float(GESTURE_Z_TAP_EXIT)
@@ -4277,10 +4359,11 @@ class GestureDetector:
         self._z_tap_enabled = False
         self._task_view_hold_s = 0.40
         self._keyboard_after_pinch_s = float(GESTURE_KEYBOARD_AFTER_PINCH_S)
+        self._keyboard_hold_s = float(GESTURE_KEYBOARD_HOLD_S)
         self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
-        self._scroll_step_limit = 4
+        self._scroll_step_limit = 8
+        self._right_click_hold_s = float(GESTURE_RIGHT_CLICK_HOLD_S)
 
-        # ── BUG D FIX: Per-action cooldowns + edge detection ──
         self._per_action_cooldown = {
             GestureType.LEFT_CLICK: 0.30,
             GestureType.RIGHT_CLICK: 0.50,
@@ -4289,29 +4372,14 @@ class GestureDetector:
             GestureType.MEDIA_PREV: 0.8,
             GestureType.MEDIA_VOL_UP: 0.05,
             GestureType.MEDIA_VOL_DOWN: 0.05,
-            GestureType.SCROLL: 0.05,
+            GestureType.SCROLL: 0.0,
             GestureType.DRAG: 0.0,
             GestureType.MOVE: 0.0,
+            GestureType.KEYBOARD: 0.5,
+            GestureType.TASK_VIEW: 0.8,
         }
         self._last_action_time: dict[GestureType, float] = {}
-        self._prev_gesture_state = GestureType.PAUSE
-
-        # ── BUG D FIX: Frame-count debounce (4 consecutive frames) ──
-        self._debounce_gesture = GestureType.PAUSE
-        self._debounce_count = 0
-        self._debounce_required = 4
-
-        # ── BUG B FIX: Grace period for hand loss ──
-        self._frames_no_hand = 0
-        self._grace_frames = 4
-        self._last_valid_hand_data: dict | None = None
-
-        # Log cooldowns to avoid console spam.
-        self._pinch_log_cooldown_s = 5.0
-        self._gesture_log_cooldown_s = 5.0
-        self._last_pinch_log_ts = 0.0
-        self._last_gesture_log_ts = 0.0
-        self._last_logged_state = GestureType.PAUSE
+        self._gesture_entry_set: set[GestureType] = set()
 
     @property
     def dragging(self) -> bool:
@@ -4323,19 +4391,27 @@ class GestureDetector:
         dy = a[1] - b[1]
         return math.sqrt(dx * dx + dy * dy)
 
-    # ── BUG E FIX: Use wrist-relative distances for finger extension ──
+    def reset_cooldowns(self) -> None:
+        self._last_action_time.clear()
+        self._gesture_entry_set.clear()
+
+    def _make_result(self, gesture: GestureType, scroll_delta: int = 0, confidence: float = 1.0) -> GestureResult:
+        result = GestureResult(gesture, scroll_delta)
+        try:
+            setattr(result, "gesture_confidence", max(0.0, min(1.0, float(confidence))))
+        except Exception:
+            pass
+        return result
+
     def _finger_states(self, landmarks_xy) -> FingerStates:
         wrist = landmarks_xy[0]
 
-        # Thumb: x-axis distance from wrist (works for both hands)
         thumb_tip = landmarks_xy[4]
         thumb_ip = landmarks_xy[3]
-        thumb_mcp = landmarks_xy[2]
         dx_tip = abs(thumb_tip[0] - wrist[0])
         dx_ip = abs(thumb_ip[0] - wrist[0])
         thumb = dx_tip > dx_ip
 
-        # Fingers: dist(tip, wrist) > dist(pip, wrist) AND dist(tip, mcp) > 0.6 * scale
         def is_extended(tip_idx: int, pip_idx: int, mcp_idx: int) -> bool:
             tip = landmarks_xy[tip_idx]
             pip = landmarks_xy[pip_idx]
@@ -4356,7 +4432,6 @@ class GestureDetector:
     def finger_count(hand_data: dict | None) -> int:
         if not hand_data:
             return 0
-        # Use static y-compare version for the simple count display
         xy = hand_data["xy"]
         thumb_tip = xy[4]
         thumb_ip = xy[3]
@@ -4372,26 +4447,43 @@ class GestureDetector:
         pinky = xy[20][1] < xy[18][1]
         return int(thumb) + int(index) + int(middle) + int(ring) + int(pinky)
 
-    def _update_pinch_states(self, xy, fs: FingerStates, hand_scale: float) -> None:
-        pinch_enter_factor = max(0.08, float(self._pinch_enter))
-        pinch_exit_factor = max(pinch_enter_factor + 0.05, float(self._pinch_exit))
-        self._pinch_enter = pinch_enter_factor
-        self._pinch_exit = pinch_exit_factor
+    def _check_action_cooldown(self, gesture: GestureType, now: float) -> bool:
+        cooldown = self._per_action_cooldown.get(gesture, self._action_cooldown_s)
+        last = self._last_action_time.get(gesture, 0.0)
+        if now - last < cooldown:
+            return False
+        if gesture in self._gesture_entry_set:
+            return False
+        return True
 
-        pinch_enter = hand_scale * pinch_enter_factor
-        pinch_exit = hand_scale * pinch_exit_factor
+    def _record_action(self, gesture: GestureType, now: float) -> None:
+        self._last_action_time[gesture] = now
+
+    def _update_pinch_states(self, xy, fs: FingerStates, hand_scale: float, now: float) -> None:
+        pinch_enter_ratio = max(0.08, float(self._pinch_enter))
+        pinch_exit_ratio = max(pinch_enter_ratio + 0.05, float(self._pinch_exit))
+        self._pinch_enter = pinch_enter_ratio
+        self._pinch_exit = pinch_exit_ratio
+
+        pinch_enter = hand_scale * pinch_enter_ratio
+        pinch_exit = hand_scale * pinch_exit_ratio
 
         left_dist = self._distance(xy[4], xy[8])
         right_dist = self._distance(xy[4], xy[12])
+        pinch_left_ratio = left_dist / max(1.0, hand_scale)
 
-        # Pinch debug logging disabled for production.
+        # Stamp release on physical pinch release, not delayed state-machine exit.
+        if self._state == GestureType.LEFT_CLICK and pinch_left_ratio > self._pinch_exit:
+            self._left_click_release_time = now
 
-        # Strict anti-cross gating: the OTHER finger pair must be clearly separated.
-        left_click_pose = left_dist <= pinch_enter and right_dist > (pinch_exit * 0.9)
-        right_click_pose = right_dist <= pinch_enter and left_dist > (pinch_exit * 0.9)
-        # Right-click requires index to stay extended to avoid accidental cross-trigger.
-        if right_click_pose and not fs.index:
-            right_click_pose = False
+        left_click_pose = left_dist <= pinch_enter
+
+        mid_extended = self._distance(xy[12], xy[0]) > (self._distance(xy[9], xy[0]) * 0.85)
+        right_click_pose = (
+            right_dist <= pinch_enter
+            and left_dist > (pinch_enter * 1.4)
+            and mid_extended
+        )
 
         if self._left_pinch_active:
             if left_dist > pinch_exit:
@@ -4399,75 +4491,15 @@ class GestureDetector:
         elif left_click_pose:
             self._left_pinch_active = True
 
-        now = time.monotonic()
-        pending = self._right_pinch_pending_since
-        if self._right_pinch_active:
-            if right_dist > pinch_exit:
-                self._right_pinch_active = False
-                self._right_pinch_pending_since = None
-        elif right_click_pose:
-            if pending is None:
-                self._right_pinch_pending_since = now
-            elif (now - pending) >= self._right_pinch_confirm_s:
+        if right_click_pose:
+            if self._right_pinch_start_t is None:
+                self._right_pinch_start_t = now
+            if now - self._right_pinch_start_t >= self._right_click_hold_s:
                 self._right_pinch_active = True
         else:
-            self._right_pinch_pending_since = None
-
-    def _stable_state(self, raw_state: GestureType, now: float) -> GestureType:
-        if raw_state == GestureType.PAUSE:
-            self._candidate = GestureType.PAUSE
-            self._candidate_since = now
-            return GestureType.PAUSE
-
-        if raw_state != self._candidate:
-            self._candidate = raw_state
-            self._candidate_since = now
-            return self._state
-
-        if now - self._candidate_since >= self._confirm_hold_s:
-            return self._candidate
-        return self._state
-
-    def _debounce_check(self, raw_state: GestureType) -> GestureType:
-        if raw_state == self._debounce_gesture:
-            self._debounce_count += 1
-        else:
-            self._debounce_gesture = raw_state
-            self._debounce_count = 1
-
-        # Continuous gestures pass through immediately once confirmed
-        if raw_state == self._state and raw_state in {
-            GestureType.MOVE, GestureType.SCROLL, GestureType.DRAG,
-            GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN,
-        }:
-            return raw_state
-
-        # Click gestures need only 2 frames for responsiveness
-        click_gestures = {
-            GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
-            GestureType.DOUBLE_CLICK,
-        }
-        required = 2 if raw_state in click_gestures else self._debounce_required
-
-        if self._debounce_count >= required:
-            return raw_state
-
-        return self._state
-
-    def _check_action_cooldown(self, gesture: GestureType, now: float) -> bool:
-        cooldown_val = self._per_action_cooldown.get(gesture, self._action_cooldown_s)
-        cooldown = float(cooldown_val) if cooldown_val is not None else self._action_cooldown_s
-        
-        last_val = self._last_action_time.get(gesture, 0.0)
-        last = float(last_val) if last_val is not None else 0.0
-        
-        if now - last < cooldown:
-            return False
-        return True
-
-    def _record_action(self, gesture: GestureType, now: float) -> None:
-        """Record that an action was fired for cooldown tracking."""
-        self._last_action_time[gesture] = now
+            self._right_pinch_start_t = None
+            if right_dist > pinch_exit:
+                self._right_pinch_active = False
 
     def _resolve_scroll(self, current_y: float, hand_scale: float) -> int:
         prev_y = self._scroll_prev_y
@@ -4481,47 +4513,52 @@ class GestureDetector:
         dy = float(prev_y) - current_y
         self._scroll_prev_y = current_y
 
-        # Gentler EMA for smoother velocity tracking
-        alpha = 0.25
+        alpha = 0.20
         self._scroll_velocity_ema = (1.0 - alpha) * self._scroll_velocity_ema + alpha * dy
-        v = self._scroll_velocity_ema
+        velocity = self._scroll_velocity_ema
 
         deadband = hand_scale * self._scroll_deadband_factor
-        if abs(v) <= deadband:
-            # Bleed accumulator toward zero when in deadband
-            self._scroll_accumulator *= 0.5
+        if abs(velocity) <= deadband:
             return 0
 
-        # Accumulate sub-pixel scroll and emit integer steps
-        step = max(1.0, hand_scale * self._scroll_step_factor)
-        self._scroll_accumulator += v / step
-
-        steps = int(self._scroll_accumulator)
-        if steps == 0:
-            return 0
-
-        self._scroll_accumulator -= steps
-
-        if steps > self._scroll_step_limit:
-            steps = self._scroll_step_limit
-        elif steps < -self._scroll_step_limit:
-            steps = -self._scroll_step_limit
-
-        direction = 1 if steps > 0 else -1
+        direction = 1 if velocity > 0.0 else -1
         if self._scroll_direction == 0:
             self._scroll_direction = direction
+            self._scroll_last_switch_time = time.monotonic()
         elif direction != self._scroll_direction:
             now = time.monotonic()
             if now - self._scroll_last_switch_time < self._scroll_dir_switch_cooldown_s:
-                self._scroll_accumulator = 0.0
                 return 0
             self._scroll_direction = direction
             self._scroll_last_switch_time = now
-            self._scroll_velocity_ema = 0.0
-            self._scroll_accumulator = 0.0
+
+        self._scroll_accumulator += abs(velocity * self._scroll_step_factor)
+        emit_count = int(self._scroll_accumulator)
+        if emit_count <= 0:
             return 0
 
-        return int(steps * max(1, self._scroll_gain))
+        self._scroll_accumulator -= emit_count
+        emit_count = max(1, min(self._scroll_step_limit, emit_count))
+        return int(direction * emit_count * max(1, self._scroll_gain))
+
+    def _resolve_media_volume(self, current_y: float, hand_scale: float) -> int:
+        anchor_y = self._left_media_anchor_y
+        if anchor_y is None:
+            self._left_media_anchor_y = current_y
+            return 0
+
+        delta = float(anchor_y) - current_y
+        deadband = hand_scale * self._media_deadband_factor
+        if abs(delta) <= deadband:
+            return 0
+
+        step = max(1.0, hand_scale * self._media_step_factor)
+        steps = int(delta / step)
+        if steps == 0:
+            return 0
+
+        self._left_media_anchor_y = float(anchor_y) - (steps * step)
+        return steps
 
     def _z_tap_triggered(self, hand_data, fs: FingerStates, now: float) -> bool:
         if not self._z_tap_enabled:
@@ -4548,97 +4585,44 @@ class GestureDetector:
             return True
         return False
 
-    def _resolve_media_volume(self, current_y: float, hand_scale: float) -> int:
-        anchor_y = self._left_media_anchor_y
-        if anchor_y is None:
-            self._left_media_anchor_y = current_y
-            return 0
+    def _clear_transient_motion(self) -> None:
+        self._scroll_prev_y = None
+        self._scroll_velocity_ema = 0.0
+        self._scroll_direction = 0
+        self._scroll_accumulator = 0.0
+        self._left_media_anchor_y = None
 
-        delta = float(anchor_y) - current_y
-        deadband = hand_scale * self._media_deadband_factor
-        if abs(delta) <= deadband:
-            return 0
-
-        step = max(1.0, hand_scale * self._media_step_factor)
-        steps = int(delta / step)
-        if steps == 0:
-            return 0
-
-        self._left_media_anchor_y = float(anchor_y) - (steps * step)
-        return steps
-
-    def detect(self, hand_data: dict | None) -> GestureResult:
+    def detect(self, hand_data: dict | None, is_grace_frame: bool = False) -> GestureResult:
         now = time.monotonic()
 
         if hand_data is None:
-            # ── BUG B FIX: Grace period — don't immediately PAUSE ──
-            self._frames_no_hand += 1
-            last_known = self._last_valid_hand_data
-            if self._frames_no_hand < self._grace_frames and last_known is not None:
-                # Use last known hand data but only for continuous gestures
-                hand_data = last_known
-                # Force non-action state during grace period to prevent ghost clicks
-                if self._state in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, 
-                                   GestureType.DOUBLE_CLICK, GestureType.KEYBOARD,
-                                   GestureType.TASK_VIEW}:
-                    self._state = GestureType.MOVE
-            else:
-                self._state = GestureType.PAUSE
-                self._candidate = GestureType.PAUSE
-                self._candidate_since = now
-                self._dragging = False
-                self._left_pinch_active = False
-                self._right_pinch_active = False
-                self._left_pinch_since = None
-                self._scroll_prev_y = None
-                self._scroll_accumulator = 0.0
-                self._scroll_velocity_ema = 0.0
-                self._scroll_direction = 0
-                self._scroll_accumulator = 0.0
-                self._left_media_anchor_y = None
-                self._z_tap_active = False
-                self._task_view_since = None
-                self._media_edge_state = GestureType.PAUSE
-                self._prev_gesture_state = GestureType.PAUSE
-                self._debounce_gesture = GestureType.PAUSE
-                self._debounce_count = 0
-                self._last_valid_hand_data = None
-                return GestureResult(GestureType.PAUSE, 0)
-        else:
-            self._frames_no_hand = 0
-            self._last_valid_hand_data = hand_data
+            self._state = GestureType.PAUSE
+            self._candidate = GestureType.PAUSE
+            self._stable_start_t = now
+            self._dragging = False
+            self._drag_active = False
+            self._left_pinch_active = False
+            self._right_pinch_active = False
+            self._left_pinch_since = None
+            self._right_pinch_start_t = None
+            self._keyboard_hold_start = None
+            self._keyboard_fired = False
+            self._gesture_entry_set.clear()
+            self._clear_transient_motion()
+            return self._make_result(GestureType.PAUSE, 0, 0.0)
 
         xy = hand_data["xy"]
-        fs = self._finger_states(xy)
-        hand_label = str(hand_data.get("label", "Right"))
-        confidence = float(hand_data.get("confidence", 0.0))
-
-        if confidence < 0.55:
-            self._state = GestureType.PAUSE
-            self._prev_gesture_state = GestureType.PAUSE
-            return GestureResult(GestureType.PAUSE, 0)
-
         wrist = xy[0]
         middle_mcp = xy[9]
         self._hand_scale = max(24.0, self._distance(wrist, middle_mcp))
 
-        if self._state != self._last_logged_state:
-            self._last_logged_state = self._state
-            self._last_gesture_log_ts = now
+        fs = self._finger_states(xy)
+        hand_label = str(hand_data.get("label", "Right"))
+        confidence = float(hand_data.get("confidence", 0.0))
+        if confidence < 0.20:
+            return self._make_result(GestureType.PAUSE, 0, 0.0)
 
-        prev_left_pinch_active = self._left_pinch_active
-        self._update_pinch_states(xy, fs, self._hand_scale)
-        if prev_left_pinch_active and not self._left_pinch_active:
-            self._left_click_release_time = now
-        pinch_guard_active = (
-            self._left_pinch_active
-            or self._right_pinch_active
-            or (now - self._last_pinch_release_time < self._keyboard_after_pinch_s)
-        )
-
-        if not self._left_pinch_active and not self._right_pinch_active:
-            if self._left_pinch_since is not None:
-                self._last_pinch_release_time = now
+        self._update_pinch_states(xy, fs, self._hand_scale, now)
 
         if self._left_pinch_active:
             if self._left_pinch_since is None:
@@ -4646,245 +4630,258 @@ class GestureDetector:
         else:
             self._left_pinch_since = None
 
+        pinch_guard_active = (
+            self._left_pinch_active
+            or self._right_pinch_active
+            or (0.0 < (now - self._left_click_release_time) < self._keyboard_after_pinch_s)
+        )
+
         move_pose = fs.index and (not fs.middle) and (not fs.ring) and (not fs.pinky)
         scroll_pose = fs.index and fs.middle and (not fs.ring) and (not fs.pinky)
-        task_view_pose = fs.index and fs.middle and fs.ring and fs.pinky and fs.thumb
-        keyboard_pose = fs.thumb and fs.index and fs.pinky and (not fs.middle) and (not fs.ring)
+        open_palm = fs.thumb and fs.index and fs.middle and fs.ring and fs.pinky
+
+        thumb_tucked = self._distance(xy[4], xy[5]) / max(1.0, self._hand_scale) < 0.15
+        keyboard_pose = fs.index and fs.middle and fs.ring and fs.pinky and thumb_tucked
+
+        raw_state = GestureType.PAUSE
+        media_delta = 0
 
         if hand_label == "Left":
             self._dragging = False
+            self._drag_active = False
             self._scroll_prev_y = None
             self._scroll_accumulator = 0.0
             self._scroll_velocity_ema = 0.0
 
-            # Confidence gate for low-quality handedness frames.
-            confidence = float(hand_data.get("confidence", 0.0))
-            if confidence < 0.55:
-                self._left_media_anchor_y = None
-                self._state = GestureType.PAUSE
-                self._prev_gesture_state = GestureType.PAUSE
-                return GestureResult(GestureType.PAUSE, 0)
-
-            left_dist = self._distance(xy[4], xy[8])
-            right_dist = self._distance(xy[4], xy[12])
-            strong_pinch_enter = self._hand_scale * max(0.06, self._pinch_enter * 0.75)
-            strong_left_pinch = left_dist <= strong_pinch_enter and right_dist > (self._hand_scale * self._pinch_exit)
-            strong_right_pinch = right_dist <= strong_pinch_enter and left_dist > (self._hand_scale * self._pinch_exit)
-
-            raw_media = GestureType.PAUSE
             if scroll_pose and (not self._left_pinch_active) and (not self._right_pinch_active):
-                vol_delta = self._resolve_media_volume(current_y=float(xy[8][1]), hand_scale=self._hand_scale)
-                if vol_delta > 0:
-                    raw_media = GestureType.MEDIA_VOL_UP
-                elif vol_delta < 0:
-                    raw_media = GestureType.MEDIA_VOL_DOWN
+                media_delta = self._resolve_media_volume(current_y=float(xy[8][1]), hand_scale=self._hand_scale)
+                if media_delta > 0:
+                    raw_state = GestureType.MEDIA_VOL_UP
+                elif media_delta < 0:
+                    raw_state = GestureType.MEDIA_VOL_DOWN
                 else:
-                    raw_media = GestureType.PAUSE
+                    raw_state = GestureType.PAUSE
             else:
                 self._left_media_anchor_y = None
-                if self._left_pinch_active and (not self._right_pinch_active) and strong_left_pinch:
-                    raw_media = GestureType.MEDIA_NEXT
-                elif self._right_pinch_active and (not self._left_pinch_active) and strong_right_pinch:
-                    raw_media = GestureType.MEDIA_PREV
+                if self._left_pinch_active and not self._right_pinch_active:
+                    raw_state = GestureType.MEDIA_NEXT
+                elif self._right_pinch_active and not self._left_pinch_active:
+                    raw_state = GestureType.MEDIA_PREV
+                else:
+                    raw_state = GestureType.PAUSE
 
-            if raw_media in {GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN}:
-                stable_media = raw_media
-            else:
-                stable_media = self._stable_state(raw_media, now)
-
-            if stable_media == GestureType.MEDIA_NEXT:
-                edge = self._media_edge_state != GestureType.MEDIA_NEXT
-                if edge and now - self._last_media_next_time >= self._action_cooldown_s and now - self._last_media_action_time >= self._media_cooldown_s:
-                    self._last_media_next_time = now
-                    self._last_media_action_time = now
-                    self._media_edge_state = GestureType.MEDIA_NEXT
-                    self._state = GestureType.MEDIA_NEXT
-                    self._prev_gesture_state = GestureType.MEDIA_NEXT
-                    return GestureResult(GestureType.MEDIA_NEXT, 1)
-                self._media_edge_state = GestureType.MEDIA_NEXT
-                self._state = GestureType.PAUSE
-                return GestureResult(GestureType.PAUSE, 0)
-
-            if stable_media == GestureType.MEDIA_PREV:
-                edge = self._media_edge_state != GestureType.MEDIA_PREV
-                if edge and now - self._last_media_prev_time >= self._action_cooldown_s and now - self._last_media_action_time >= self._media_cooldown_s:
-                    self._last_media_prev_time = now
-                    self._last_media_action_time = now
-                    self._media_edge_state = GestureType.MEDIA_PREV
-                    self._state = GestureType.MEDIA_PREV
-                    self._prev_gesture_state = GestureType.MEDIA_PREV
-                    return GestureResult(GestureType.MEDIA_PREV, 1)
-                self._media_edge_state = GestureType.MEDIA_PREV
-                self._state = GestureType.PAUSE
-                return GestureResult(GestureType.PAUSE, 0)
-
-            if stable_media == GestureType.MEDIA_VOL_UP:
-                if now - self._last_media_next_time < self._action_cooldown_s:
-                    self._state = GestureType.PAUSE
-                    return GestureResult(GestureType.PAUSE, 0)
-                self._last_media_next_time = now
-                self._last_media_action_time = now
-                self._media_edge_state = GestureType.PAUSE
-                self._state = GestureType.MEDIA_VOL_UP
-                self._prev_gesture_state = GestureType.MEDIA_VOL_UP
-                return GestureResult(GestureType.MEDIA_VOL_UP, 1)
-
-            if stable_media == GestureType.MEDIA_VOL_DOWN:
-                if now - self._last_media_prev_time < self._action_cooldown_s:
-                    self._state = GestureType.PAUSE
-                    return GestureResult(GestureType.PAUSE, 0)
-                self._last_media_prev_time = now
-                self._last_media_action_time = now
-                self._media_edge_state = GestureType.PAUSE
-                self._state = GestureType.MEDIA_VOL_DOWN
-                self._prev_gesture_state = GestureType.MEDIA_VOL_DOWN
-                return GestureResult(GestureType.MEDIA_VOL_DOWN, 1)
-
-            self._media_edge_state = GestureType.PAUSE
-            self._state = GestureType.PAUSE
-            self._prev_gesture_state = GestureType.PAUSE
-            return GestureResult(GestureType.PAUSE, 0)
-
-        self._left_media_anchor_y = None
-
-        if task_view_pose and not self._left_pinch_active and not self._right_pinch_active:
-            if self._task_view_since is None:
-                self._task_view_since = now
-        else:
+            self._keyboard_hold_start = None
+            self._keyboard_fired = False
             self._task_view_since = None
+        else:
+            self._left_media_anchor_y = None
 
-        raw_state = GestureType.PAUSE
-        since_tv = self._task_view_since
-        since_lp = self._left_pinch_since
+            if open_palm and not self._left_pinch_active and not self._right_pinch_active:
+                if self._task_view_since is None:
+                    self._task_view_since = now
+                if now - self._task_view_since >= self._task_view_hold_s:
+                    raw_state = GestureType.TASK_VIEW
+                else:
+                    raw_state = GestureType.PAUSE
+            else:
+                self._task_view_since = None
 
-        if (
-            since_tv is not None
-            and task_view_pose
-            and (now - since_tv >= self._task_view_hold_s)
-            and not self._left_pinch_active
-            and not self._right_pinch_active
-        ):
-            raw_state = GestureType.TASK_VIEW
-        elif keyboard_pose and not pinch_guard_active:
-            raw_state = GestureType.KEYBOARD
-        elif self._left_pinch_active and since_lp is not None and (now - since_lp >= self._drag_activate_s):
-            raw_state = GestureType.DRAG
-        elif self._left_pinch_active and not self._right_pinch_active:
-                raw_state = GestureType.LEFT_CLICK
-        elif self._right_pinch_active and not self._left_pinch_active:
-            raw_state = GestureType.RIGHT_CLICK
-        elif scroll_pose and not self._left_pinch_active and not self._right_pinch_active:
-            raw_state = GestureType.SCROLL
-        elif move_pose:
-            raw_state = GestureType.MOVE
+                if keyboard_pose and not pinch_guard_active:
+                    if self._keyboard_hold_start is None:
+                        self._keyboard_hold_start = now
+                    hold_elapsed = now - self._keyboard_hold_start
+                    if hold_elapsed >= self._keyboard_hold_s and not self._keyboard_fired:
+                        raw_state = GestureType.KEYBOARD
+                        self._keyboard_fired = True
+                    else:
+                        raw_state = GestureType.PAUSE
+                else:
+                    self._keyboard_hold_start = None
+                    self._keyboard_fired = False
 
-        # ── BUG D FIX: Frame-count debounce ──
-        debounced_state = self._debounce_check(raw_state)
-        stable_state = self._stable_state(debounced_state, now)
+                    if self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):
+                        raw_state = GestureType.DRAG
+                    elif self._left_pinch_active and (not self._right_pinch_active):
+                        raw_state = GestureType.LEFT_CLICK
+                    elif self._right_pinch_active and (not self._left_pinch_active):
+                        raw_state = GestureType.RIGHT_CLICK
+                    elif scroll_pose and (not self._left_pinch_active) and (not self._right_pinch_active):
+                        raw_state = GestureType.SCROLL
+                    elif move_pose:
+                        raw_state = GestureType.MOVE
+                    else:
+                        raw_state = GestureType.PAUSE
 
-        if stable_state != GestureType.SCROLL and raw_state != GestureType.SCROLL:
-            self._scroll_prev_y = None
-            self._scroll_accumulator = 0.0
-            self._scroll_velocity_ema = 0.0
-            self._scroll_direction = 0
+        if raw_state != self._candidate:
+            self._candidate = raw_state
+            self._stable_start_t = now
 
-        if self._state == GestureType.LEFT_CLICK and stable_state != GestureType.LEFT_CLICK:
-            self._left_click_release_time = now
+        hold_elapsed = max(0.0, now - self._stable_start_t)
+        hold_target = max(0.001, float(self._confirm_hold_s))
+        hold_confidence = max(0.0, min(1.0, hold_elapsed / hold_target))
 
-        if (
-            now < self._locked_until
-            and self._state in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}
-            and stable_state not in {GestureType.LEFT_CLICK, GestureType.DRAG}
-        ):
-            return GestureResult(GestureType.MOVE, 0)
+        if is_grace_frame:
+            self._stable_start_t = now
+            stable_state = self._state
+            hold_confidence = 0.0
+        else:
+            if hold_elapsed >= hold_target:
+                stable_state = self._candidate
+            else:
+                stable_state = self._state
+
+        if stable_state != self._state:
+            self._gesture_entry_set.discard(self._state)
+
+        if stable_state != GestureType.SCROLL and self._state != GestureType.SCROLL:
+            self._clear_transient_motion()
+
+        if stable_state != GestureType.DRAG:
+            self._drag_active = False
 
         if stable_state == GestureType.LEFT_CLICK:
-            is_new_entry = (self._prev_gesture_state != GestureType.LEFT_CLICK
-                           and self._prev_gesture_state != GestureType.DRAG)
-            if is_new_entry and self._check_action_cooldown(GestureType.LEFT_CLICK, now):
-                if 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s:
+            if self._check_action_cooldown(GestureType.LEFT_CLICK, now):
+                if 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s and self._check_action_cooldown(GestureType.DOUBLE_CLICK, now):
                     self._last_double_click_time = now
                     self._last_click_time = now
                     self._locked_until = now + self._gesture_lock_s
                     self._state = GestureType.DOUBLE_CLICK
                     self._record_action(GestureType.DOUBLE_CLICK, now)
                     self._record_action(GestureType.LEFT_CLICK, now)
-                    self._prev_gesture_state = GestureType.DOUBLE_CLICK
-                    return GestureResult(GestureType.DOUBLE_CLICK, 0)
+                    self._gesture_entry_set.add(GestureType.LEFT_CLICK)
+                    self._gesture_entry_set.add(GestureType.DOUBLE_CLICK)
+                    self._dragging = False
+                    return self._make_result(GestureType.DOUBLE_CLICK, 0, 1.0)
+
                 self._last_click_time = now
                 self._locked_until = now + self._gesture_lock_s
                 self._state = GestureType.LEFT_CLICK
                 self._record_action(GestureType.LEFT_CLICK, now)
-                self._prev_gesture_state = GestureType.LEFT_CLICK
-                return GestureResult(GestureType.LEFT_CLICK, 0)
+                self._gesture_entry_set.add(GestureType.LEFT_CLICK)
+                self._dragging = False
+                return self._make_result(GestureType.LEFT_CLICK, 0, 1.0)
+
             self._state = GestureType.MOVE
-            self._prev_gesture_state = GestureType.MOVE
-            return GestureResult(GestureType.MOVE, 0)
+            self._dragging = False
+            return self._make_result(GestureType.MOVE, 0, hold_confidence)
 
         if stable_state == GestureType.RIGHT_CLICK:
-            is_new_entry = self._prev_gesture_state != GestureType.RIGHT_CLICK
-            if is_new_entry and self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
+            if self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
                 self._last_right_click_time = now
                 self._locked_until = now + self._gesture_lock_s
                 self._state = GestureType.RIGHT_CLICK
                 self._record_action(GestureType.RIGHT_CLICK, now)
-                self._prev_gesture_state = GestureType.RIGHT_CLICK
-                return GestureResult(GestureType.RIGHT_CLICK, 0)
+                self._gesture_entry_set.add(GestureType.RIGHT_CLICK)
+                self._dragging = False
+                return self._make_result(GestureType.RIGHT_CLICK, 0, 1.0)
+
             self._state = GestureType.MOVE
-            self._prev_gesture_state = GestureType.MOVE
-            return GestureResult(GestureType.MOVE, 0)
-
-        if stable_state == GestureType.TASK_VIEW:
-            self._state = GestureType.TASK_VIEW
-            self._task_view_since = None
-            self._prev_gesture_state = GestureType.TASK_VIEW
-            return GestureResult(GestureType.TASK_VIEW, 0)
-
-        if stable_state == GestureType.KEYBOARD:
-            if pinch_guard_active:
-                self._state = GestureType.MOVE
-                self._prev_gesture_state = GestureType.MOVE
-                return GestureResult(GestureType.MOVE, 0)
-            self._state = GestureType.KEYBOARD
-            self._prev_gesture_state = GestureType.KEYBOARD
-            return GestureResult(GestureType.KEYBOARD, 0)
+            self._dragging = False
+            return self._make_result(GestureType.MOVE, 0, hold_confidence)
 
         if stable_state == GestureType.DRAG:
             self._dragging = True
+            self._drag_active = True
             self._state = GestureType.DRAG
-            self._prev_gesture_state = GestureType.DRAG
-            return GestureResult(GestureType.DRAG, 0)
-
-        self._dragging = False
+            return self._make_result(GestureType.DRAG, 0, max(hold_confidence, 0.8))
 
         if stable_state == GestureType.SCROLL:
-            scroll_delta = self._resolve_scroll(current_y=float(xy[8][1]), hand_scale=self._hand_scale)
+            delta = self._resolve_scroll(current_y=float(xy[8][1]), hand_scale=self._hand_scale)
             self._state = GestureType.SCROLL
-            self._prev_gesture_state = GestureType.SCROLL
-            return GestureResult(GestureType.SCROLL, scroll_delta)
+            self._dragging = False
+            return self._make_result(GestureType.SCROLL, delta, max(hold_confidence, 0.8))
+
+        if stable_state == GestureType.KEYBOARD:
+            self._state = GestureType.KEYBOARD
+            self._gesture_entry_set.add(GestureType.KEYBOARD)
+            self._dragging = False
+            return self._make_result(GestureType.KEYBOARD, 0, 1.0)
+
+        if stable_state == GestureType.TASK_VIEW:
+            self._state = GestureType.TASK_VIEW
+            self._gesture_entry_set.add(GestureType.TASK_VIEW)
+            self._task_view_since = None
+            self._dragging = False
+            return self._make_result(GestureType.TASK_VIEW, 0, 1.0)
+
+        if stable_state == GestureType.MEDIA_NEXT:
+            edge = self._media_edge_state != GestureType.MEDIA_NEXT
+            if edge and self._check_action_cooldown(GestureType.MEDIA_NEXT, now) and (now - self._last_media_action_time >= self._media_cooldown_s):
+                self._last_media_next_time = now
+                self._last_media_action_time = now
+                self._record_action(GestureType.MEDIA_NEXT, now)
+                self._gesture_entry_set.add(GestureType.MEDIA_NEXT)
+                self._media_edge_state = GestureType.MEDIA_NEXT
+                self._state = GestureType.MEDIA_NEXT
+                return self._make_result(GestureType.MEDIA_NEXT, 1, 1.0)
+            self._media_edge_state = GestureType.MEDIA_NEXT
+            self._state = GestureType.PAUSE
+            return self._make_result(GestureType.PAUSE, 0, hold_confidence)
+
+        if stable_state == GestureType.MEDIA_PREV:
+            edge = self._media_edge_state != GestureType.MEDIA_PREV
+            if edge and self._check_action_cooldown(GestureType.MEDIA_PREV, now) and (now - self._last_media_action_time >= self._media_cooldown_s):
+                self._last_media_prev_time = now
+                self._last_media_action_time = now
+                self._record_action(GestureType.MEDIA_PREV, now)
+                self._gesture_entry_set.add(GestureType.MEDIA_PREV)
+                self._media_edge_state = GestureType.MEDIA_PREV
+                self._state = GestureType.MEDIA_PREV
+                return self._make_result(GestureType.MEDIA_PREV, 1, 1.0)
+            self._media_edge_state = GestureType.MEDIA_PREV
+            self._state = GestureType.PAUSE
+            return self._make_result(GestureType.PAUSE, 0, hold_confidence)
+
+        if stable_state == GestureType.MEDIA_VOL_UP:
+            if media_delta > 0 and self._check_action_cooldown(GestureType.MEDIA_VOL_UP, now):
+                self._record_action(GestureType.MEDIA_VOL_UP, now)
+                self._state = GestureType.MEDIA_VOL_UP
+                self._media_edge_state = GestureType.PAUSE
+                return self._make_result(GestureType.MEDIA_VOL_UP, abs(media_delta), 1.0)
+            self._state = GestureType.PAUSE
+            return self._make_result(GestureType.PAUSE, 0, hold_confidence)
+
+        if stable_state == GestureType.MEDIA_VOL_DOWN:
+            if media_delta < 0 and self._check_action_cooldown(GestureType.MEDIA_VOL_DOWN, now):
+                self._record_action(GestureType.MEDIA_VOL_DOWN, now)
+                self._state = GestureType.MEDIA_VOL_DOWN
+                self._media_edge_state = GestureType.PAUSE
+                return self._make_result(GestureType.MEDIA_VOL_DOWN, abs(media_delta), 1.0)
+            self._state = GestureType.PAUSE
+            return self._make_result(GestureType.PAUSE, 0, hold_confidence)
 
         if stable_state == GestureType.MOVE:
-            if self._z_tap_triggered(hand_data, fs, now):
+            if self._z_tap_triggered(hand_data, fs, now) and self._check_action_cooldown(GestureType.LEFT_CLICK, now):
                 self._last_click_time = now
                 self._locked_until = now + self._gesture_lock_s
                 self._state = GestureType.LEFT_CLICK
                 self._record_action(GestureType.LEFT_CLICK, now)
-                self._prev_gesture_state = GestureType.LEFT_CLICK
-                return GestureResult(GestureType.LEFT_CLICK, 0)
+                self._gesture_entry_set.add(GestureType.LEFT_CLICK)
+                self._dragging = False
+                return self._make_result(GestureType.LEFT_CLICK, 0, 1.0)
+
             self._state = GestureType.MOVE
-            self._prev_gesture_state = GestureType.MOVE
-            return GestureResult(GestureType.MOVE, 0)
+            self._dragging = False
+            self._media_edge_state = GestureType.PAUSE
+            return self._make_result(GestureType.MOVE, 0, max(hold_confidence, 0.5))
 
         self._state = GestureType.PAUSE
-        self._prev_gesture_state = GestureType.PAUSE
-        return GestureResult(GestureType.PAUSE, 0)
+        self._dragging = False
+        self._media_edge_state = GestureType.PAUSE
+        return self._make_result(GestureType.PAUSE, 0, hold_confidence)
 
 === src/hand_tracker.py ===
 from __future__ import annotations
 
-import cv2
 from collections import deque
 
+import cv2
+
+from .tuning import (
+    HAND_LABEL_MAJORITY_RATIO,
+    HAND_LOCK_CONFIDENCE_THRESHOLD,
+    HAND_LOCKED_DROP_THRESHOLD,
+)
 from .utils import _ensure_mediapipe_solutions
 
 try:
@@ -4900,7 +4897,8 @@ if mp is not None:
 class HandTracker:
     def __init__(self) -> None:
         self._process_size: tuple[int, int] | None = None
-        self._label_history: deque = deque(maxlen=9)
+        self._label_history: deque[str] = deque(maxlen=9)
+        self._stable_label = "Right"
         _ensure_mediapipe_solutions()
 
         self._mp_hands = mp.solutions.hands  # type: ignore[attr-defined]
@@ -4915,13 +4913,13 @@ class HandTracker:
             min_tracking_confidence=0.5,
         )
 
-        # ── BUG B FIX: Grace period for hand loss ──
         self._frames_no_hand = 0
         self._grace_frames = 4
-        self._last_valid_result: tuple | None = None  # (hand_data, hand_proto)
-        self._log_cooldown_s = 5.0
-        self._last_log_ts = 0.0
-        self._last_logged_label = ""
+        self._last_valid_result: tuple[dict, object] | None = None
+
+        self._hand_lock_frames = 0
+        self._hand_locked = False
+        self._low_conf_drop_frames = 0
 
     def set_processing_size(self, size: tuple[int, int] | None) -> None:
         if size is None:
@@ -4930,7 +4928,47 @@ class HandTracker:
         w, h = size
         self._process_size = (max(64, int(w)), max(64, int(h)))
 
-    def detect(self, frame_bgr, is_mirrored=False):
+    def _resolve_label(self, label: str) -> str:
+        self._label_history.append(label)
+        history = list(self._label_history)
+        total = len(history)
+        threshold = max(6, int(total * HAND_LABEL_MAJORITY_RATIO))
+
+        right_count = history.count("Right")
+        left_count = history.count("Left")
+
+        if right_count >= threshold:
+            self._stable_label = "Right"
+        elif left_count >= threshold:
+            self._stable_label = "Left"
+
+        return self._stable_label
+
+    def _passes_confidence_gate(self, confidence: float) -> bool:
+        if self._hand_locked:
+            if confidence < HAND_LOCKED_DROP_THRESHOLD:
+                self._low_conf_drop_frames += 1
+            else:
+                self._low_conf_drop_frames = 0
+
+            if self._low_conf_drop_frames >= 5:
+                self._hand_locked = False
+                self._hand_lock_frames = 0
+                self._low_conf_drop_frames = 0
+                return False
+            return True
+
+        if confidence >= HAND_LOCK_CONFIDENCE_THRESHOLD:
+            self._hand_lock_frames += 1
+            if self._hand_lock_frames >= 3:
+                self._hand_locked = True
+                self._low_conf_drop_frames = 0
+            return True
+
+        self._hand_lock_frames = 0
+        return False
+
+    def detect(self, frame_bgr, is_mirrored: bool = False):
         src_h, src_w = frame_bgr.shape[:2]
 
         detect_frame = frame_bgr
@@ -4942,50 +4980,31 @@ class HandTracker:
         result = self._hands.process(rgb)
 
         if not result.multi_hand_landmarks or not result.multi_handedness:
-            # ── BUG B FIX: Grace period — emit last known hand for 8 frames ──
             self._frames_no_hand += 1
             if self._frames_no_hand < self._grace_frames and self._last_valid_result is not None:
-                return self._last_valid_result
+                hand_data, hand_proto = self._last_valid_result
+                return hand_data, hand_proto, True
             self._label_history.clear()
+            self._hand_lock_frames = 0
+            self._hand_locked = False
+            self._low_conf_drop_frames = 0
             self._last_valid_result = None
-            return None, None
+            return None, None, False
 
-        # Hand detected — reset grace counter
         self._frames_no_hand = 0
 
         hand = result.multi_hand_landmarks[0]
         raw_label = result.multi_handedness[0].classification[0].label
-        # If the frame is already mirrored (cv2.flip), MediaPipe's label is correct.
-        # If not mirrored, MediaPipe sees a mirror image, so we flip the label.
         if is_mirrored:
             label = raw_label
         else:
             label = "Right" if raw_label == "Left" else "Left"
 
-        # Smooth label over last 9 frames — require 7/9 majority to switch
-        self._label_history.append(label)
-        right_count = list(self._label_history).count("Right")
-        left_count = list(self._label_history).count("Left")
-        total = len(self._label_history)
-        # Only switch if strong majority (7+ of 9 frames agree)
-        threshold = max(5, int(total * 0.75))
-        if right_count >= threshold:
-            label = "Right"
-        elif left_count >= threshold:
-            label = "Left"
-        else:
-            # No strong majority — keep previous label
-            label = self._last_logged_label if self._last_logged_label else "Right"
+        label = self._resolve_label(label)
+        confidence = float(result.multi_handedness[0].classification[0].score)
 
-        self._last_logged_label = label
-        # Hand label logging disabled for production
-
-        confidence = result.multi_handedness[0].classification[0].score
-
-        # Reject low-confidence labels to avoid ghost actions.
-        if confidence < 0.55:
-            # Low confidence — don't use grace period, return nothing
-            return None, None
+        if not self._passes_confidence_gate(confidence):
+            return None, None, False
 
         if self._process_size is None:
             xy = [(int(lm.x * src_w), int(lm.y * src_h)) for lm in hand.landmark]
@@ -4993,6 +5012,7 @@ class HandTracker:
             sx = float(src_w) / float(max(1, w))
             sy = float(src_h) / float(max(1, h))
             xy = [(int(lm.x * w * sx), int(lm.y * h * sy)) for lm in hand.landmark]
+
         z = [float(lm.z) for lm in hand.landmark]
         hand_data = {
             "xy": xy,
@@ -5002,10 +5022,8 @@ class HandTracker:
             "frame_size": (w, h),
         }
 
-        # Save for grace period
         self._last_valid_result = (hand_data, hand)
-
-        return hand_data, hand
+        return hand_data, hand, False
 
     def draw(self, frame_rgb, hand_proto, label: str = "Right") -> None:
         if hand_proto is None:
@@ -5056,7 +5074,7 @@ except ImportError:
     pyautogui = None  # type: ignore
 
 import qtawesome as qta
-from PySide6.QtCore import QMetaObject, QSize, Slot, Qt, QTimer
+from PySide6.QtCore import QMetaObject, QSize, Signal, Slot, Qt, QTimer
 from PySide6.QtGui import QAction, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -5558,6 +5576,8 @@ class SettingsDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    _camera_start_result = Signal(bool)
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -5648,8 +5668,11 @@ class MainWindow(QMainWindow):
         self._gesture_history: collections.deque = collections.deque(maxlen=6)
         self._last_debug_print_ts = 0.0
         self._last_debug_label: str = ""
+        self._drag_active = False
+        self._start_worker: threading.Thread | None = None
 
         self._build_ui()
+        self._camera_start_result.connect(self._on_camera_start_done)
         self._setup_tray()
         self._start_hotkey_listener()
 
@@ -5745,7 +5768,7 @@ class MainWindow(QMainWindow):
         self.gesture_lbl = QLabel("STANDBY")
         self.gesture_lbl.setObjectName("badge")
         self.gesture_lbl.setWordWrap(False)
-        self.gesture_lbl.setMinimumWidth(120)
+        self.gesture_lbl.setMinimumWidth(140)
         
         self.hand_lbl = QLabel("Hand: Not Detected")
         self.hand_lbl.setObjectName("secondary")
@@ -5813,8 +5836,8 @@ class MainWindow(QMainWindow):
             gl.addWidget(dl, i, 2)
             
         gl.setColumnStretch(2, 1)
-        gl.setColumnStretch(0, 0)
         gl.setColumnStretch(1, 2)
+        gl.setColumnStretch(0, 0)
 
         history_card = QFrame()
         history_card.setObjectName("sideCard")
@@ -6249,6 +6272,8 @@ class MainWindow(QMainWindow):
     def start_camera(self) -> None:
         if self.running:
             return
+        if self._start_worker is not None and self._start_worker.is_alive():
+            return
         if self._mediapipe_error:
             self.preview.setText(self._mediapipe_error)
             return
@@ -6270,17 +6295,51 @@ class MainWindow(QMainWindow):
         self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.30), 0.30)
         self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.08, _as_float(settings.get("pinch_exit_sensitivity", 0.45), 0.45))
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
+        self.gestures.reset_cooldowns()
+        self._drag_active = False
 
         if _as_bool(settings.get("performance_mode", False), False):
             self.tracker.set_processing_size((320, 240))
         else:
             self.tracker.set_processing_size(None)
 
+        cameras = self._refresh_camera_cache(force=True)
+        if not cameras:
+            msg = "No camera detected. Start DroidCam video feed, then try again."
+            self.preview.setText(msg)
+            self.cam_status.setText(msg)
+            self.start_btn.setEnabled(True)
+            self.start_btn.setText(" Initialize")
+            return
+
         self.camera.camera_index = _as_int(settings.get("camera_index", self.camera.camera_index), self.camera.camera_index)
-        if not self.camera.start():
+        available = {dev.index for dev in cameras}
+        if self.camera.camera_index not in available:
+            self.camera.camera_index = cameras[0].index
+            settings.set("camera_index", self.camera.camera_index)
+
+        self.start_btn.setEnabled(False)
+        self.start_btn.setText("Opening camera...")
+        self.cam_status.setText("Opening camera...")
+
+        def _worker() -> None:
+            ok = self.camera.start()
+            self._camera_start_result.emit(ok)
+
+        self._start_worker = threading.Thread(target=_worker, daemon=True)
+        self._start_worker.start()
+
+    @Slot(bool)
+    def _on_camera_start_done(self, ok: bool) -> None:
+        self.start_btn.setText(" Initialize")
+        self._start_worker = None
+
+        if not ok:
             detail = self.camera.last_error or "Cannot open camera"
             self.preview.setText(detail)
             self.cam_status.setText(detail)
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
             return
 
         self.running = True
@@ -6306,6 +6365,7 @@ class MainWindow(QMainWindow):
         self.camera.stop()
         if self.mouse.is_dragging:
             self.mouse.end_drag()
+        self._drag_active = False
 
         self.mapper.reset()
         with self._lock:
@@ -6396,6 +6456,7 @@ class MainWindow(QMainWindow):
 
     def _cancel_actions(self) -> None:
         self._end_drag_now()
+        self._drag_active = False
         self.mapper.reset()
         self.gestures._state = GestureType.PAUSE
 
@@ -6448,7 +6509,7 @@ class MainWindow(QMainWindow):
                     time.sleep(0.01)
                     continue
 
-                hand_data, hand_proto = tracker.detect(frame, is_mirrored=self._mirror_camera)
+                hand_data, hand_proto, is_grace = tracker.detect(frame, is_mirrored=self._mirror_camera)
 
                 if hand_proto is not None:
                     last_hand_time = time.monotonic()
@@ -6460,7 +6521,7 @@ class MainWindow(QMainWindow):
                 else:
                     self._camera_error_text = self.camera.last_error
 
-                result = self.gestures.detect(hand_data)
+                result = self.gestures.detect(hand_data, is_grace_frame=is_grace)
                 if result is None:
                     result = GestureResult(GestureType.PAUSE, 0)
                 # Safety: verify confidence before allowing actions
@@ -6524,19 +6585,23 @@ class MainWindow(QMainWindow):
                     elif gesture == GestureType.SCROLL:
                         self.mouse.scroll(int(result.scroll_delta * self._scroll_multiplier))
                     elif gesture == GestureType.DRAG:
-                        if not self.mouse.is_dragging:
+                        if not self._drag_active:
                             self.mouse.move(sx, sy)
                             self.mouse.start_drag()
+                            self._drag_active = True
                         else:
                             self.mouse.move(sx, sy)
 
                     if gesture != GestureType.DRAG and self.mouse.is_dragging:
                         self.mouse.end_drag()
+                        self._drag_active = False
                 elif self.mouse.is_dragging:
                     self.mouse.end_drag()
+                    self._drag_active = False
 
                 if not self.mouse_enabled and self.mouse.is_dragging:
                     self.mouse.end_drag()
+                    self._drag_active = False
 
                 if gesture != last_overlay:
                     overlay = _OVERLAY_LABELS.get(gesture, "")
@@ -6758,10 +6823,28 @@ class FingerStates:
 from __future__ import annotations
 
 import collections
+import ctypes
 import platform
 import subprocess
 import threading
 import time
+
+try:
+    import pyautogui  # type: ignore
+
+    pyautogui.FAILSAFE = False
+    pyautogui.PAUSE = 0.0
+except Exception:
+    pyautogui = None  # type: ignore[assignment]
+
+if platform.system() == "Windows":
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # type: ignore[attr-defined]
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
 from .tuning import MOUSE_WORKER_HZ
 
@@ -7136,26 +7219,33 @@ from __future__ import annotations
 CAMERA_TARGET_SIZES = ((1280, 720), (640, 480))
 CAMERA_READ_RETRY_LIMIT = 45
 CAMERA_REOPEN_COOLDOWN_S = 0.15
-CAMERA_LOOP_IDLE_S = 0.0
 CAMERA_FAIL_SLEEP_S = 0.001
 
 # Cursor mapper
 CURSOR_INNER_RATIO = 0.80
 CURSOR_SPEED_NORM_RATIO = 0.05
-CURSOR_DEADZONE_BASE = 1.8
-CURSOR_DEADZONE_SCALE_FACTOR = 0.035
+CURSOR_DEADZONE_BASE = 0.0
+CURSOR_DEADZONE_SCALE_FACTOR = 0.0
+CURSOR_SOFT_DEADZONE_PX = 3.0
 
 # Gesture
-GESTURE_CONFIRM_HOLD_S = 0.18
-GESTURE_ACTION_COOLDOWN_S = 0.25
-GESTURE_LOCK_S = 0.16
-GESTURE_DRAG_ACTIVATE_S = 0.28
-GESTURE_DOUBLE_CLICK_WINDOW_S = 0.32
-GESTURE_SCROLL_GAIN = 1
+GESTURE_CONFIRM_HOLD_S = 0.04
+GESTURE_ACTION_COOLDOWN_S = 0.22
+GESTURE_LOCK_S = 0.10
+GESTURE_DRAG_ACTIVATE_S = 0.24
+GESTURE_DOUBLE_CLICK_WINDOW_S = 0.55
+GESTURE_SCROLL_GAIN = 2
 GESTURE_Z_TAP_ENTER = -0.06
 GESTURE_Z_TAP_EXIT = -0.03
-GESTURE_KEYBOARD_AFTER_PINCH_S = 0.07
-GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.12
+GESTURE_KEYBOARD_AFTER_PINCH_S = 0.0
+GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.06
+GESTURE_RIGHT_CLICK_HOLD_S = 0.08
+GESTURE_KEYBOARD_HOLD_S = 0.50
+
+# Hand tracker
+HAND_LABEL_MAJORITY_RATIO = 0.72
+HAND_LOCK_CONFIDENCE_THRESHOLD = 0.30
+HAND_LOCKED_DROP_THRESHOLD = 0.20
 
 # Mouse worker
 MOUSE_WORKER_HZ = 240.0

@@ -7,20 +7,20 @@ import threading
 import time
 from typing import Any, cast
 
-import cv2
+import cv2  # type: ignore
 
 # ── BUG C FIX: pyautogui configuration for Windows ──
 try:
-    import pyautogui
+    import pyautogui  # type: ignore
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
 except ImportError:
     pyautogui = None  # type: ignore
 
-import qtawesome as qta
-from PySide6.QtCore import QMetaObject, QSize, Slot, Qt, QTimer
-from PySide6.QtGui import QAction, QImage, QPixmap
-from PySide6.QtWidgets import (
+import qtawesome as qta  # type: ignore
+from PySide6.QtCore import QMetaObject, QSize, Signal, Slot, Qt, QTimer  # type: ignore
+from PySide6.QtGui import QAction, QImage, QPixmap  # type: ignore
+from PySide6.QtWidgets import (  # type: ignore
     QApplication,
     QCheckBox,
     QComboBox,
@@ -42,15 +42,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .camera_thread import CameraDevice, CameraThread
-from .constants import _OVERLAY_LABELS
-from .cursor_mapper import CursorMapper
-from .gesture_detector import GestureDetector
-from .hand_tracker import HandTracker
-from .models import GestureResult, GestureType
-from .mouse import MouseController
-from .settings_store import settings
-from .utils import _boost_runtime_priority, _configure_input_latency
+from .camera_thread import CameraDevice, CameraThread  # type: ignore
+from .constants import _OVERLAY_LABELS  # type: ignore
+from .cursor_mapper import CursorMapper  # type: ignore
+from .gesture_detector import GestureDetector  # type: ignore
+from .hand_tracker import HandTracker  # type: ignore
+from .models import GestureResult, GestureType  # type: ignore
+from .mouse import MouseController  # type: ignore
+from .settings_store import settings  # type: ignore
+from .utils import _boost_runtime_priority, _configure_input_latency  # type: ignore
 
 
 def _as_int(value: object, default: int) -> int:
@@ -90,7 +90,7 @@ def _gesture_accent(gesture: GestureType) -> str:
 
 class StatusOverlay(QWidget):
     def __init__(self, icons: dict[str, object]) -> None:
-        super().__init__(None)
+        super().__init__(None)  # type: ignore
         self._icons = icons
         self.setWindowTitle("Windows Hover Status")
         self.setWindowFlags(
@@ -201,7 +201,7 @@ class StatusOverlay(QWidget):
 
 class SettingsDialog(QDialog):
     def __init__(self, parent: "MainWindow", cameras: list[CameraDevice], selected_index: int) -> None:
-        super().__init__(parent)
+        super().__init__(parent)  # type: ignore
         self._mw = parent
         self.setWindowTitle("Settings")
         self.setModal(True)
@@ -520,6 +520,8 @@ class SettingsDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
+    _camera_start_result = Signal(bool)
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -611,8 +613,10 @@ class MainWindow(QMainWindow):
         self._last_debug_print_ts = 0.0
         self._last_debug_label: str = ""
         self._drag_active = False
+        self._start_worker: threading.Thread | None = None
 
         self._build_ui()
+        self._camera_start_result.connect(self._on_camera_start_done)
         self._setup_tray()
         self._start_hotkey_listener()
 
@@ -1212,6 +1216,8 @@ class MainWindow(QMainWindow):
     def start_camera(self) -> None:
         if self.running:
             return
+        if self._start_worker is not None and self._start_worker.is_alive():  # type: ignore
+            return
         if self._mediapipe_error:
             self.preview.setText(self._mediapipe_error)
             return
@@ -1241,16 +1247,48 @@ class MainWindow(QMainWindow):
         else:
             self.tracker.set_processing_size(None)
 
+        cameras = self._refresh_camera_cache(force=True)
+        if not cameras:
+            msg = "No camera detected. Start DroidCam video feed, then try again."
+            self.preview.setText(msg)
+            self.cam_status.setText(msg)
+            self.start_btn.setEnabled(True)
+            self.start_btn.setText(" Initialize")
+            return
+
         self.camera.camera_index = _as_int(settings.get("camera_index", self.camera.camera_index), self.camera.camera_index)
-        if not self.camera.start():
+        available = {dev.index for dev in cameras}
+        if self.camera.camera_index not in available:
+            self.camera.camera_index = cameras[0].index
+            settings.set("camera_index", self.camera.camera_index)
+
+        self.start_btn.setEnabled(False)
+        self.start_btn.setText("Opening camera...")
+        self.cam_status.setText("Opening camera...")
+
+        def _worker() -> None:
+            ok = self.camera.start()
+            self._camera_start_result.emit(ok)
+
+        self._start_worker = threading.Thread(target=_worker, daemon=True)
+        self._start_worker.start()  # type: ignore
+
+    @Slot(bool)
+    def _on_camera_start_done(self, ok: bool) -> None:
+        self.start_btn.setText(" Initialize")
+        self._start_worker = None
+
+        if not ok:
             detail = self.camera.last_error or "Cannot open camera"
             self.preview.setText(detail)
             self.cam_status.setText(detail)
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
             return
 
         self.running = True
         self.proc_thread = threading.Thread(target=self._process_loop, daemon=True)
-        self.proc_thread.start()
+        self.proc_thread.start()  # type: ignore
 
         self.cam_status.setText("Camera Active")
         self._status_dot.setObjectName("statusOnline")
@@ -1264,8 +1302,8 @@ class MainWindow(QMainWindow):
 
     def stop_camera(self) -> None:
         self.running = False
-        if self.proc_thread and self.proc_thread.is_alive():
-            self.proc_thread.join(timeout=1.5)
+        if self.proc_thread and self.proc_thread.is_alive():  # type: ignore
+            self.proc_thread.join(timeout=1.5)  # type: ignore
         self.proc_thread = None
 
         self.camera.stop()
@@ -1295,9 +1333,9 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
 
         if self._overlay is not None:
-            settings.set("overlay_x", self._overlay.x())
-            settings.set("overlay_y", self._overlay.y())
-            self._overlay.close()
+            settings.set("overlay_x", self._overlay.x())  # type: ignore
+            settings.set("overlay_y", self._overlay.y())  # type: ignore
+            self._overlay.close()  # type: ignore
             self._overlay = None
 
     def _on_tray_activated(self, reason):
@@ -1318,36 +1356,36 @@ class MainWindow(QMainWindow):
 
             if self._overlay is None:
                 self._overlay = StatusOverlay(self.icons)
-                self._overlay.open_btn.clicked.connect(self._show_main_window)
-                self._overlay.disable_btn.clicked.connect(self._disable_mouse_from_overlay)
+                self._overlay.open_btn.clicked.connect(self._show_main_window)  # type: ignore
+                self._overlay.disable_btn.clicked.connect(self._disable_mouse_from_overlay)  # type: ignore
                 try:
                     screen = QApplication.primaryScreen()
                     if screen:
                         sg = screen.availableGeometry()
-                        self._overlay.move(
-                            max(10, sg.right() - self._overlay.width() - 20),
+                        self._overlay.move(  # type: ignore
+                            max(10, sg.right() - self._overlay.width() - 20),  # type: ignore
                             sg.top() + 20,
                         )
                     else:
-                        self._overlay.move(20, 20)
+                        self._overlay.move(20, 20)  # type: ignore
                 except Exception:
-                    self._overlay.move(20, 20)
+                    self._overlay.move(20, 20)  # type: ignore
 
                 ox = _as_int(settings.get("overlay_x", -1), -1)
                 oy = _as_int(settings.get("overlay_y", -1), -1)
                 if ox >= 0 and oy >= 0:
-                    self._overlay.move(ox, oy)
+                    self._overlay.move(ox, oy)  # type: ignore
 
-                self._overlay.show()
+                self._overlay.show()  # type: ignore
 
             self.showMinimized()
         else:
             self.mouse_btn.setText("Enable Mouse")
             self.mouse_lbl.setText("Mouse: OFF")
             if self._overlay is not None:
-                settings.set("overlay_x", self._overlay.x())
-                settings.set("overlay_y", self._overlay.y())
-                self._overlay.close()
+                settings.set("overlay_x", self._overlay.x())  # type: ignore
+                settings.set("overlay_y", self._overlay.y())  # type: ignore
+                self._overlay.close()  # type: ignore
                 self._overlay = None
             self.showNormal()
             self.raise_()
@@ -1394,40 +1432,40 @@ class MainWindow(QMainWindow):
         _boost_runtime_priority()
         # cv2.setUseOptimized is configured globally; skip per-thread call.
 
-        while self.running:
+        while self.running:  # type: ignore
             if time.monotonic() - last_hand_time > 5.0:
                 time.sleep(0.005)
 
             try:
-                frame = self.camera.latest()
+                frame = self.camera.latest()  # type: ignore
                 if frame is None:
                     time.sleep(0.001)
                     continue
 
-                if self._mirror_camera:
+                if self._mirror_camera:  # type: ignore
                     frame = cv2.flip(frame, 1)
 
                 h, w = frame.shape[:2]
-                self.mapper.set_camera_size(w, h)
+                self.mapper.set_camera_size(w, h)  # type: ignore
 
-                tracker = self.tracker
+                tracker = self.tracker  # type: ignore
                 if tracker is None:
                     time.sleep(0.01)
                     continue
 
-                hand_data, hand_proto, is_grace = tracker.detect(frame, is_mirrored=self._mirror_camera)
+                hand_data, hand_proto, is_grace = tracker.detect(frame, is_mirrored=self._mirror_camera)  # type: ignore
 
                 if hand_proto is not None:
                     last_hand_time = time.monotonic()
                     wrist = hand_data["xy"][0]
                     middle_mcp = hand_data["xy"][9]
                     scale = ((wrist[0] - middle_mcp[0]) ** 2 + (wrist[1] - middle_mcp[1]) ** 2) ** 0.5
-                    self.mapper.set_hand_scale(scale)
-                    self._camera_error_text = ""
+                    self.mapper.set_hand_scale(scale)  # type: ignore
+                    self._camera_error_text = ""  # type: ignore
                 else:
-                    self._camera_error_text = self.camera.last_error
+                    self._camera_error_text = self.camera.last_error  # type: ignore
 
-                result = self.gestures.detect(hand_data, is_grace_frame=is_grace)
+                result = self.gestures.detect(hand_data, is_grace_frame=is_grace)  # type: ignore
                 if result is None:
                     result = GestureResult(GestureType.PAUSE, 0)
                 # Safety: verify confidence before allowing actions
@@ -1586,7 +1624,7 @@ class MainWindow(QMainWindow):
 
         if self._overlay is not None:
             try:
-                self._overlay.update_status(gesture, self.fps, hand_proto is not None)
+                self._overlay.update_status(gesture, self.fps, hand_proto is not None)  # type: ignore
             except Exception:
                 pass
 
@@ -1644,26 +1682,26 @@ class MainWindow(QMainWindow):
         self._quitting = True
         self._save_window_geometry()
         if self._overlay is not None:
-            settings.set("overlay_x", self._overlay.x())
-            settings.set("overlay_y", self._overlay.y())
+            settings.set("overlay_x", self._overlay.x())  # type: ignore
+            settings.set("overlay_y", self._overlay.y())  # type: ignore
         if self._tray is not None:
-            self._tray.hide()
+            self._tray.hide()  # type: ignore
         self.stop_camera()
         if self.tracker is not None:
-            self.tracker.close()
+            self.tracker.close()  # type: ignore
         self.mouse.stop()
-        QApplication.instance().quit()
+        QApplication.instance().quit()  # type: ignore
 
     def closeEvent(self, event) -> None:
-        if self._tray is not None and self._tray.isVisible() and not self._quitting:
+        if self._tray is not None and self._tray.isVisible() and not self._quitting:  # type: ignore
             self.hide()
             event.ignore()
             return
 
         self._save_window_geometry()
         if self._overlay is not None:
-            settings.set("overlay_x", self._overlay.x())
-            settings.set("overlay_y", self._overlay.y())
+            settings.set("overlay_x", self._overlay.x())  # type: ignore
+            settings.set("overlay_y", self._overlay.y())  # type: ignore
 
         try:
             self.stop_camera()
@@ -1671,7 +1709,7 @@ class MainWindow(QMainWindow):
             pass
         try:
             if self.tracker is not None:
-                self.tracker.close()
+                self.tracker.close()  # type: ignore
         except Exception:
             pass
         try:
@@ -1679,6 +1717,6 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         if self._dimmer is not None:
-            self._dimmer.deleteLater()
+            self._dimmer.deleteLater()  # type: ignore
             self._dimmer = None
         event.accept()

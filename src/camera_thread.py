@@ -5,21 +5,33 @@ import threading
 import time
 import os
 from dataclasses import dataclass
+from typing import Any, cast
 
-import cv2
+import cv2  # type: ignore
 
 try:
     cv2.setLogLevel(0)
 except Exception:
     pass
 
-from .tuning import (
-    CAMERA_FAIL_SLEEP_S,
-    CAMERA_LOOP_IDLE_S,
-    CAMERA_READ_RETRY_LIMIT,
-    CAMERA_REOPEN_COOLDOWN_S,
-    CAMERA_TARGET_SIZES,
-)
+
+def _videowriter_fourcc(*chars: str) -> int:
+    fn = getattr(cv2, "VideoWriter_fourcc", None)
+    if callable(fn):
+        value = cast(Any, fn)(*chars)
+        return int(cast(Any, value))
+    writer = getattr(cv2, "VideoWriter", None)
+    if writer is not None:
+        fn2 = getattr(writer, "fourcc", None)
+        if callable(fn2):
+            value = cast(Any, fn2)(*chars)
+            return int(cast(Any, value))
+    return 0
+
+
+_MJPG_FOURCC = _videowriter_fourcc(*"MJPG")
+
+from .tuning import CAMERA_FAIL_SLEEP_S, CAMERA_READ_RETRY_LIMIT, CAMERA_REOPEN_COOLDOWN_S, CAMERA_TARGET_SIZES  # type: ignore
 
 FilterGraph = None  # type: ignore[assignment]
 wmi = None  # type: ignore[assignment]
@@ -60,31 +72,17 @@ class CameraThread:
 
     def _backend_candidates(self) -> list[int]:
         if self._is_windows:
-            # CAP_ANY stays as a last fallback because some virtual cams expose
-            # only a generic backend path on certain Windows builds.
             return [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
         return [cv2.CAP_ANY]
 
     @staticmethod
-    def _try_read_frames(cap: cv2.VideoCapture, count: int = 8) -> bool:
+    def _try_read_frames(cap: cv2.VideoCapture, count: int = 5) -> bool:
         for _ in range(count):
             ok, frame = cap.read()
             if ok and frame is not None:
                 return True
-            time.sleep(0.03)
+            time.sleep(0.025)
         return False
-
-    @staticmethod
-    def _drain_and_read(cap: cv2.VideoCapture):
-        return cap.read()
-
-    def _configure_capture(self, cap: cv2.VideoCapture, width: int, height: int, prefer_mjpg: bool = True) -> None:
-        if self._is_windows and prefer_mjpg:
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        cap.set(cv2.CAP_PROP_FPS, 60)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     @staticmethod
     def _backend_name(backend: int) -> str:
@@ -98,42 +96,48 @@ class CameraThread:
 
     def _open_capture(self, camera_index: int) -> cv2.VideoCapture | None:
         idx = int(camera_index)
-        for backend in self._backend_candidates():
-            for width, height in CAMERA_TARGET_SIZES:
-                # Attempt MJPG first on Windows; fallback to default format if rejected.
-                for prefer_mjpg in ([True, False] if self._is_windows else [False]):
-                    cap = cv2.VideoCapture(idx, backend)
-                    if not cap.isOpened():
-                        cap.release()
-                        continue
+        # Attempt direct DSHOW first as recommended for Windows performance
+        print(f"--- Attempting to open camera #{idx} with CAP_DSHOW ---")
+        cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        
+        if not cap.isOpened():
+            print(f"❌ CAMERA NOT OPENED (DSHOW) on index {idx}")
+            print("Trying fallback (CAP_ANY)...")
+            cap = cv2.VideoCapture(idx)
+        
+        if not cap.isOpened():
+            print(f"❌ CAMERA NOT OPENED (FALLBACK) on index {idx}")
+            self._last_error = f"Cannot open camera index {idx} on any backend"
+            return None
 
-                    self._configure_capture(cap, width, height, prefer_mjpg=prefer_mjpg)
+        print(f"✅ CAMERA OPENED on index {idx}")
+        
+        # Apply standard settings
+        for width, height in CAMERA_TARGET_SIZES:
+            # Try MJPG first on Windows for better throughput
+            if self._is_windows:
+                cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            cap.set(cv2.CAP_PROP_FPS, 60)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-                    # Virtual cams may expose the device before streaming is ready.
-                    time.sleep(0.12)
+            # Warm-up/validation
+            time.sleep(0.05)
+            if self._try_read_frames(cap, count=5):
+                self.actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or width)
+                self.actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or height)
+                fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
+                fmt = "MJPG" if fourcc == _MJPG_FOURCC else "DEFAULT"
+                self._last_error = f"Camera #{idx} ready at {self.actual_width}x{self.actual_height} format={fmt}"
+                print(f"✅ {self._last_error}")
+                return cap
+            
+            print(f"⚠️ Validation failed at {width}x{height}, trying next size...")
 
-                    if prefer_mjpg and self._is_windows:
-                        fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
-                        if fourcc != cv2.VideoWriter_fourcc(*"MJPG"):
-                            cap.release()
-                            time.sleep(0.01)
-                            continue
-
-                    if not self._try_read_frames(cap, count=14):
-                        cap.release()
-                        time.sleep(0.03)
-                        continue
-
-                    self.actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or width)
-                    self.actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or height)
-                    fmt = "MJPG" if (prefer_mjpg and self._is_windows) else "DEFAULT"
-                    self._last_error = (
-                        f"Camera #{idx} opened at {self.actual_width}x{self.actual_height}"
-                        f" backend={self._backend_name(backend)} format={fmt}"
-                    )
-                    return cap
-
-        self._last_error = f"Cannot open camera index {idx} on DSHOW/MSMF/ANY at 1280x720 or 640x480"
+        cap.release()
+        self._last_error = f"Camera #{idx} opened but failed validation on all sizes"
+        print(f"❌ {self._last_error}")
         return None
 
     # ------------------------------------------------------------------
@@ -182,9 +186,7 @@ class CameraThread:
         if self._is_windows:
             known_names = self._dshow_camera_names() or self._system_camera_names()
             if known_names:
-                # Keep extra slots because Windows backend index order often drifts
-                # with virtual camera drivers.
-                probe_count = max(1, min(max_index, len(known_names) + 6))
+                probe_count = max(1, min(max_index, len(known_names) + 2))
                 candidate_indices = list(range(probe_count))
 
         env_idx = os.environ.get("WH_CAM_INDEX", "").strip()
@@ -200,21 +202,21 @@ class CameraThread:
                 if found:
                     break
                 for width, height in CAMERA_TARGET_SIZES:
-                    for prefer_mjpg in ([True, False] if self._is_windows else [False]):
-                        cap = cv2.VideoCapture(idx, backend)
-                        try:
-                            if not cap.isOpened():
-                                continue
-                            self._configure_capture(cap, width, height, prefer_mjpg=prefer_mjpg)
-                            if prefer_mjpg and self._is_windows:
-                                fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
-                                if fourcc != cv2.VideoWriter_fourcc(*"MJPG"):
-                                    continue
-                            if self._try_read_frames(cap, count=4):
-                                found = True
-                                break
-                        finally:
-                            cap.release()
+                    cap = cv2.VideoCapture(idx, backend)
+                    try:
+                        if not cap.isOpened():
+                            continue
+                        if self._is_windows:
+                            cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
+                        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                        cap.set(cv2.CAP_PROP_FPS, 60)
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        if self._try_read_frames(cap, count=3):
+                            found = True
+                            break
+                    finally:
+                        cap.release()
                     if found:
                         break
             if found:
@@ -230,8 +232,6 @@ class CameraThread:
                 name = f"Camera #{idx}"
             devices.append(CameraDevice(index=idx, name=name))
 
-        if not devices:
-            devices.append(CameraDevice(index=0, name="Camera #0"))
         return devices
 
     # ------------------------------------------------------------------
@@ -251,25 +251,35 @@ class CameraThread:
             if env_idx.isdigit():
                 fallback_indices.append(int(env_idx))
 
-            for i in range(16):
+            for dev in self.enumerate_cameras(max_index=8):
+                if dev.index != self.camera_index and dev.index not in fallback_indices:
+                    fallback_indices.append(dev.index)
+
+            for i in range(8):
                 if i != self.camera_index and i not in fallback_indices:
                     fallback_indices.append(i)
 
+            attempted: list[int] = [self.camera_index]
             for idx in fallback_indices:
                 cap = self._open_capture(idx)
+                attempted.append(idx)
                 if cap is not None:
                     self.camera_index = idx
                     self._last_error = f"Camera fallback selected index {idx}"
                     break
 
             if cap is None:
+                self._last_error = (
+                    f"Cannot open camera. Attempted indices: {attempted}. "
+                    "If using DroidCam, start its camera feed first."
+                )
                 return False
 
         with self._cap_lock:
             self._cap = cap
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        self._thread.start()  # type: ignore
         return True
 
     def switch_camera(self, camera_index: int) -> bool:
@@ -309,11 +319,13 @@ class CameraThread:
                 if cap is None:
                     time.sleep(0.001)
                     continue
-                ok, frame = self._drain_and_read(cap)
+                ok, frame = cap.read()
             if not ok or frame is None:
+                print("⚠️ Frame not received")
                 consecutive_failures += 1
                 if consecutive_failures >= CAMERA_READ_RETRY_LIMIT:
                     self._last_error = "Camera stream stalled, attempting reopen"
+                    print(f"❌ {self._last_error}")
                     new_cap = self._open_capture(self.camera_index)
                     if new_cap is not None:
                         with self._cap_lock:
@@ -329,15 +341,16 @@ class CameraThread:
                         self._last_error = "Camera stream lost and reopen failed"
                     time.sleep(CAMERA_REOPEN_COOLDOWN_S)
                     continue
-                time.sleep(0.001)
+                time.sleep(0.01) # Increased from 0.001
                 continue
 
             consecutive_failures = 0
             self.actual_height, self.actual_width = frame.shape[:2]
             with self._frame_lock:
                 self._frame = frame
-
-            # No idle sleep here; camera read path paces the loop.
+            
+            # 🔥 Fix thread loop aggression (recommended to avoid freezing)
+            time.sleep(0.005)
 
     def latest(self):
         with self._frame_lock:
@@ -345,8 +358,8 @@ class CameraThread:
 
     def stop(self) -> None:
         self._running = False
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=1.5)
+        if self._thread is not None and self._thread.is_alive():  # type: ignore
+            self._thread.join(timeout=1.5)  # type: ignore
         self._thread = None
 
         with self._cap_lock:

@@ -17,9 +17,8 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("GLOG_minloglevel", "3")
 os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
 
-from PySide6.QtWidgets import QApplication
-
-from src import MainWindow
+from PySide6.QtWidgets import QApplication  # type: ignore
+from src import MainWindow  # type: ignore
 
 
 def main() -> None:

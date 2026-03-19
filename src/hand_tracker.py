@@ -2,14 +2,10 @@ from __future__ import annotations
 
 from collections import deque
 
-import cv2
+import cv2  # type: ignore
 
-from .tuning import (
-    HAND_LABEL_MAJORITY_RATIO,
-    HAND_LOCK_CONFIDENCE_THRESHOLD,
-    HAND_LOCKED_DROP_THRESHOLD,
-)
-from .utils import _ensure_mediapipe_solutions
+from .tuning import HAND_LABEL_MAJORITY_RATIO, HAND_LOCK_CONFIDENCE_THRESHOLD, HAND_LOCKED_DROP_THRESHOLD  # type: ignore
+from .utils import _ensure_mediapipe_solutions  # type: ignore
 
 try:
     import mediapipe as mp  # type: ignore

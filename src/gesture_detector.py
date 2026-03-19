@@ -3,8 +3,8 @@ from __future__ import annotations
 import math
 import time
 
-from .models import FingerStates, GestureResult, GestureType
-from .tuning import (
+from .models import FingerStates, GestureResult, GestureType  # type: ignore
+from .tuning import (  # type: ignore
     GESTURE_ACTION_COOLDOWN_S,
     GESTURE_CONFIRM_HOLD_S,
     GESTURE_DOUBLE_CLICK_WINDOW_S,
@@ -210,7 +210,7 @@ class GestureDetector:
         if right_click_pose:
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
-            if now - self._right_pinch_start_t >= self._right_click_hold_s:
+            if now - self._right_pinch_start_t >= self._right_click_hold_s:  # type: ignore
                 self._right_pinch_active = True
         else:
             self._right_pinch_start_t = None
@@ -395,7 +395,7 @@ class GestureDetector:
             if open_palm and not self._left_pinch_active and not self._right_pinch_active:
                 if self._task_view_since is None:
                     self._task_view_since = now
-                if now - self._task_view_since >= self._task_view_hold_s:
+                if now - self._task_view_since >= self._task_view_hold_s:  # type: ignore
                     raw_state = GestureType.TASK_VIEW
                 else:
                     raw_state = GestureType.PAUSE
@@ -405,7 +405,7 @@ class GestureDetector:
                 if keyboard_pose and not pinch_guard_active:
                     if self._keyboard_hold_start is None:
                         self._keyboard_hold_start = now
-                    hold_elapsed = now - self._keyboard_hold_start
+                    hold_elapsed = now - self._keyboard_hold_start  # type: ignore
                     if hold_elapsed >= self._keyboard_hold_s and not self._keyboard_fired:
                         raw_state = GestureType.KEYBOARD
                         self._keyboard_fired = True
@@ -415,7 +415,7 @@ class GestureDetector:
                     self._keyboard_hold_start = None
                     self._keyboard_fired = False
 
-                    if self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):
+                    if self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):  # type: ignore
                         raw_state = GestureType.DRAG
                     elif self._left_pinch_active and (not self._right_pinch_active):
                         raw_state = GestureType.LEFT_CLICK

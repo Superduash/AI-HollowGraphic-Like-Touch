@@ -6,6 +6,7 @@ import platform
 import subprocess
 import threading
 import time
+from typing import Any
 
 try:
     import pyautogui  # type: ignore
@@ -24,7 +25,7 @@ if platform.system() == "Windows":
         except Exception:
             pass
 
-from .tuning import MOUSE_WORKER_HZ
+from .tuning import MOUSE_WORKER_HZ  # type: ignore
 
 
 class MouseController:
@@ -42,12 +43,12 @@ class MouseController:
         self._lock = threading.Lock()
         self._running = True
         self._worker = threading.Thread(target=self._cursor_worker, daemon=True)
-        self._media_queue = collections.deque()
+        self._media_queue: collections.deque[tuple[str, int]] = collections.deque()
         self._media_lock = threading.Lock()
         self._media_worker = threading.Thread(target=self._media_worker_loop, daemon=True)
 
-        self._user32 = None
-        self._quartz = None
+        self._user32: Any = None
+        self._quartz: Any = None
 
         if self._platform == "Windows":
             try:
@@ -84,10 +85,10 @@ class MouseController:
 
     def stop(self) -> None:
         self._running = False
-        if self._worker.is_alive():
-            self._worker.join(timeout=0.5)
-        if self._media_worker.is_alive():
-            self._media_worker.join(timeout=0.5)
+        if self._worker.is_alive():  # type: ignore
+            self._worker.join(timeout=0.5)  # type: ignore
+        if self._media_worker.is_alive():  # type: ignore
+            self._media_worker.join(timeout=0.5)  # type: ignore
 
     def move(self, x: int, y: int) -> None:
         with self._lock:
@@ -134,38 +135,38 @@ class MouseController:
 
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
-            event = q.CGEventCreateMouseEvent(None, q.kCGEventMouseMoved, (float(x), float(y)), q.kCGMouseButtonLeft)
-            q.CGEventPost(q.kCGHIDEventTap, event)
+            event = q.CGEventCreateMouseEvent(None, q.kCGEventMouseMoved, (float(x), float(y)), q.kCGMouseButtonLeft)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, event)  # type: ignore
 
     def left_click(self) -> None:
         if self._platform == "Windows" and self._user32 is not None:
-            self._mouse_event(self._MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)
+            self._mouse_event(self._MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)  # type: ignore
             time.sleep(0.01)
-            self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)
+            self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)  # type: ignore
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
             x, y = self._last_x, self._last_y
-            down = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseDown, (float(x), float(y)), q.kCGMouseButtonLeft)
-            up = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseUp, (float(x), float(y)), q.kCGMouseButtonLeft)
-            q.CGEventPost(q.kCGHIDEventTap, down)
-            q.CGEventPost(q.kCGHIDEventTap, up)
+            down = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseDown, (float(x), float(y)), q.kCGMouseButtonLeft)  # type: ignore
+            up = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseUp, (float(x), float(y)), q.kCGMouseButtonLeft)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, down)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, up)  # type: ignore
 
     def right_click(self) -> None:
         if self._platform == "Windows" and self._user32 is not None:
-            self._mouse_event(self._MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, None)
+            self._mouse_event(self._MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, None)  # type: ignore
             time.sleep(0.01)
-            self._mouse_event(self._MOUSEEVENTF_RIGHTUP, 0, 0, 0, None)
+            self._mouse_event(self._MOUSEEVENTF_RIGHTUP, 0, 0, 0, None)  # type: ignore
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
             x, y = self._last_x, self._last_y
-            down = q.CGEventCreateMouseEvent(None, q.kCGEventRightMouseDown, (float(x), float(y)), q.kCGMouseButtonRight)
-            up = q.CGEventCreateMouseEvent(None, q.kCGEventRightMouseUp, (float(x), float(y)), q.kCGMouseButtonRight)
-            q.CGEventPost(q.kCGHIDEventTap, down)
-            q.CGEventPost(q.kCGHIDEventTap, up)
+            down = q.CGEventCreateMouseEvent(None, q.kCGEventRightMouseDown, (float(x), float(y)), q.kCGMouseButtonRight)  # type: ignore
+            up = q.CGEventCreateMouseEvent(None, q.kCGEventRightMouseUp, (float(x), float(y)), q.kCGMouseButtonRight)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, down)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, up)  # type: ignore
 
     def double_click(self) -> None:
         self.left_click()
@@ -179,12 +180,12 @@ class MouseController:
         if self._platform == "Windows" and self._user32 is not None:
             clicks = max(-20, min(20, int(amount)))
             delta = int(clicks * self._WHEEL_DELTA)
-            self._mouse_event(self._MOUSEEVENTF_WHEEL, 0, 0, delta & 0xFFFFFFFF, None)
+            self._mouse_event(self._MOUSEEVENTF_WHEEL, 0, 0, delta & 0xFFFFFFFF, None)  # type: ignore
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
-            q.CGEventPost(q.kCGHIDEventTap, q.CGEventCreateScrollWheelEvent(None, q.kCGScrollEventUnitLine, 1, int(amount)))
+            q.CGEventPost(q.kCGHIDEventTap, q.CGEventCreateScrollWheelEvent(None, q.kCGScrollEventUnitLine, 1, int(amount)))  # type: ignore
 
     def start_drag(self) -> None:
         if self._dragging:
@@ -198,8 +199,8 @@ class MouseController:
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
             x, y = self._last_x, self._last_y
-            down = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseDown, (float(x), float(y)), q.kCGMouseButtonLeft)
-            q.CGEventPost(q.kCGHIDEventTap, down)
+            down = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseDown, (float(x), float(y)), q.kCGMouseButtonLeft)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, down)  # type: ignore
 
     def end_drag(self) -> None:
         if not self._dragging:
@@ -207,14 +208,14 @@ class MouseController:
         self._dragging = False
 
         if self._platform == "Windows" and self._user32 is not None:
-            self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)
+            self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)  # type: ignore
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
             q = self._quartz
             x, y = self._last_x, self._last_y
-            up = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseUp, (float(x), float(y)), q.kCGMouseButtonLeft)
-            q.CGEventPost(q.kCGHIDEventTap, up)
+            up = q.CGEventCreateMouseEvent(None, q.kCGEventLeftMouseUp, (float(x), float(y)), q.kCGMouseButtonLeft)  # type: ignore
+            q.CGEventPost(q.kCGHIDEventTap, up)  # type: ignore
 
     def _send_media_key_now(self, action: str, count: int = 1) -> bool:
         if self._platform != "Windows" or self._user32 is None:
@@ -230,8 +231,8 @@ class MouseController:
             return False
         reps = max(1, int(count))
         for _ in range(reps):
-            self._user32.keybd_event(vk, 0, 0, 0)
-            self._user32.keybd_event(vk, 0, 2, 0)
+            self._user32.keybd_event(vk, 0, 0, 0)  # type: ignore
+            self._user32.keybd_event(vk, 0, 2, 0)  # type: ignore
             time.sleep(0.01)
         return True
 
@@ -257,7 +258,7 @@ class MouseController:
                 # Check for TabTip.exe (Touch Keyboard) - toggling it is harder, 
                 # but we can try to find window or use specialized command
                 import ctypes
-                hwnd = ctypes.windll.user32.FindWindowW("IPTip_Main_Window", None)
+                hwnd = ctypes.windll.user32.FindWindowW("IPTip_Main_Window", None)  # type: ignore
                 if hwnd:
                     # If found, try to hide it by sending a close command or killing process
                     # tabtip.exe is usually persistent, so we might just kill it if possible
@@ -297,10 +298,10 @@ class MouseController:
         if self._platform != "Windows" or self._user32 is None:
             return False
         try:
-            self._user32.keybd_event(0x5B, 0, 0, 0)
-            self._user32.keybd_event(0x09, 0, 0, 0)
-            self._user32.keybd_event(0x09, 0, 2, 0)
-            self._user32.keybd_event(0x5B, 0, 2, 0)
+            self._user32.keybd_event(0x5B, 0, 0, 0)  # type: ignore
+            self._user32.keybd_event(0x09, 0, 0, 0)  # type: ignore
+            self._user32.keybd_event(0x09, 0, 2, 0)  # type: ignore
+            self._user32.keybd_event(0x5B, 0, 2, 0)  # type: ignore
             return True
         except Exception:
             return False
