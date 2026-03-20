@@ -12,7 +12,7 @@ import cv2  # type: ignore
 
 import qtawesome as qta  # type: ignore
 from PySide6.QtCore import QMetaObject, QSize, Signal, Slot, Qt, QTimer  # type: ignore
-from PySide6.QtGui import QAction, QImage, QPixmap  # type: ignore
+from PySide6.QtGui import QAction, QIcon, QImage, QPixmap  # type: ignore
 from PySide6.QtWidgets import (  # type: ignore
     QApplication,
     QCheckBox,
@@ -247,6 +247,10 @@ class SettingsDialog(QDialog):
         self.auto_start_chk.setChecked(bool(settings.get("auto_start_camera", False)))
         self.minimize_to_tray_chk = QCheckBox("Minimize to tray on close")
         self.minimize_to_tray_chk.setChecked(bool(settings.get("minimize_to_tray", False)))
+        self.mouse_start_chk = QCheckBox("Enable mouse on startup")
+        self.mouse_start_chk.setChecked(bool(settings.get("mouse_on_startup", False)))
+        self.maximized_chk = QCheckBox("Launch app maximized")
+        self.maximized_chk.setChecked(bool(settings.get("start_maximized", True)))
         self.mirror_chk = QCheckBox("Mirror camera feed")
         self.mirror_chk.setChecked(bool(settings.get("mirror_camera", True)))
         self.region_chk = QCheckBox("Show control region box")
@@ -256,6 +260,8 @@ class SettingsDialog(QDialog):
         camera_layout.addWidget(self.camera_combo)
         camera_layout.addWidget(self.auto_start_chk)
         camera_layout.addWidget(self.minimize_to_tray_chk)
+        camera_layout.addWidget(self.mouse_start_chk)
+        camera_layout.addWidget(self.maximized_chk)
         camera_layout.addWidget(self.mirror_chk)
         camera_layout.addWidget(self.region_chk)
         body.addWidget(camera_box)
@@ -489,6 +495,8 @@ class SettingsDialog(QDialog):
             "camera_index": int(cam_data),
             "auto_start_camera": bool(self.auto_start_chk.isChecked()),
             "minimize_to_tray": bool(self.minimize_to_tray_chk.isChecked()),
+            "mouse_on_startup": bool(self.mouse_start_chk.isChecked()),
+            "start_maximized": bool(self.maximized_chk.isChecked()),
             "mirror_camera": bool(self.mirror_chk.isChecked()),
             "show_control_region": bool(self.region_chk.isChecked()),
             "smoothening": self.smooth_slider.value() / 10.0,
@@ -512,10 +520,12 @@ class SettingsDialog(QDialog):
 
         self.auto_start_chk.setChecked(bool(d.get("auto_start_camera", False)))
         self.minimize_to_tray_chk.setChecked(bool(d.get("minimize_to_tray", False)))
+        self.mouse_start_chk.setChecked(bool(d.get("mouse_on_startup", False)))
+        self.maximized_chk.setChecked(bool(d.get("start_maximized", True)))
         self.mirror_chk.setChecked(bool(d.get("mirror_camera", True)))
         self.region_chk.setChecked(bool(d.get("show_control_region", True)))
         self.smooth_slider.setValue(int(_as_float(d.get("smoothening", 4.8), 4.8) * 10))
-        self.margin_slider.setValue(int(_as_int(d.get("frame_r", 40), 40)))
+        self.margin_slider.setValue(int(_as_int(d.get("frame_r", 60), 60)))
         self.scroll_slider.setValue(int(_as_float(d.get("scroll_multiplier", 1.0), 1.0) * 10))
         self.pinch_slider.setValue(int(_as_float(d.get("pinch_sensitivity", 0.22), 0.22) * 100))
         self.hold_slider.setValue(int(_as_float(d.get("confirm_hold_s", 0.03), 0.03) * 1000))
@@ -581,6 +591,9 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Holographic Touch")
         self.setMinimumSize(960, 640)
+        self._app_icon = QIcon(str(Path(__file__).resolve().parents[1] / "assets" / "icons" / "holographic_touch.svg"))
+        if not self._app_icon.isNull():
+            self.setWindowIcon(self._app_icon)
 
         self.camera = CameraThread(640, 480)
         self.camera.camera_index = _as_int(settings.get("camera_index", 0), 0)
@@ -627,7 +640,7 @@ class MainWindow(QMainWindow):
 
         self._hand_only_mode: bool = self._cursor_mode != "eye_tracking"
         self.mapper.set_camera_size(640, 480)
-        self.mapper.set_frame_margin(_as_int(settings.get("frame_r", 90), 90))
+        self.mapper.set_frame_margin(_as_int(settings.get("frame_r", 60), 60))
         self.mapper.set_smoothening(_as_float(settings.get("smoothening", 4.8), 4.8))
         self.mapper._hand_only_mode = self._hand_only_mode
         self.mapper.set_prediction_strength(
@@ -695,9 +708,13 @@ class MainWindow(QMainWindow):
         wy = _as_int(settings.get("window_y", -1), -1)
         ww = _as_int(settings.get("window_w", 1280), 1280)
         wh = _as_int(settings.get("window_h", 820), 820)
-        if wx >= 0 and wy >= 0:
-            self.move(wx, wy)
-        self.resize(ww, wh)
+        if _as_bool(settings.get("start_maximized", True), True):
+            self.resize(max(ww, 1280), max(wh, 820))
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+        else:
+            if wx >= 0 and wy >= 0:
+                self.move(wx, wy)
+            self.resize(ww, wh)
 
         self.cam_status.setText("Detecting cameras...")
         QTimer.singleShot(150, lambda: self._refresh_camera_cache(force=True))
@@ -710,6 +727,8 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._render)
         self.timer.start(20)
+        if _as_bool(settings.get("mouse_on_startup", False), False):
+            QTimer.singleShot(450, self._enable_mouse_on_startup)
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -789,7 +808,7 @@ class MainWindow(QMainWindow):
         self.mode_badge_lbl.setWordWrap(False)
 
         _mode_labels = {
-            "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
+            "dual_hand": "Mode: Dual Hand (R=Cursor L=Actions)",
             "single_hand": "Mode: Single Hand",
             "eye_tracking": "Mode: Eye Tracking (experimental)",
         }
@@ -844,12 +863,12 @@ class MainWindow(QMainWindow):
         self._guide_row_widgets: list[tuple] = []
 
         guide_rows_dual = [
-            ("move",        "Move cursor",   "Left hand index finger"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
+            ("move",        "Move cursor",   "Right hand index finger"),
+            ("left_click",  "Left click",    "Left: Thumb+Index pinch"),
+            ("double_click","Double click",  "Left: Quick double pinch"),
+            ("drag",        "Drag",          "Left: Hold pinch"),
+            ("right_click", "Right click",   "Left: Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        "Left: Peace sign up/down"),
         ]
         guide_rows_single = [
             ("move",        "Move cursor",   "Index finger up"),
@@ -1195,7 +1214,10 @@ class MainWindow(QMainWindow):
 
     def _setup_tray(self) -> None:
         tray = QSystemTrayIcon(self)
-        tray.setIcon(self.icons["enable_mouse"])
+        if not getattr(self, "_app_icon", QIcon()).isNull():
+            tray.setIcon(self._app_icon)
+        else:
+            tray.setIcon(self.icons["enable_mouse"])
         tray.setToolTip("Holographic Touch")
 
         tray_menu = QMenu()
@@ -1298,6 +1320,8 @@ class MainWindow(QMainWindow):
 
         auto_start = _as_bool(data.get("auto_start_camera", settings.get("auto_start_camera", False)), False)
         minimize_to_tray = _as_bool(data.get("minimize_to_tray", settings.get("minimize_to_tray", False)), False)
+        mouse_on_startup = _as_bool(data.get("mouse_on_startup", settings.get("mouse_on_startup", False)), False)
+        start_maximized = _as_bool(data.get("start_maximized", settings.get("start_maximized", True)), True)
         mirror = _as_bool(data.get("mirror_camera", self._mirror_camera), self._mirror_camera)
         show_region = _as_bool(data.get("show_control_region", self._show_control_region), self._show_control_region)
         smooth = _as_float(data.get("smoothening", self.mapper.smoothening), self.mapper.smoothening)
@@ -1322,6 +1346,8 @@ class MainWindow(QMainWindow):
 
         settings.set("auto_start_camera", auto_start)
         settings.set("minimize_to_tray", minimize_to_tray)
+        settings.set("mouse_on_startup", mouse_on_startup)
+        settings.set("start_maximized", start_maximized)
         settings.set("mirror_camera", mirror)
         settings.set("show_control_region", show_region)
         settings.set("smoothening", smooth)
@@ -1341,6 +1367,16 @@ class MainWindow(QMainWindow):
 
         self._apply_performance_mode(perf)
         self._sync_margin_controls()
+
+        if start_maximized:
+            self.showMaximized()
+        elif self.isMaximized():
+            self.showNormal()
+
+    @Slot()
+    def _enable_mouse_on_startup(self) -> None:
+        if not self.mouse_enabled:
+            self.toggle_mouse()
 
     def _launch_keyboard(self) -> None:
         now = time.monotonic()
@@ -1389,12 +1425,12 @@ class MainWindow(QMainWindow):
     def _update_guide_rows(self) -> None:
         """Rebuild the protocol guide to reflect current mode."""
         guide_rows_dual = [
-            ("move",        "Move cursor",   "Left hand index finger"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
+            ("move",        "Move cursor",   "Right hand index finger"),
+            ("left_click",  "Left click",    "Left: Thumb+Index pinch"),
+            ("double_click","Double click",  "Left: Quick double pinch"),
+            ("drag",        "Drag",          "Left: Hold pinch"),
+            ("right_click", "Right click",   "Left: Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        "Left: Peace sign up/down"),
         ]
         guide_rows_single = [
             ("move",        "Move cursor",   "Index finger up"),
@@ -1428,7 +1464,7 @@ class MainWindow(QMainWindow):
                 dl.setText(action_desc)
 
         _mode_labels = {
-            "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
+            "dual_hand": "Mode: Dual Hand (R=Cursor L=Actions)",
             "single_hand": "Mode: Single Hand",
             "eye_tracking": "Mode: Eye Tracking (experimental)",
         }
@@ -1789,21 +1825,17 @@ class MainWindow(QMainWindow):
                         _has_cursor = self._frozen_sx >= 0
 
                 elif self._cursor_mode == "dual_hand":
-                    # Dual-hand: LEFT hand index finger = cursor
-                    left_hand = hands_dict.get("Left")
+                    # Dual-hand: RIGHT hand index finger = cursor
+                    right_hand = hands_dict.get("Right")
                     if gesture in self._freeze_on:
                         # Freeze cursor during clicks
                         _has_cursor = self._frozen_sx >= 0
-                    elif left_hand and len(left_hand.get("xy", [])) > 8:
-                        tip = left_hand["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-                        _has_cursor = True
-                    elif hands_dict.get("Right") and len(hands_dict["Right"].get("xy", [])) > 8:
-                        # Fallback: if only right hand, use right index for cursor
-                        tip = hands_dict["Right"]["xy"][8]
+                    elif right_hand and len(right_hand.get("xy", [])) > 8:
+                        tip = right_hand["xy"][8]
                         sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
                         _has_cursor = True
                     else:
+                        # Do not swap cursor hand to left in dual mode; keep cursor stable.
                         _has_cursor = self._frozen_sx >= 0
 
                 else:
@@ -1962,7 +1994,7 @@ class MainWindow(QMainWindow):
         _mode_color = "#22D3EE" if self._cursor_mode == "dual_hand" else "#A78BFA"
         _mode_icon = "⬡" if self._cursor_mode == "dual_hand" else "◈"
         _mode_text_map = {
-            "dual_hand": f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions",
+            "dual_hand": f"{_mode_icon} DUAL HAND  R=Cursor  L=Actions",
             "single_hand": f"{_mode_icon} SINGLE HAND  Any hand = cursor+actions",
             "eye_tracking": "◉ EYE TRACKING  experimental",
         }

@@ -132,15 +132,19 @@ class GestureDetector:
         if self._scroll_direction == 0:
             self._scroll_direction = direction
         elif direction != self._scroll_direction:
+            # Ignore weak opposite spikes to avoid pause/freeze while scrolling steadily.
+            if abs(v) < (deadband * 2.2):
+                return 0
             now = time.monotonic()
             if now - self._scroll_last_switch_time < self._scroll_dir_switch_cooldown_s:
-                self._scroll_accumulator = 0.0
+                # Keep momentum; do not hard-reset accumulator on blocked flips.
+                self._scroll_accumulator *= 0.35
                 return 0
             self._scroll_direction = direction
             self._scroll_last_switch_time = now
-            self._scroll_velocity_ema = 0.0
-            self._scroll_accumulator = 0.0
-            return 0
+            # Dampen but preserve continuity when direction really changes.
+            self._scroll_velocity_ema *= 0.5
+            self._scroll_accumulator *= 0.5
 
         return int(steps * max(1, self._scroll_gain))
 
@@ -151,35 +155,41 @@ class GestureDetector:
         self._scroll_accumulator = 0.0
 
     # =====================================================================
-    # DUAL-HAND MODE (default) — left hand = cursor, right hand = actions
+    # DUAL-HAND MODE (default) — right hand = cursor, left hand = actions
     # =====================================================================
     def detect_dual(self, hands_dict: dict, is_grace: bool = False) -> GestureResult:
         """Process gestures from dual-hand input.
 
-        LEFT hand: cursor tracking (handled in main_window, not here)
-        RIGHT hand: click/scroll/drag gestures
+        RIGHT hand: cursor tracking (handled in main_window, not here)
+        LEFT hand: click/scroll/drag gestures
 
-        If only LEFT hand visible: return MOVE (cursor follows left index)
-        If only RIGHT hand visible: process gestures, cursor uses right index
+        If only RIGHT hand visible: return MOVE (cursor follows right index)
+        If only LEFT hand visible: no cursor hand, keep MOVE (no action gestures)
         If neither: PAUSE
         """
         now = time.monotonic()
-        right_hand = hands_dict.get("Right")
-        left_hand = hands_dict.get("Left")
+        cursor_hand = hands_dict.get("Right")
+        action_hand = hands_dict.get("Left")
 
         # No hands at all
-        if not right_hand and not left_hand:
+        if not cursor_hand and not action_hand:
             self._reset_all(now)
             return self._make_result(GestureType.PAUSE, 0)
 
-        # Only left hand (cursor hand) — just MOVE, no actions
-        if not right_hand and left_hand:
+        # Cursor hand missing: stay in MOVE and suppress actions to avoid accidental clicks.
+        if not cursor_hand:
             self._state = GestureType.MOVE
             self._dragging = False
             return self._make_result(GestureType.MOVE, 0)
 
-        # Right hand is present — process gestures
-        return self._process_action_hand(right_hand, now, is_grace)
+        # Cursor hand present but action hand absent: just MOVE.
+        if action_hand is None:
+            self._state = GestureType.MOVE
+            self._dragging = False
+            return self._make_result(GestureType.MOVE, 0)
+
+        # Process gestures from left action hand.
+        return self._process_action_hand(action_hand, now, is_grace)
 
     # =====================================================================
     # SINGLE-HAND MODE (legacy compat) — one hand does cursor + actions
