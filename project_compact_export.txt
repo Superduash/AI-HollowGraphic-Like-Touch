@@ -259,1351 +259,329 @@ print(f"Downloading {URL} ...")
 urllib.request.urlretrieve(URL, OUT)
 print(f"Saved to {OUT} ({OUT.stat().st_size // 1024} KB)")
 
-=== holographic_touch_master_prompts.md ===
-# Holographic Touch — 3 Master Prompts for Complete Revamp
-
-## What These Prompts Do (apply in order 1 → 2 → 3)
-
-| Prompt | Scope | Files Created/Modified |
-|--------|-------|----------------------|
-| **1** | Dual-hand engine + eye tracker + gesture rewrite | `src/eye_tracker.py` (NEW), `src/hand_tracker.py`, `src/gesture_detector.py`, `src/tuning.py`, `src/models.py`, `src/settings_store.py` |
-| **2** | Main window rewire — process loop, cursor dispatch, settings, UI | `src/main_window.py` |
-| **3** | Final polish — UI styles, verification tests, cleanup | `src/main_window.py` (styles), `src/constants.py`, `src/face_tracker.py` (keep as legacy), `requirements.txt` |
-
----
-
-## PROMPT 1 — Dual-Hand Engine + Eye Tracker + Gesture Rewrite
-
-```
-You are refactoring the Holographic Touch gesture mouse app. This is a PySide6 + OpenCV + MediaPipe project.
-
-GOAL: Implement dual-hand tracking (left hand = cursor, right hand = clicks/scroll) as the DEFAULT mode, plus an experimental iris-based eye tracker as an optional mode in settings.
-
-=== IMPORTANT RULES ===
-- Do NOT break any existing imports or class interfaces
-- Do NOT remove any existing GestureType enum values
-- ALL files must be complete — no "... existing code ..." placeholders
-- Every method must have a return statement on all paths
-- No print() calls except startup messages (one per module max)
-
-=== FILE 1: Create src/eye_tracker.py (NEW FILE) ===
-
-Create this file from scratch. It uses MediaPipe FaceMesh with refine_landmarks=True to track iris positions. The detect() method returns (cam_x, cam_y) in camera pixel coordinates with a configurable GAIN multiplier to amplify small eye movements.
-
-```python
-"""Iris-based cursor tracker using MediaPipe Face Mesh (experimental).
-
-Uses refine_landmarks=True to access iris landmarks 468/473.
-GAIN amplifies tiny eye movements so user doesn't need to move their whole head.
-"""
-from __future__ import annotations
-
-import cv2
-
-try:
-    import mediapipe as mp
-    _OK = hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh")
-except Exception:
-    mp = None
-    _OK = False
-
-
-class EyeTracker:
-    LEFT_IRIS = 468
-    RIGHT_IRIS = 473
-
-    def __init__(self, gain: float = 1.8) -> None:
-        self._mesh = None
-        self._eye_x = -1.0
-        self._eye_y = -1.0
-        self._init = False
-        self.available = False
-        self._last_results = None
-        self._gain = max(1.0, min(3.0, gain))
-
-        if not _OK or mp is None:
-            return
-        try:
-            self._mesh = mp.solutions.face_mesh.FaceMesh(
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.4,
-            )
-            self.available = True
-            print("[EYE] Iris tracker ready (experimental)")
-        except Exception:
-            pass
-
-    def detect(self, frame_bgr) -> tuple[int, int] | None:
-        if not self.available or self._mesh is None:
-            return None
-        try:
-            h, w = frame_bgr.shape[:2]
-            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            res = self._mesh.process(rgb)
-            self._last_results = res
-
-            if not res.multi_face_landmarks:
-                self._init = False
-                return None
-
-            face = res.multi_face_landmarks[0]
-            l_iris = face.landmark[self.LEFT_IRIS]
-            r_iris = face.landmark[self.RIGHT_IRIS]
-
-            # Average both irises for stability
-            rx = ((l_iris.x + r_iris.x) / 2.0) * w
-            ry = ((l_iris.y + r_iris.y) / 2.0) * h
-
-            # Apply gain: amplify movement from center
-            cx, cy = w / 2.0, h / 2.0
-            rx = cx + (rx - cx) * self._gain
-            ry = cy + (ry - cy) * self._gain
-
-            if not self._init:
-                self._eye_x, self._eye_y = rx, ry
-                self._init = True
-            else:
-                # 1.2px deadzone kills webcam micro-jitter
-                if abs(rx - self._eye_x) >= 1.2:
-                    self._eye_x = rx
-                if abs(ry - self._eye_y) >= 1.2:
-                    self._eye_y = ry
-
-            return int(self._eye_x), int(self._eye_y)
-        except Exception:
-            return None
-
-    def draw(self, frame_rgb) -> None:
-        if not self.available or self._last_results is None:
-            return
-        try:
-            res = self._last_results
-            if not res.multi_face_landmarks:
-                return
-            face = res.multi_face_landmarks[0]
-            h, w = frame_rgb.shape[:2]
-            for iris_idx in (self.LEFT_IRIS, self.RIGHT_IRIS):
-                pt = face.landmark[iris_idx]
-                cv2.circle(frame_rgb, (int(pt.x * w), int(pt.y * h)), 4, (0, 255, 255), -1)
-        except Exception:
-            pass
-
-    def close(self) -> None:
-        if self._mesh is not None:
-            try:
-                self._mesh.close()
-            except Exception:
-                pass
-```
-
-=== FILE 2: Replace src/hand_tracker.py COMPLETELY ===
-
-The new HandTracker uses max_num_hands=2 and returns a dictionary keyed by "Left"/"Right" containing hand_data for each detected hand, plus a list of (proto, label) tuples for drawing.
-
-The return signature changes from:
-  (hand_data, hand_proto, is_grace) 
-to:
-  (hands_dict, hand_protos_list, is_grace)
-
-Where:
-- hands_dict = {"Left": {xy, label, confidence, ...}, "Right": {...}} or {}
-- hand_protos_list = [(mediapipe_proto, "Left"), (mediapipe_proto, "Right")] or []
-- is_grace = bool
-
-```python
-from __future__ import annotations
-
-import os
-from collections import deque
-
-import cv2
-
-try:
-    import mediapipe as mp
-except Exception:
-    mp = None
-
-os.environ.setdefault("GLOG_minloglevel", "2")
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-
-from .utils import _ensure_mediapipe_solutions
-
-
-class HandTracker:
-    @staticmethod
-    def _map_label(raw_label: str, is_mirrored: bool) -> str:
-        raw = str(raw_label)
-        if raw not in ("Left", "Right"):
-            return raw
-        if is_mirrored:
-            return "Right" if raw == "Left" else "Left"
-        return raw
-
-    def __init__(self) -> None:
-        self._process_size: tuple[int, int] | None = None
-        self._last_rgb_frame = None
-        _ensure_mediapipe_solutions()
-
-        self._mp_hands = mp.solutions.hands
-        self._draw_utils = mp.solutions.drawing_utils
-        self._draw_styles = mp.solutions.drawing_styles
-
-        self._hands = self._mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            model_complexity=0,
-            min_detection_confidence=0.55,
-            min_tracking_confidence=0.35,
-        )
-
-        self._frames_no_hand = 0
-        self._grace_frames = 3
-        self._last_valid_result: tuple[dict, list, bool] | None = None
-
-    def set_processing_size(self, size: tuple[int, int] | None) -> None:
-        if size is None:
-            self._process_size = None
-            return
-        w, h = size
-        self._process_size = (max(64, int(w)), max(64, int(h)))
-
-    def detect(self, frame_bgr, is_mirrored: bool = False):
-        """Returns (hands_dict, hand_protos_list, is_grace_frame)."""
-        src_h, src_w = frame_bgr.shape[:2]
-
-        detect_frame = frame_bgr
-        if self._process_size is not None:
-            detect_frame = cv2.resize(frame_bgr, self._process_size, 
-                                       interpolation=cv2.INTER_LINEAR)
-
-        dh, dw = detect_frame.shape[:2]
-        rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
-        self._last_rgb_frame = rgb
-        result = self._hands.process(rgb)
-
-        hands_dict = {}
-        protos = []
-
-        if result.multi_hand_landmarks and result.multi_handedness:
-            sx = float(src_w) / max(1, dw)
-            sy = float(src_h) / max(1, dh)
-
-            for idx, hand in enumerate(result.multi_hand_landmarks):
-                if idx >= len(result.multi_handedness):
-                    break
-                raw_label = result.multi_handedness[idx].classification[0].label
-                label = self._map_label(raw_label, is_mirrored)
-                conf = float(result.multi_handedness[idx].classification[0].score)
-
-                if conf < 0.40:
-                    continue
-
-                xy = [(int(lm.x * dw * sx), int(lm.y * dh * sy)) 
-                      for lm in hand.landmark]
-                z = [float(lm.z) for lm in hand.landmark]
-
-                # If we already have this label, keep the higher-confidence one
-                if label in hands_dict:
-                    if conf <= hands_dict[label]["confidence"]:
-                        continue
-
-                hands_dict[label] = {
-                    "xy": xy,
-                    "z": z,
-                    "label": label,
-                    "confidence": conf,
-                    "frame_size": (dw, dh),
-                }
-                protos.append((hand, label))
-
-        if hands_dict:
-            self._frames_no_hand = 0
-            self._last_valid_result = (hands_dict, protos, False)
-            return hands_dict, protos, False
-        else:
-            self._frames_no_hand += 1
-            if (self._frames_no_hand < self._grace_frames 
-                    and self._last_valid_result is not None):
-                cached_dict, cached_protos, _ = self._last_valid_result
-                return cached_dict, cached_protos, True
-            self._last_valid_result = None
-            return {}, [], False
-
-    def draw(self, frame_rgb, hand_protos, label: str = "Right") -> None:
-        """Draw hand landmarks. Accepts either:
-        - A list of (proto, label) tuples (new dual-hand format)
-        - A single proto object (legacy single-hand format)
-        """
-        if hand_protos is None:
-            return
-
-        # Handle legacy single-proto call: draw(rgb, proto, label_str)
-        if not isinstance(hand_protos, list):
-            pairs = [(hand_protos, label)]
-        else:
-            pairs = hand_protos
-
-        for proto, lbl in pairs:
-            if proto is None:
-                continue
-            color = (0, 255, 120) if lbl == "Right" else (255, 180, 50)
-            try:
-                conn_spec = self._draw_utils.DrawingSpec(
-                    color=color, thickness=2, circle_radius=2)
-                lmk_spec = self._draw_styles.get_default_hand_landmarks_style()
-                self._draw_utils.draw_landmarks(
-                    frame_rgb, proto, self._mp_hands.HAND_CONNECTIONS,
-                    lmk_spec, conn_spec)
-            except Exception:
-                pass
-
-    def close(self) -> None:
-        try:
-            if hasattr(self, "_hands") and self._hands:
-                self._hands.close()
-        except Exception:
-            pass
-```
-
-=== FILE 3: Replace src/gesture_detector.py COMPLETELY ===
-
-The new GestureDetector.detect() accepts EITHER:
-- A dict with "Left"/"Right" keys (dual-hand mode) via detect_dual(hands_dict)  
-- A single hand_data dict (legacy) via detect(hand_data)
-
-In DUAL-HAND mode (default):
-- LEFT HAND index finger tip (landmark 8) = cursor position (handled in main_window)
-- RIGHT HAND: thumb+index pinch = left click, thumb+middle pinch = right click, peace sign = scroll, hold pinch = drag
-- The gesture detector ONLY processes the RIGHT hand for gestures
-
-In LEGACY/SINGLE-HAND mode:
-- Same hand does both cursor and gestures (backward compatible)
-
-Replace the ENTIRE file with:
-
-```python
-from __future__ import annotations
-
-import math
-import time
-
-try:
-    from .fast_math import pinch_dist_2d, ema_step
-except Exception:
-    def pinch_dist_2d(x1, y1, x2, y2):
-        dx = x1 - x2; dy = y1 - y2
-        return math.sqrt(dx * dx + dy * dy)
-    def ema_step(prev, target, alpha):
-        return prev + alpha * (target - prev)
-
-from .models import GestureResult, GestureType
-from .tuning import (
-    GESTURE_ACTION_COOLDOWN_S,
-    GESTURE_CONFIRM_HOLD_S,
-    GESTURE_DOUBLE_CLICK_WINDOW_S,
-    GESTURE_DRAG_ACTIVATE_S,
-    GESTURE_RIGHT_CLICK_HOLD_S,
-    GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S,
-)
-
-
-class GestureDetector:
-    def __init__(self) -> None:
-        self._state = GestureType.PAUSE
-        self._candidate = GestureType.PAUSE
-        self._stable_start_t = 0.0
-
-        self._dragging = False
-        self._left_pinch_active = False
-        self._right_pinch_active = False
-        self._left_pinch_since: float | None = None
-        self._right_pinch_start_t: float | None = None
-
-        self._scroll_prev_y: float | None = None
-        self._scroll_velocity_ema = 0.0
-        self._scroll_direction = 0
-        self._scroll_accumulator = 0.0
-        self._scroll_last_switch_time = 0.0
-
-        self._action_cooldown_s = float(GESTURE_ACTION_COOLDOWN_S)
-        self._drag_activate_s = float(GESTURE_DRAG_ACTIVATE_S)
-
-        self._pinch_enter = 0.22
-        self._pinch_exit = 0.36
-        self._confirm_hold_s = float(GESTURE_CONFIRM_HOLD_S)
-        self._hand_scale = 24.0
-
-        self._last_click_time = 0.0
-        self._last_right_click_time = 0.0
-        self._left_click_release_time = -float('inf')
-
-        self._scroll_step_factor = 0.08
-        self._scroll_deadband_factor = 0.06
-        self._double_click_window_s = float(GESTURE_DOUBLE_CLICK_WINDOW_S)
-        self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
-        self._scroll_step_limit = 8
-        self._scroll_gain = 1.0
-        self._right_click_hold_s = max(0.15, float(GESTURE_RIGHT_CLICK_HOLD_S))
-
-        self._per_action_cooldown = {
-            GestureType.LEFT_CLICK: 0.25,
-            GestureType.RIGHT_CLICK: 0.50,
-            GestureType.DOUBLE_CLICK: 0.50,
-            GestureType.SCROLL: 0.0,
-            GestureType.DRAG: 0.0,
-            GestureType.MOVE: 0.0,
-        }
-        self._last_action_time: dict[GestureType, float] = {}
-
-        # Z-tap (kept for settings compat, disabled by default)
-        self._z_tap_enabled = False
-
-    @property
-    def dragging(self) -> bool:
-        return self._dragging
-
-    def reset_cooldowns(self) -> None:
-        self._last_action_time.clear()
-
-    def _make_result(self, gesture: GestureType, scroll_delta: int = 0) -> GestureResult:
-        return GestureResult(gesture, scroll_delta)
-
-    def _pinch_ratios(self, xy, hand_scale: float) -> tuple[float, float, float]:
-        hs = max(1.0, hand_scale)
-        p4 = xy[4]; p8 = xy[8]; p12 = xy[12]
-        li = pinch_dist_2d(float(p4[0]), float(p4[1]), float(p8[0]), float(p8[1])) / hs
-        ri = pinch_dist_2d(float(p4[0]), float(p4[1]), float(p12[0]), float(p12[1])) / hs
-        pm = pinch_dist_2d(float(p8[0]), float(p8[1]), float(p12[0]), float(p12[1])) / hs
-        return li, ri, pm
-
-    def _check_action_cooldown(self, gesture: GestureType, now: float) -> bool:
-        cooldown = self._per_action_cooldown.get(gesture, self._action_cooldown_s)
-        last = self._last_action_time.get(gesture, 0.0)
-        return (now - last) >= cooldown
-
-    def _record_action(self, gesture: GestureType, now: float) -> None:
-        self._last_action_time[gesture] = now
-
-    def _resolve_scroll(self, current_y: float, hand_scale: float) -> int:
-        if self._scroll_prev_y is None:
-            self._scroll_prev_y = current_y
-            self._scroll_velocity_ema = 0.0
-            self._scroll_direction = 0
-            self._scroll_accumulator = 0.0
-            return 0
-
-        dy = float(self._scroll_prev_y) - current_y
-        self._scroll_prev_y = current_y
-
-        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.25)
-        v = self._scroll_velocity_ema
-
-        deadband = max(1.0, hand_scale * self._scroll_deadband_factor)
-        if abs(v) <= deadband:
-            self._scroll_accumulator *= 0.5
-            return 0
-
-        step = max(1.0, hand_scale * self._scroll_step_factor)
-        self._scroll_accumulator += v / step
-
-        steps = int(self._scroll_accumulator)
-        if steps == 0:
-            return 0
-        self._scroll_accumulator -= steps
-        steps = max(-self._scroll_step_limit, min(self._scroll_step_limit, steps))
-
-        direction = 1 if steps > 0 else -1
-        if self._scroll_direction == 0:
-            self._scroll_direction = direction
-        elif direction != self._scroll_direction:
-            now = time.monotonic()
-            if now - self._scroll_last_switch_time < self._scroll_dir_switch_cooldown_s:
-                self._scroll_accumulator = 0.0
-                return 0
-            self._scroll_direction = direction
-            self._scroll_last_switch_time = now
-            self._scroll_velocity_ema = 0.0
-            self._scroll_accumulator = 0.0
-            return 0
-
-        return int(steps * max(1, self._scroll_gain))
-
-    def _clear_scroll(self) -> None:
-        self._scroll_prev_y = None
-        self._scroll_velocity_ema = 0.0
-        self._scroll_direction = 0
-        self._scroll_accumulator = 0.0
-
-    # =====================================================================
-    # DUAL-HAND MODE (default) — left hand = cursor, right hand = actions
-    # =====================================================================
-    def detect_dual(self, hands_dict: dict, is_grace: bool = False) -> GestureResult:
-        """Process gestures from dual-hand input.
-        
-        LEFT hand: cursor tracking (handled in main_window, not here)
-        RIGHT hand: click/scroll/drag gestures
-        
-        If only LEFT hand visible: return MOVE (cursor follows left index)
-        If only RIGHT hand visible: process gestures, cursor uses right index
-        If neither: PAUSE
-        """
-        now = time.monotonic()
-        right_hand = hands_dict.get("Right")
-        left_hand = hands_dict.get("Left")
-
-        # No hands at all
-        if not right_hand and not left_hand:
-            self._reset_all(now)
-            return self._make_result(GestureType.PAUSE, 0)
-
-        # Only left hand (cursor hand) — just MOVE, no actions
-        if not right_hand and left_hand:
-            self._state = GestureType.MOVE
-            self._dragging = False
-            return self._make_result(GestureType.MOVE, 0)
-
-        # Right hand is present — process gestures
-        return self._process_action_hand(right_hand, now, is_grace)
-
-    # =====================================================================
-    # SINGLE-HAND MODE (legacy compat) — one hand does cursor + actions
-    # =====================================================================
-    def detect(self, hand_data: dict | None, is_grace_frame: bool = False) -> GestureResult:
-        """Legacy single-hand detect. Same hand does cursor + gestures."""
-        now = time.monotonic()
-        if hand_data is None:
-            self._reset_all(now)
-            return self._make_result(GestureType.PAUSE, 0)
-
-        return self._process_action_hand(hand_data, now, is_grace_frame)
-
-    # =====================================================================
-    # SHARED ACTION ENGINE — processes one hand for click/scroll/drag
-    # =====================================================================
-    def _process_action_hand(self, hand_data: dict, now: float, 
-                              is_grace: bool = False) -> GestureResult:
-        xy = hand_data.get("xy")
-        if not xy or len(xy) < 21:
-            return self._make_result(GestureType.PAUSE, 0)
-
-        confidence = float(hand_data.get("confidence", 0.0))
-        if confidence < 0.20:
-            return self._make_result(GestureType.PAUSE, 0)
-
-        # Compute hand scale
-        try:
-            wrist = xy[0]; mcp9 = xy[9]
-            self._hand_scale = max(24.0, pinch_dist_2d(
-                float(wrist[0]), float(wrist[1]),
-                float(mcp9[0]), float(mcp9[1])))
-        except (IndexError, TypeError):
-            return self._make_result(GestureType.PAUSE, 0)
-
-        li, ri, pm = self._pinch_ratios(xy, self._hand_scale)
-        enter = float(self._pinch_enter)
-        exit_ = float(self._pinch_exit)
-
-        # --- Left pinch (thumb+index) = click/drag ---
-        prev_left = self._left_pinch_active
-        if self._left_pinch_active:
-            if li > exit_:
-                self._left_pinch_active = False
-                self._left_click_release_time = now
-        elif li <= enter:
-            self._left_pinch_active = True
-
-        # --- Right pinch (thumb+middle) = right-click ---
-        # Requires: index finger clearly open (li > exit_), 
-        # middle+thumb close, held for _right_click_hold_s
-        right_enter = enter * 0.50
-        if self._right_pinch_active:
-            if ri > exit_:
-                self._right_pinch_active = False
-                self._right_pinch_start_t = None
-        elif ri <= right_enter and li > exit_ and pm > 0.15:
-            if self._right_pinch_start_t is None:
-                self._right_pinch_start_t = now
-            elif now - self._right_pinch_start_t >= self._right_click_hold_s:
-                self._right_pinch_active = True
-        else:
-            self._right_pinch_start_t = None
-
-        # --- Peace sign (index+middle spread) = scroll ---
-        peace_pose = (pm >= 0.06 and pm <= 0.65 and li > exit_ and ri > exit_)
-
-        # --- Track pinch duration for drag ---
-        if self._left_pinch_active:
-            if self._left_pinch_since is None:
-                self._left_pinch_since = now
-        else:
-            self._left_pinch_since = None
-
-        # --- Route to raw state ---
-        raw_state = GestureType.MOVE
-
-        if self._left_pinch_active and self._left_pinch_since is not None:
-            held = now - self._left_pinch_since
-            if held >= self._drag_activate_s:
-                raw_state = GestureType.DRAG
-            else:
-                raw_state = GestureType.LEFT_CLICK
-        elif self._right_pinch_active:
-            raw_state = GestureType.RIGHT_CLICK
-        elif peace_pose:
-            raw_state = GestureType.SCROLL
-
-        # --- Stability filter ---
-        if raw_state != self._candidate:
-            self._candidate = raw_state
-            self._stable_start_t = now
-
-        hold_elapsed = max(0.0, now - self._stable_start_t)
-        if is_grace:
-            stable_state = self._state if self._state not in {
-                GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
-                GestureType.DOUBLE_CLICK} else GestureType.MOVE
-        elif hold_elapsed >= self._confirm_hold_s:
-            stable_state = self._candidate
-        else:
-            stable_state = self._state
-
-        # --- Clear scroll when not scrolling ---
-        if stable_state != GestureType.SCROLL and self._state != GestureType.SCROLL:
-            self._clear_scroll()
-
-        # --- Emit actions ---
-        if stable_state == GestureType.LEFT_CLICK:
-            if self._check_action_cooldown(GestureType.LEFT_CLICK, now):
-                # Double-click detection
-                if (self._left_click_release_time > 0.0 
-                    and 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s
-                    and self._check_action_cooldown(GestureType.DOUBLE_CLICK, now)):
-                    self._state = GestureType.DOUBLE_CLICK
-                    self._record_action(GestureType.DOUBLE_CLICK, now)
-                    self._record_action(GestureType.LEFT_CLICK, now)
-                    self._dragging = False
-                    return self._make_result(GestureType.DOUBLE_CLICK, 0)
-
-                self._state = GestureType.LEFT_CLICK
-                self._record_action(GestureType.LEFT_CLICK, now)
-                self._dragging = False
-                return self._make_result(GestureType.LEFT_CLICK, 0)
-            self._state = GestureType.MOVE
-            return self._make_result(GestureType.MOVE, 0)
-
-        if stable_state == GestureType.RIGHT_CLICK:
-            if self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
-                self._state = GestureType.RIGHT_CLICK
-                self._record_action(GestureType.RIGHT_CLICK, now)
-                self._dragging = False
-                return self._make_result(GestureType.RIGHT_CLICK, 0)
-            self._state = GestureType.MOVE
-            return self._make_result(GestureType.MOVE, 0)
-
-        if stable_state == GestureType.DRAG:
-            self._dragging = True
-            self._state = GestureType.DRAG
-            return self._make_result(GestureType.DRAG, 0)
-
-        if stable_state == GestureType.SCROLL:
-            delta = self._resolve_scroll(float(xy[8][1]), self._hand_scale)
-            self._state = GestureType.SCROLL
-            self._dragging = False
-            return self._make_result(GestureType.SCROLL, delta)
-
-        self._state = GestureType.MOVE
-        self._dragging = False
-        return self._make_result(GestureType.MOVE, 0)
-
-    def _reset_all(self, now: float) -> None:
-        self._state = GestureType.PAUSE
-        self._candidate = GestureType.PAUSE
-        self._stable_start_t = now
-        self._dragging = False
-        self._left_pinch_active = False
-        self._right_pinch_active = False
-        self._left_pinch_since = None
-        self._right_pinch_start_t = None
-        self._clear_scroll()
-```
-
-=== FILE 4: Update src/tuning.py ===
-
-Change these values:
-- GESTURE_RIGHT_CLICK_HOLD_S = 0.18  (was 0.10, prevents accidental right-clicks)
-- GESTURE_DRAG_ACTIVATE_S = 0.45     (was 0.38, prevents accidental drags)
-- GESTURE_CONFIRM_HOLD_S = 0.04      (was 0.03, slightly more stable)
-- GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45  (was 0.38, more forgiving)
-
-=== FILE 5: Update src/settings_store.py ===
-
-Add these new keys to DEFAULTS dict:
-    "cursor_mode": "dual_hand",       # "dual_hand" | "single_hand" | "eye_tracking"
-    "eye_tracking_gain": 1.8,
-    "hand_only_mode": True,           # Change default from False to True
-
-=== FILE 6: Update src/models.py ===
-
-No changes needed — all existing GestureType values must remain unchanged.
-
-=== VERIFICATION CHECKLIST ===
-After applying, confirm:
-1. HandTracker.detect() returns (dict, list, bool) — NOT (single_dict, proto, bool)
-2. GestureDetector has both detect() and detect_dual() methods
-3. EyeTracker exists at src/eye_tracker.py
-4. No circular imports
-5. All import paths resolve
-```
-
----
-
-## PROMPT 2 — Main Window Rewire
-
-```
-You are updating src/main_window.py for the Holographic Touch gesture mouse app.
-
-The HandTracker and GestureDetector have been rewritten (Prompt 1 was already applied):
-- HandTracker.detect() now returns (hands_dict, hand_protos_list, is_grace)
-  where hands_dict = {"Left": {...}, "Right": {...}} and hand_protos_list = [(proto, label), ...]
-- GestureDetector has detect_dual(hands_dict) for dual-hand and detect(hand_data) for single-hand
-- EyeTracker is a new class at src/eye_tracker.py
-
-=== IMPORTANT RULES ===
-- Do NOT rewrite the entire file — only change the specific sections listed below
-- Keep ALL existing UI layout code, styles, tray, hotkey, overlay — do NOT touch those
-- Every change is surgical and described with FIND → REPLACE blocks
-- Output the COMPLETE file content for main_window.py
-
-=== CHANGE 1: Update imports ===
-
-Add at the top imports section, after the existing imports:
-```python
-from .eye_tracker import EyeTracker
-```
-
-The import for FaceTracker should remain — it's still used as legacy fallback.
-
-=== CHANGE 2: Update MainWindow.__init__ ===
-
-Find where self.face_tracker is created:
-```python
-        try:
-            self.face_tracker: FaceTracker | None = FaceTracker()
-        except Exception:
-            self.face_tracker = None
-```
-
-After that block, ADD:
-```python
-        # Eye tracker (experimental — enabled in settings)
-        self.eye_tracker: EyeTracker | None = None
-        self._cursor_mode: str = str(settings.get("cursor_mode", "dual_hand"))
-        if self._cursor_mode == "eye_tracking":
-            try:
-                gain = float(settings.get("eye_tracking_gain", 1.8))
-                self.eye_tracker = EyeTracker(gain=gain)
-            except Exception:
-                self.eye_tracker = None
-```
-
-Find where self._hand_only_mode is set:
-```python
-        self._hand_only_mode: bool = _as_bool(
-            settings.get("hand_only_mode", False), False)
-```
-
-Change to:
-```python
-        self._hand_only_mode: bool = self._cursor_mode != "eye_tracking"
-```
-
-This makes dual_hand and single_hand both use hand-based cursor, only eye_tracking uses eyes.
-
-=== CHANGE 3: Rewrite _process_loop cursor dispatch ===
-
-Find the _process_loop method. Replace the ENTIRE body from "while self.running:" through the end of the method with:
-
-```python
-    def _process_loop(self) -> None:
-        last_overlay = GestureType.NONE
-        last_action = GestureType.NONE
-        last_task_view_action = 0.0
-        last_hand_time = time.monotonic()
-
-        _boost_runtime_priority()
-
-        while self.running:
-            if time.monotonic() - last_hand_time > 5.0:
-                time.sleep(0.005)
-
-            try:
-                frame = self.camera.latest()
-                if frame is None:
-                    continue
-
-                if self._mirror_camera:
-                    frame = cv2.flip(frame, 1)
-
-                h, w = frame.shape[:2]
-                self.mapper.set_camera_size(w, h)
-
-                # ── FACE / EYE TRACKER ─────────────────────────────
-                face_pos: tuple[int, int] | None = None
-                eye_pos: tuple[int, int] | None = None
-
-                if self._cursor_mode == "eye_tracking" and self.eye_tracker is not None:
-                    eye_pos = self.eye_tracker.detect(frame)
-                elif self.face_tracker is not None and self.face_tracker.available:
-                    face_pos = self.face_tracker.detect(frame)
-
-                self._nose_pos = face_pos
-                if face_pos is None and eye_pos is None:
-                    self._face_lost_frames += 1
-                    if self._face_lost_frames > 3:
-                        self._scroll_nose_y = None
-                else:
-                    self._face_lost_frames = 0
-                _face_tracked = (face_pos is not None) or (eye_pos is not None)
-
-                # ── HAND TRACKER ───────────────────────────────────
-                tracker = self.tracker
-                if tracker is None:
-                    continue
-
-                hands_dict, hand_protos, is_grace = tracker.detect(
-                    frame, is_mirrored=self._mirror_camera)
-
-                rgb_cached = getattr(tracker, '_last_rgb_frame', None)
-
-                if hands_dict:
-                    last_hand_time = time.monotonic()
-                    # Compute hand scale from whichever hand is available
-                    for _hd in hands_dict.values():
-                        _xy = _hd.get("xy", [])
-                        if len(_xy) >= 10:
-                            _w = _xy[0]; _m = _xy[9]
-                            scale = ((_w[0]-_m[0])**2 + (_w[1]-_m[1])**2)**0.5
-                            self.mapper.set_hand_scale(scale)
-                            break
-                    self._camera_error_text = ""
-                else:
-                    self._camera_error_text = self.camera.last_error
-
-                # ── GESTURE DETECTION ──────────────────────────────
-                if self._cursor_mode == "dual_hand":
-                    result = self.gestures.detect_dual(hands_dict, is_grace)
-                else:
-                    # Single-hand or eye-tracking: use right hand for gestures
-                    action_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                    result = self.gestures.detect(action_hand, is_grace)
-
-                if result is None:
-                    result = GestureResult(GestureType.PAUSE, 0)
-
-                gesture = result.gesture
-                gesture_changed = gesture != last_action
-
-                # Confidence gate
-                _action_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                if _action_hand and float(_action_hand.get("confidence", 0)) < 0.55:
-                    if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
-                                   GestureType.DOUBLE_CLICK}:
-                        gesture = GestureType.MOVE
-                        result = GestureResult(GestureType.MOVE, 0)
-                        gesture_changed = gesture != last_action
-
-                # ── CURSOR POSITION ────────────────────────────────
-                _has_cursor = False
-                sx, sy = self._frozen_sx, self._frozen_sy
-
-                if self._cursor_mode == "eye_tracking":
-                    # Eye tracking mode: eyes drive cursor
-                    if eye_pos is not None:
-                        sx, sy = self.mapper.map_point(eye_pos[0], eye_pos[1])
-                        _has_cursor = True
-                    elif face_pos is not None:
-                        sx, sy = self.mapper.map_point(face_pos[0], face_pos[1])
-                        _has_cursor = True
-                    else:
-                        _has_cursor = self._frozen_sx >= 0
-
-                elif self._cursor_mode == "dual_hand":
-                    # Dual-hand: LEFT hand index finger = cursor
-                    left_hand = hands_dict.get("Left")
-                    if gesture in self._freeze_on:
-                        # Freeze cursor during clicks
-                        _has_cursor = self._frozen_sx >= 0
-                    elif left_hand and len(left_hand.get("xy", [])) > 8:
-                        tip = left_hand["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-                        _has_cursor = True
-                    elif hands_dict.get("Right") and len(hands_dict["Right"].get("xy", [])) > 8:
-                        # Fallback: if only right hand, use right index for cursor
-                        tip = hands_dict["Right"]["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-                        _has_cursor = True
-                    else:
-                        _has_cursor = self._frozen_sx >= 0
-
-                else:
-                    # Single-hand legacy: index finger = cursor
-                    _any_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                    if gesture in self._freeze_on:
-                        _has_cursor = self._frozen_sx >= 0
-                    elif _any_hand and len(_any_hand.get("xy", [])) > 8:
-                        tip = _any_hand["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-                        _has_cursor = True
-                    else:
-                        _has_cursor = self._frozen_sx >= 0
-
-                if _has_cursor:
-                    self._frozen_sx, self._frozen_sy = sx, sy
-
-                # ── DISPATCH ACTIONS ───────────────────────────────
-                _allow_action = not is_grace
-
-                if self.mouse_enabled and _has_cursor and gesture in self._CURSOR_GESTURES:
-                    if gesture != GestureType.SCROLL:
-                        self.mouse.move(sx, sy)
-
-                    if gesture == GestureType.MOVE:
-                        pass
-                    elif gesture == GestureType.LEFT_CLICK and gesture_changed and _allow_action:
-                        self.mouse.left_click()
-                    elif gesture == GestureType.DOUBLE_CLICK and gesture_changed and _allow_action:
-                        self.mouse.double_click()
-                    elif gesture == GestureType.RIGHT_CLICK and gesture_changed and _allow_action:
-                        self.mouse.right_click()
-                    elif gesture == GestureType.SCROLL and _allow_action:
-                        self.mouse.scroll(int(result.scroll_delta * self._scroll_multiplier))
-                    elif gesture == GestureType.DRAG:
-                        if not self._drag_active:
-                            self.mouse.start_drag()
-                            self._drag_active = True
-
-                    if gesture != GestureType.DRAG and self.mouse.is_dragging:
-                        self.mouse.end_drag()
-                        self._drag_active = False
-                else:
-                    if self.mouse.is_dragging:
-                        self.mouse.end_drag()
-                        self._drag_active = False
-
-                if not self.mouse_enabled and self.mouse.is_dragging:
-                    self.mouse.end_drag()
-                    self._drag_active = False
-
-                # ── UPDATE UI STATE ────────────────────────────────
-                if gesture != last_overlay:
-                    overlay = _OVERLAY_LABELS.get(gesture, "")
-                    last_overlay = gesture
-                else:
-                    overlay = self._overlay_text
-
-                if gesture != last_action:
-                    ts = time.strftime("%H:%M:%S")
-                    self._gesture_history.appendleft((gesture, ts))
-
-                last_action = gesture
-
-                now = time.monotonic()
-                dt = now - self._fps_prev
-                self._fps_prev = now
-                if dt > 0:
-                    fps_i = 1.0 / dt
-                    self.fps = fps_i if self.fps == 0 else 0.9 * self.fps + 0.1 * fps_i
-
-                # Finger count
-                _finger_count = 0
-                _count_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                if _count_hand:
-                    try:
-                        _xy = _count_hand.get("xy", [])
-                        if len(_xy) >= 21:
-                            _w = _xy[0]
-                            for _t, _p in zip([4,8,12,16,20], [2,6,10,14,18]):
-                                _td = ((_xy[_t][0]-_w[0])**2+(_xy[_t][1]-_w[1])**2)**0.5
-                                _pd = ((_xy[_p][0]-_w[0])**2+(_xy[_p][1]-_w[1])**2)**0.5
-                                if _td > _pd:
-                                    _finger_count += 1
-                    except Exception:
-                        pass
-
-                with self._lock:
-                    self._frame = frame
-                    self._rgb_frame = rgb_cached
-                    self._gesture = gesture
-                    self._overlay_text = overlay
-                    self._hand_proto = hand_protos  # Now a list of (proto, label)
-                    self._hand_data = _count_hand
-                    self._fingers = _finger_count
-                    self._face_tracked = _face_tracked
-
-            except Exception:
-                continue
-```
-
-=== CHANGE 4: Update _render to handle new hand_protos format ===
-
-In _render(), find where hand skeleton is drawn:
-```python
-        if hand_proto is not None and tracker is not None:
-            label = hand_data["label"] if hand_data else "Right"
-            tracker.draw(rgb, hand_proto, label)
-```
-
-Replace with:
-```python
-        if hand_proto is not None and tracker is not None:
-            # hand_proto is now a list of (proto, label) tuples
-            if isinstance(hand_proto, list):
-                tracker.draw(rgb, hand_proto)
-            else:
-                label = hand_data["label"] if hand_data else "Right"
-                tracker.draw(rgb, hand_proto, label)
-```
-
-Also in _render(), add eye tracker drawing. After the face_tracker.draw() call, add:
-```python
-        if self._cursor_mode == "eye_tracking" and self.eye_tracker is not None:
-            self.eye_tracker.draw(rgb)
-```
-
-=== CHANGE 5: Update _render badge text ===
-
-Find:
-```python
-        if gesture == GestureType.MOVE and not self._hand_only_mode:
-            _badge_text = "TRACKING" if self._face_tracked else "ACQUIRING"
-```
-
-Replace with:
-```python
-        if gesture == GestureType.MOVE:
-            if self._cursor_mode == "dual_hand":
-                _badge_text = "DUAL HAND"
-            elif self._cursor_mode == "eye_tracking":
-                _badge_text = "IRIS TRACK" if self._face_tracked else "ACQUIRING"
-            else:
-                _badge_text = "TRACKING" if self._face_tracked else "ACQUIRING"
-```
-
-=== CHANGE 6: Update Settings Dialog — add cursor mode selector ===
-
-In the SettingsDialog, in the Gestures tab, find the hand_only_chk checkbox and REPLACE it with a cursor mode combo box:
-
-Remove:
-```python
-        self.hand_only_chk = QCheckBox(...)
-        self.hand_only_chk.setChecked(...)
-        self.hand_only_chk.setToolTip(...)
-        gesture_layout.addWidget(self.hand_only_chk)
-```
-
-Replace with:
-```python
-        cursor_mode_label = QLabel("Cursor Control Mode")
-        cursor_mode_label.setObjectName("section")
-        self.cursor_mode_combo = QComboBox()
-        self.cursor_mode_combo.addItem("Dual Hand (Left=Cursor, Right=Actions)", "dual_hand")
-        self.cursor_mode_combo.addItem("Single Hand (same hand)", "single_hand")
-        self.cursor_mode_combo.addItem("Eye Tracking (experimental)", "eye_tracking")
-        current_mode = str(settings.get("cursor_mode", "dual_hand"))
-        idx = self.cursor_mode_combo.findData(current_mode)
-        if idx >= 0:
-            self.cursor_mode_combo.setCurrentIndex(idx)
-        gesture_layout.addWidget(cursor_mode_label)
-        gesture_layout.addWidget(self.cursor_mode_combo)
-```
-
-Add the signal connection:
-```python
-        self.cursor_mode_combo.currentIndexChanged.connect(self._on_cursor_mode_changed)
-```
-
-Add the handler method to SettingsDialog:
-```python
-    def _on_cursor_mode_changed(self, idx: int) -> None:
-        mode = self.cursor_mode_combo.itemData(idx)
-        if mode:
-            settings.set("cursor_mode", str(mode))
-            QMessageBox.information(self, "Restart Required", 
-                "Cursor mode change requires restarting the camera.")
-```
-
-Remove the _on_hand_only_changed handler and its signal connection.
-
-=== CHANGE 7: Update guide rows ===
-
-Update guide_rows for dual-hand mode in _build_ui and _update_guide_rows:
-
-```python
-        guide_rows_dual = [
-            ("move",        "Move cursor",   "Left hand index finger"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
-        ]
-```
-
-=== CHANGE 8: Update _quit_app and closeEvent ===
-
-Add eye_tracker cleanup alongside face_tracker:
-```python
-        try:
-            if self.eye_tracker is not None:
-                self.eye_tracker.close()
-        except Exception:
-            pass
-```
-
-=== VERIFICATION CHECKLIST ===
-1. _process_loop handles hands_dict (a dict of dicts), not a single hand_data
-2. Cursor follows LEFT hand index finger in dual_hand mode
-3. RIGHT hand gestures fire clicks/scroll/drag
-4. Eye tracking mode uses iris positions for cursor
-5. Settings dialog has cursor mode dropdown instead of checkbox
-6. No print() spam in the processing loop
-7. Drag is properly started/ended
-8. _render handles both list and single-proto formats
-```
-
----
-
-## PROMPT 3 — Final Polish, UI Styles, Verification
-
-```
-You are doing the FINAL polish pass on the Holographic Touch app.
-Prompts 1 and 2 have been applied. The dual-hand system and eye tracker are wired up.
-
-This prompt handles: UI style refresh, guide text updates, mode indicator, 
-startup defaults, and a manual test script.
-
-=== IMPORTANT RULES ===
-- Only modify the specific sections listed
-- Keep all functionality from Prompts 1 and 2 intact
-- No new features — only polish and verify
-
-=== CHANGE 1: Update main window stylesheet ===
-
-In MainWindow._build_ui(), find the self.setStyleSheet(...) call and update
-the #badge style to handle the new DUAL HAND badge width:
-
-Find:
-```
-            #badge {
-```
-
-Replace the entire #badge block with:
-```css
-            #badge {
-                border-radius: 12px; padding: 6px 18px; font-weight: 700;
-                background: rgba(15, 18, 25, 0.8); color: #E2E8F0;
-                min-width: 100px; max-width: 220px;
-                font-size: 13px; letter-spacing: 1.5px;
-                border: 1px solid rgba(39, 39, 42, 0.4);
-                text-align: center;
-            }
-```
-
-=== CHANGE 2: Update mode indicator in status panel ===
-
-In _build_ui, find self.mode_lbl and update its initial text:
-
-```python
-        _mode_labels = {
-            "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
-            "single_hand": "Mode: Single Hand",
-            "eye_tracking": "Mode: Eye Tracking (experimental)",
-        }
-        self.mode_lbl = QLabel(_mode_labels.get(self._cursor_mode, "Mode: Dual Hand"))
-        self.mode_lbl.setObjectName("secondary")
-        self.mode_lbl.setWordWrap(True)
-```
-
-=== CHANGE 3: Update _update_guide_rows to support all 3 modes ===
-
-```python
-    def _update_guide_rows(self) -> None:
-        guide_rows_dual = [
-            ("move",        "Move cursor",   "Left hand index finger"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
-        ]
-        guide_rows_single = [
-            ("move",        "Move cursor",   "Index finger up"),
-            ("left_click",  "Left click",    "Thumb+Index pinch"),
-            ("double_click","Double click",  "Quick double pinch"),
-            ("drag",        "Drag",          "Hold pinch"),
-            ("right_click", "Right click",   "Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Peace sign up/down"),
-        ]
-        guide_rows_eye = [
-            ("move",        "Move cursor",   "Look around (iris tracking)"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
-        ]
-
-        if self._cursor_mode == "dual_hand":
-            rows = guide_rows_dual
-        elif self._cursor_mode == "eye_tracking":
-            rows = guide_rows_eye
-        else:
-            rows = guide_rows_single
-
-        for idx, (il, tl, dl) in enumerate(self._guide_row_widgets):
-            if idx < len(rows):
-                icon_key, action_desc, gesture_desc = rows[idx]
-                il.setPixmap(self.icons[icon_key].pixmap(QSize(18, 18)))
-                tl.setText(gesture_desc)
-                dl.setText(action_desc)
-
-        _mode_labels = {
-            "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
-            "single_hand": "Mode: Single Hand",
-            "eye_tracking": "Mode: Eye Tracking (experimental)",
-        }
-        if hasattr(self, "mode_lbl"):
-            self.mode_lbl.setText(
-                _mode_labels.get(self._cursor_mode, "Mode: Dual Hand"))
-```
-
-=== CHANGE 4: Update constants.py ===
-
-The overlay labels should include a clean MOVE label:
-
-In src/constants.py, ensure GestureType.MOVE maps to "MOVE" (no change needed if already correct).
-
-=== CHANGE 5: Update _render hand display for dual-hand ===
-
-In _render(), update the hand status label to show both hands:
-
-Find:
-```python
-        if not self._hand_only_mode:
-```
-
-Replace with:
-```python
-        if self._cursor_mode == "eye_tracking":
-            self.hand_lbl.setText(
-                f"Eyes: {'Tracking' if _face_on else 'Lost'}  |  "
-                f"Hand: {'Detected' if hand_proto else 'None'}")
-        elif self._cursor_mode == "dual_hand":
-            # Show both hands status
-            _left_ok = False
-            _right_ok = False
-            if isinstance(hand_proto, list):
-                for _, lbl in hand_proto:
-                    if lbl == "Left": _left_ok = True
-                    if lbl == "Right": _right_ok = True
-            self.hand_lbl.setText(
-                f"L: {'●' if _left_ok else '○'}  R: {'●' if _right_ok else '○'}")
-        else:
-```
-
-=== CHANGE 6: Create manual test checklist file ===
-
-Create a file tests/MANUAL_TEST_CHECKLIST.md:
-
-```markdown
-# Holographic Touch — Manual Test Checklist
-
-Run through each item. All must pass before release.
-
-## Startup
-- [ ] App launches without errors
-- [ ] Camera detects and starts
-- [ ] No console spam (only startup messages)
-- [ ] FPS counter shows 20+ FPS
-
-## Dual-Hand Mode (default)
-- [ ] Show LEFT hand: cursor follows left index finger smoothly
-- [ ] Show RIGHT hand: cursor follows right index (fallback)
-- [ ] Show BOTH hands: cursor follows LEFT, gestures use RIGHT
-- [ ] Move left hand across camera view: cursor reaches all screen edges
-- [ ] Cursor is smooth — no jitter, no pausing, no teleporting
-
-## Left Click (Right hand: thumb+index pinch)
-- [ ] Pinch right thumb+index: single left click fires
-- [ ] Release and pinch again: another click (no spam)
-- [ ] Click registers on UI elements (try clicking buttons, links)
-
-## Double Click
-- [ ] Quick pinch-release-pinch within 0.45s: double click fires
-- [ ] Slow pinch-release-pinch (>0.5s): two single clicks, not double
-
-## Right Click
-- [ ] Right hand: pinch thumb+middle while index is extended
-- [ ] Must hold 0.18s before triggering (no accidental fires)
-- [ ] Context menu appears at cursor position
-
-## Scroll
-- [ ] Right hand: peace sign (index+middle extended)
-- [ ] Move hand UP: page scrolls UP
-- [ ] Move hand DOWN: page scrolls DOWN  
-- [ ] Scroll is smooth — no jerking
-- [ ] Stop hand: scroll stops
-
-## Drag
-- [ ] Right hand: hold thumb+index pinch for 0.45s
-- [ ] Drag activates — move left hand to drag
-- [ ] Release pinch: drag ends cleanly
-- [ ] No stuck drags
-
-## Eye Tracking (experimental)
-- [ ] Change to eye tracking mode in Settings → Gestures
-- [ ] Restart camera
-- [ ] Cursor follows eye/head movement
-- [ ] Right hand gestures still work for clicks/scroll
-
-## UI
-- [ ] Badge shows "DUAL HAND" in dual mode, "IRIS TRACK" in eye mode
-- [ ] Hand status shows L: ● R: ● when both hands visible
-- [ ] Settings dialog opens and closes without crash
-- [ ] Cursor mode dropdown works in settings
-- [ ] Window resizes without layout breaking
-- [ ] All text readable, no clipping
-
-## Stability
-- [ ] Wave hand in/out of view: no crashes, no ghost clicks
-- [ ] Cover camera: app handles gracefully
-- [ ] Run for 5 minutes: no memory leak, no FPS degradation
-- [ ] Enable Mouse → Minimize → Overlay appears → works
-```
-
-=== VERIFICATION ===
-After this prompt, the app should be:
-1. Dual-hand mode works as default — left cursor, right actions
-2. Eye tracking available as experimental option
-3. Single-hand mode still works (legacy)
-4. All gestures functional: click, double-click, right-click, scroll, drag
-5. Cursor is smooth and responsive
-6. UI is polished and adapts to all modes
-7. No console spam
-8. Manual test checklist passes 100%
-```
-
----
-
-## Application Order
-
-1. **Apply Prompt 1** → creates eye_tracker.py, rewrites hand_tracker.py and gesture_detector.py, updates tuning + settings
-2. **Apply Prompt 2** → rewrites main_window.py process loop, cursor dispatch, settings dialog  
-3. **Apply Prompt 3** → final UI polish, guide updates, test checklist
-
-After all 3 prompts: start the app, open Settings → Gestures, confirm "Dual Hand" is selected, start camera, and test with both hands.
+=== MASTER_PROMPT.txt ===
+MASTER PROMPT — Holographic Touch Complete Fix
+================================================
+Paste this entire prompt to Claude Opus or GPT-4o with your project_compact_export.txt attached.
+================================================
+
+You are fixing the "Holographic Touch" gesture-mouse app (PySide6 + OpenCV + MediaPipe, Python 3.12, Windows).
+The full source is attached as project_compact_export.txt. Read every file before writing any code.
+
+OUTPUT RULES (read before writing anything):
+- Output COMPLETE file replacements — no "# ... existing code ..." or "# unchanged" placeholders
+- Every method must have a return statement on every path
+- No new imports unless explicitly listed — use only what already exists in the project
+- Preserve every existing class/method name and signature unless explicitly told to change it
+- Write all 6 files below. Do not skip any.
+
+═══════════════════════════════════════════════════════════════
+PROBLEM SUMMARY — fix ALL of these, nothing else:
+═══════════════════════════════════════════════════════════════
+
+1. MODE SWITCHING WITH 5-MINUTE LOCK
+   Current bug: when a hand briefly leaves the camera in dual-hand mode the app
+   has no protection — future code could flip modes accidentally.
+   Fix: add self._mode_lock_until: float = 0.0 in MainWindow.__init__
+        Any time the user changes mode (via Settings), set _mode_lock_until = time.monotonic() + 300.0
+        In _process_loop, NEVER auto-switch modes. Mode only changes via Settings dialog.
+        The 5-minute lock is for the Settings dialog: after changing mode, the combo-box
+        is disabled for 5 minutes (show a countdown label next to it). This prevents
+        accidental re-clicks. The user CAN override it by clicking the mode combo again
+        after 30 seconds (show "Override available in Xs" countdown).
+
+2. PROMINENT MODE STATUS BOX
+   The mode_lbl already exists but is too subtle.
+   Fix: In _render(), update mode_lbl every frame with colored text:
+        - DUAL HAND mode: color #22D3EE (cyan), text "⬡ DUAL HAND  L=Cursor  R=Actions"
+        - SINGLE HAND mode: color #A78BFA (purple), text "◈ SINGLE HAND  Any hand = cursor+actions"
+        Also add a second badge next to gesture_lbl showing the mode — a small pill
+        with bg color matching mode color.
+
+3. SINGLE HAND MODE — WORKS WITH EITHER HAND, BETTER CURSOR SMOOTHING
+   Current code: single-hand picks `hands_dict.get("Right") or hands_dict.get("Left")` which is correct.
+   Fix needed: cursor jitter in single-hand.
+   Fix: In _process_loop, for single-hand cursor tracking, apply an ADDITIONAL 3-frame
+        rolling average on the raw camera landmark point BEFORE passing to mapper.map_point().
+        Add self._sh_cursor_history: list = [] (maxlen 3) to MainWindow.__init__.
+        Each frame in single-hand mode: append (tip_x, tip_y) to _sh_cursor_history,
+        average the last min(3, len) entries, use the average as the camera point.
+        This kills jitter without adding perceived lag.
+
+4. CONTROL MARGIN — WIDEN DETECTION ZONE
+   Current bug: when hand moves near the edge of the camera frame (outside the blue
+   control-region box) MediaPipe stops tracking.
+   Fix: In _process_loop, pass the FULL frame to tracker.detect() (already done — good).
+        The issue is the CursorMapper clips cursor output to screen edges but the
+        DETECTION still uses the full frame — so detection is fine. The real problem
+        is the frame_r margin is set too large by default, making the active zone tiny.
+        Fix: Change DEFAULT frame_r in settings_store.py DEFAULTS from 90 to 40.
+        Change the slider default in SettingsDialog to match.
+        Also: in CursorMapper.map_point(), change the soft-deadzone from 1.5px to 0.8px
+        for hand-only mode (set CURSOR_SOFT_DEADZONE_PX = 0.8 in tuning.py).
+
+5. SCROLL — MAKE IT WORK INTUITIVELY
+   Current: scroll uses index tip Y (xy[8][1]) inside _resolve_scroll.
+   Problems: direction feels random, too sensitive, hard to enter peace-sign pose.
+   Fix in gesture_detector.py _process_action_hand():
+     - Peace sign detection: pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_
+       (widened pm range — easier to enter at various distances)
+     - In _resolve_scroll(), change tracking point from xy[8] to the MIDPOINT of
+       xy[8] and xy[12] (average of index and middle tips Y coords):
+         scroll_y = (float(xy[8][1]) + float(xy[12][1])) * 0.5
+       This is more stable than single finger.
+     - Increase EMA alpha from 0.25 to 0.35 for faster response
+     - deadband: change from hand_scale * 0.06 to hand_scale * 0.04 (easier to trigger)
+     - scroll_step_factor: change from 0.08 to 0.06 (smoother steps)
+     - Direction: hand moves UP (Y decreases in image) → scroll UP (positive delta) ✓
+       Already correct — dy = prev_y - current_y, positive when moving up. Keep this.
+     - scroll_step_limit: keep at 8
+     - In tuning.py: GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25 (was 0.10, stops jitter)
+
+6. DRAG — MORE RELIABLE
+   Current: drag activates after 0.45s hold.
+   Fix: Keep 0.45s. But add visual feedback in _render() — while left pinch is held
+        but drag hasn't activated yet, draw a progress arc on the camera preview.
+        Specifically: read self.gestures._left_pinch_since and self.gestures._drag_activate_s.
+        If _left_pinch_since is not None, compute progress = (now - _left_pinch_since) / _drag_activate_s
+        clamped 0–1. Draw a small cyan arc at the cursor position on the rgb frame.
+        When drag IS active, draw a filled dot (drag indicator).
+        The arc/dot drawing happens in _render() on the rgb frame before QImage conversion.
+        To get drag progress in _render() (which runs on UI thread), store it as
+        self._drag_progress: float = 0.0 and update it in _process_loop under self._lock.
+
+7. RANDOM GESTURE FIXES (right-click and accidental clicks)
+   - right_enter threshold: keep at enter * 0.50 (already correct)
+   - In _process_loop confidence gate: raise threshold for RIGHT_CLICK from 0.55 to 0.65
+     (right-click requires higher confidence than left-click)
+   - In GestureDetector.__init__: _right_click_hold_s = max(0.25, GESTURE_RIGHT_CLICK_HOLD_S)
+     (was 0.15 — increase minimum to 0.25s)
+   - pm > 0.15 check for right pinch: raise to pm > 0.20 (index must be more clearly open)
+
+═══════════════════════════════════════════════════════════════
+FILES TO OUTPUT (complete replacements):
+═══════════════════════════════════════════════════════════════
+
+FILE 1: src/tuning.py
+─────────────────────
+Output the complete file with these values changed:
+  CURSOR_SOFT_DEADZONE_PX = 0.8          # was 1.5
+  GESTURE_CONFIRM_HOLD_S = 0.04          # was 0.03
+  GESTURE_DRAG_ACTIVATE_S = 0.45         # was 0.38
+  GESTURE_RIGHT_CLICK_HOLD_S = 0.25      # was 0.10 — stops random right clicks
+  GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45   # was 0.38
+  GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25  # was 0.10 — stops scroll jitter
+All other values unchanged.
+
+FILE 2: src/settings_store.py
+──────────────────────────────
+Output the complete file with DEFAULTS changed:
+  "frame_r": 40,       # was 90 — wider active zone by default
+  "hand_only_mode": True,  # default to hand-based tracking
+  "cursor_mode": "dual_hand",  # already there, keep
+Keep all other DEFAULTS unchanged. Keep all methods unchanged.
+
+FILE 3: src/gesture_detector.py
+────────────────────────────────
+Output the complete file with ALL methods intact. Changes:
+a) In __init__:
+   - self._right_click_hold_s = max(0.25, float(GESTURE_RIGHT_CLICK_HOLD_S))
+   - self._scroll_deadband_factor = 0.04   # was 0.06
+   - self._scroll_step_factor = 0.06       # was 0.08
+
+b) In _process_action_hand():
+   - peace_pose: change pm bounds to: pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_
+   - right pinch pm check: change pm > 0.15 to pm > 0.20
+   - scroll call: change from float(xy[8][1]) to (float(xy[8][1]) + float(xy[12][1])) * 0.5
+
+c) In _resolve_scroll():
+   - EMA alpha: change 0.25 to 0.35
+   - deadband: change hand_scale * self._scroll_deadband_factor (keep formula, value changed in __init__)
+   - Keep all else unchanged — direction logic is already correct
+
+FILE 4: src/cursor_mapper.py
+──────────────────────────────
+Output the complete file. Only change:
+  In map_point(), the soft deadzone line:
+    if speed < self._deadzone_px:
+  The _deadzone_px is already set from CURSOR_SOFT_DEADZONE_PX in tuning.py (now 0.8).
+  No other changes needed — the tuning.py change propagates here automatically.
+  But add this guard to set_frame_margin(): clamp minimum margin to 10 (not 0), ensuring
+  the active zone is always at least 10px from each edge:
+    self.frame_r = max(10, min(int(margin_px), self.max_effective_margin_px()))
+
+FILE 5: src/main_window.py
+────────────────────────────
+Output the COMPLETE file. Targeted changes only (keep all existing logic):
+
+a) In MainWindow.__init__, after existing self._freeze_on = {...} block, ADD:
+   self._mode_lock_until: float = 0.0          # prevents mode-switch spam
+   self._sh_cursor_history: list = []           # 3-frame rolling avg for single-hand
+   self._drag_progress: float = 0.0             # for drag arc UI
+
+b) In _process_loop, in the single-hand cursor section (else branch at bottom of cursor pos):
+   Replace:
+       elif _any_hand and len(_any_hand.get("xy", [])) > 8:
+           tip = _any_hand["xy"][8]
+           sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
+           _has_cursor = True
+   With:
+       elif _any_hand and len(_any_hand.get("xy", [])) > 8:
+           tip = _any_hand["xy"][8]
+           self._sh_cursor_history.append((int(tip[0]), int(tip[1])))
+           if len(self._sh_cursor_history) > 3:
+               self._sh_cursor_history.pop(0)
+           avg_x = int(sum(p[0] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
+           avg_y = int(sum(p[1] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
+           sx, sy = self.mapper.map_point(avg_x, avg_y)
+           _has_cursor = True
+   Also reset _sh_cursor_history when hand is lost:
+   In the else branch (no cursor): self._sh_cursor_history.clear()
+
+c) In _process_loop, under the self._lock block at end of frame processing, ADD:
+   # Update drag progress for UI arc
+   if self.gestures._left_pinch_since is not None:
+       _dp = (time.monotonic() - self.gestures._left_pinch_since) / max(0.01, self.gestures._drag_activate_s)
+       self._drag_progress = min(1.0, _dp)
+   else:
+       self._drag_progress = 0.0
+
+d) In _render(), after the cv2.rectangle control region block and before the QImage block, ADD:
+   # Drag progress arc
+   with self._lock:
+       _dp = self._drag_progress
+       _drag_on = self._drag_active
+   if _dp > 0.05 or _drag_on:
+       try:
+           h_rgb, w_rgb = rgb.shape[:2]
+           cx_arc = w_rgb // 2
+           cy_arc = h_rgb - 30
+           if _drag_on:
+               cv2.circle(rgb, (cx_arc, cy_arc), 12, (0, 200, 255), -1, cv2.LINE_AA)
+               cv2.putText(rgb, "DRAG", (cx_arc - 18, cy_arc + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
+           else:
+               angle = int(360 * _dp)
+               cv2.ellipse(rgb, (cx_arc, cy_arc), (14, 14), -90, 0, angle,
+                           (0, 200, 255), 3, cv2.LINE_AA)
+       except Exception:
+           pass
+
+e) In _render(), update mode_lbl with colored text each frame:
+   Find the block that updates self.hand_lbl and add BEFORE it:
+       _mode_color = "#22D3EE" if self._cursor_mode == "dual_hand" else "#A78BFA"
+       _mode_icon = "⬡" if self._cursor_mode == "dual_hand" else "◈"
+       _mode_text_map = {
+           "dual_hand": f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions",
+           "single_hand": f"{_mode_icon} SINGLE HAND  Any hand",
+           "eye_tracking": "◉ EYE TRACKING  experimental",
+       }
+       if hasattr(self, "mode_lbl"):
+           self.mode_lbl.setText(_mode_text_map.get(self._cursor_mode, ""))
+           self.mode_lbl.setStyleSheet(f"color: {_mode_color}; font-weight: 700; font-size: 12px;")
+
+f) In SettingsDialog._on_cursor_mode_changed() (the slot that handles mode combo change):
+   ADD at the start of the method:
+       self._mw._mode_lock_until = time.monotonic() + 300.0
+       settings.set("cursor_mode", ...)   # keep existing logic
+   And disable the cursor_mode combo for 30 seconds with a QTimer that re-enables it
+   and shows "Mode locked for Xs" in a nearby label (add self.mode_lock_lbl = QLabel("")).
+
+g) In the confidence gate in _process_loop, raise RIGHT_CLICK check:
+   Find:
+       if _action_hand and float(_action_hand.get("confidence", 0)) < 0.55:
+           if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}:
+   Replace with:
+       if _action_hand:
+           _conf = float(_action_hand.get("confidence", 0))
+           if _conf < 0.55 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+               gesture = GestureType.MOVE
+               result = GestureResult(GestureType.MOVE, 0)
+               gesture_changed = gesture != last_action
+           elif _conf < 0.65 and gesture == GestureType.RIGHT_CLICK:
+               gesture = GestureType.MOVE
+               result = GestureResult(GestureType.MOVE, 0)
+               gesture_changed = gesture != last_action
+
+FILE 6: src/hand_tracker.py
+─────────────────────────────
+Output the complete file. Only change: in HandTracker.__init__():
+  Change max_num_hands from 1 to 2 in self._hands (the main MediaPipe Hands instance):
+      self._hands = self._mp_hands.Hands(
+          static_image_mode=False,
+          max_num_hands=2,             # ← was 1, now detects both hands
+          model_complexity=0,
+          min_detection_confidence=0.50,   # slightly lower — catches hands near edges
+          min_tracking_confidence=0.30,    # lower — keeps tracking longer at edges
+      )
+
+  In detect(), update the processing loop to collect ALL detected hands into hands_dict:
+  The current code only takes chosen_idx=0. Replace the single-hand extraction with:
+      hands_dict = {}
+      hand_protos_list = []
+      for i, (hand, handedness_item) in enumerate(zip(
+              result.multi_hand_landmarks, result.multi_handedness)):
+          raw_label = handedness_item.classification[0].label
+          label = self._map_label(raw_label, is_mirrored=is_mirrored)
+          confidence = float(handedness_item.classification[0].score)
+          if confidence < 0.30:
+              continue
+          if self._process_size is None:
+              xy = [(max(0, min(src_w - 1, int(lm.x * src_w))),
+                     max(0, min(src_h - 1, int(lm.y * src_h)))) for lm in hand.landmark]
+          else:
+              sx_s = float(src_w) / float(max(1, detect_w))
+              sy_s = float(src_h) / float(max(1, detect_h))
+              xy = [(max(0, min(src_w - 1, int(lm.x * detect_w * sx_s))),
+                     max(0, min(src_h - 1, int(lm.y * detect_h * sy_s)))) for lm in hand.landmark]
+          z = [float(lm.z) for lm in hand.landmark]
+          hdata = {"xy": xy, "z": z, "label": label, "confidence": confidence,
+                   "frame_size": (detect_w, detect_h)}
+          # Last writer wins for same label (take higher confidence)
+          if label not in hands_dict or confidence > hands_dict[label]["confidence"]:
+              hands_dict[label] = hdata
+              if i < len(hand_protos_list):
+                  hand_protos_list[i] = (hand, label)
+              else:
+                  hand_protos_list.append((hand, label))
+
+      if not hands_dict:
+          # grace frame logic
+          self._frames_no_hand += 1
+          if self._frames_no_hand < self._grace_frames and self._last_valid_result is not None:
+              hd, hp = self._last_valid_result
+              return hd, hp, True
+          self._label_history.clear()
+          self._hand_lock_frames = 0
+          self._hand_locked = False
+          self._low_conf_drop_frames = 0
+          self._last_valid_result = None
+          return {}, [], False
+
+      self._frames_no_hand = 0
+      self._last_valid_result = (hands_dict, hand_protos_list)
+      return hands_dict, hand_protos_list, False
+
+  Also update _last_valid_result type annotation to tuple[dict, list] | None.
+  Also update the grace-frame return to use {}, [] instead of None, None.
+  Also update the ONNX path to return {"Right": hand_data}, [(_OnnxHandProto(xy_onnx), "Right")], False
+
+  IMPORTANT: the return signature is now (dict, list, bool) where dict = {"Left": {...}, "Right": {...}}
+  and list = [(proto, label), ...]. The rest of main_window.py already handles this format.
+
+═══════════════════════════════════════════════════════════════
+VERIFICATION — after writing all 6 files, confirm:
+═══════════════════════════════════════════════════════════════
+1. HandTracker.detect() returns (dict, list, bool) — hands_dict keys are "Left"/"Right"
+2. GestureDetector.detect_dual() and detect() both exist and work
+3. _sh_cursor_history rolling average is applied in single-hand cursor path only
+4. _drag_progress is updated in _process_loop and drawn as arc in _render()
+5. Right-click requires 0.65 confidence and 0.25s hold
+6. Scroll uses midpoint of index+middle Y, EMA alpha 0.35, deadband factor 0.04
+7. Default frame_r is 40 (not 90)
+8. Mode lock sets _mode_lock_until = now + 300.0 when mode changes in settings
+9. mode_lbl updates every frame in _render() with colored text
+10. No "# ... existing code ..." placeholders anywhere
 
 === project_compact_export.txt ===
 PROJECT: AI HollowGraphic Like Touch
@@ -1867,1351 +845,329 @@ print(f"Downloading {URL} ...")
 urllib.request.urlretrieve(URL, OUT)
 print(f"Saved to {OUT} ({OUT.stat().st_size // 1024} KB)")
 
-=== holographic_touch_master_prompts.md ===
-# Holographic Touch — 3 Master Prompts for Complete Revamp
-
-## What These Prompts Do (apply in order 1 → 2 → 3)
-
-| Prompt | Scope | Files Created/Modified |
-|--------|-------|----------------------|
-| **1** | Dual-hand engine + eye tracker + gesture rewrite | `src/eye_tracker.py` (NEW), `src/hand_tracker.py`, `src/gesture_detector.py`, `src/tuning.py`, `src/models.py`, `src/settings_store.py` |
-| **2** | Main window rewire — process loop, cursor dispatch, settings, UI | `src/main_window.py` |
-| **3** | Final polish — UI styles, verification tests, cleanup | `src/main_window.py` (styles), `src/constants.py`, `src/face_tracker.py` (keep as legacy), `requirements.txt` |
-
----
-
-## PROMPT 1 — Dual-Hand Engine + Eye Tracker + Gesture Rewrite
-
-```
-You are refactoring the Holographic Touch gesture mouse app. This is a PySide6 + OpenCV + MediaPipe project.
-
-GOAL: Implement dual-hand tracking (left hand = cursor, right hand = clicks/scroll) as the DEFAULT mode, plus an experimental iris-based eye tracker as an optional mode in settings.
-
-=== IMPORTANT RULES ===
-- Do NOT break any existing imports or class interfaces
-- Do NOT remove any existing GestureType enum values
-- ALL files must be complete — no "... existing code ..." placeholders
-- Every method must have a return statement on all paths
-- No print() calls except startup messages (one per module max)
-
-=== FILE 1: Create src/eye_tracker.py (NEW FILE) ===
-
-Create this file from scratch. It uses MediaPipe FaceMesh with refine_landmarks=True to track iris positions. The detect() method returns (cam_x, cam_y) in camera pixel coordinates with a configurable GAIN multiplier to amplify small eye movements.
-
-```python
-"""Iris-based cursor tracker using MediaPipe Face Mesh (experimental).
-
-Uses refine_landmarks=True to access iris landmarks 468/473.
-GAIN amplifies tiny eye movements so user doesn't need to move their whole head.
-"""
-from __future__ import annotations
-
-import cv2
-
-try:
-    import mediapipe as mp
-    _OK = hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh")
-except Exception:
-    mp = None
-    _OK = False
-
-
-class EyeTracker:
-    LEFT_IRIS = 468
-    RIGHT_IRIS = 473
-
-    def __init__(self, gain: float = 1.8) -> None:
-        self._mesh = None
-        self._eye_x = -1.0
-        self._eye_y = -1.0
-        self._init = False
-        self.available = False
-        self._last_results = None
-        self._gain = max(1.0, min(3.0, gain))
-
-        if not _OK or mp is None:
-            return
-        try:
-            self._mesh = mp.solutions.face_mesh.FaceMesh(
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.4,
-            )
-            self.available = True
-            print("[EYE] Iris tracker ready (experimental)")
-        except Exception:
-            pass
-
-    def detect(self, frame_bgr) -> tuple[int, int] | None:
-        if not self.available or self._mesh is None:
-            return None
-        try:
-            h, w = frame_bgr.shape[:2]
-            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            res = self._mesh.process(rgb)
-            self._last_results = res
-
-            if not res.multi_face_landmarks:
-                self._init = False
-                return None
-
-            face = res.multi_face_landmarks[0]
-            l_iris = face.landmark[self.LEFT_IRIS]
-            r_iris = face.landmark[self.RIGHT_IRIS]
-
-            # Average both irises for stability
-            rx = ((l_iris.x + r_iris.x) / 2.0) * w
-            ry = ((l_iris.y + r_iris.y) / 2.0) * h
-
-            # Apply gain: amplify movement from center
-            cx, cy = w / 2.0, h / 2.0
-            rx = cx + (rx - cx) * self._gain
-            ry = cy + (ry - cy) * self._gain
-
-            if not self._init:
-                self._eye_x, self._eye_y = rx, ry
-                self._init = True
-            else:
-                # 1.2px deadzone kills webcam micro-jitter
-                if abs(rx - self._eye_x) >= 1.2:
-                    self._eye_x = rx
-                if abs(ry - self._eye_y) >= 1.2:
-                    self._eye_y = ry
-
-            return int(self._eye_x), int(self._eye_y)
-        except Exception:
-            return None
-
-    def draw(self, frame_rgb) -> None:
-        if not self.available or self._last_results is None:
-            return
-        try:
-            res = self._last_results
-            if not res.multi_face_landmarks:
-                return
-            face = res.multi_face_landmarks[0]
-            h, w = frame_rgb.shape[:2]
-            for iris_idx in (self.LEFT_IRIS, self.RIGHT_IRIS):
-                pt = face.landmark[iris_idx]
-                cv2.circle(frame_rgb, (int(pt.x * w), int(pt.y * h)), 4, (0, 255, 255), -1)
-        except Exception:
-            pass
-
-    def close(self) -> None:
-        if self._mesh is not None:
-            try:
-                self._mesh.close()
-            except Exception:
-                pass
-```
-
-=== FILE 2: Replace src/hand_tracker.py COMPLETELY ===
-
-The new HandTracker uses max_num_hands=2 and returns a dictionary keyed by "Left"/"Right" containing hand_data for each detected hand, plus a list of (proto, label) tuples for drawing.
-
-The return signature changes from:
-  (hand_data, hand_proto, is_grace) 
-to:
-  (hands_dict, hand_protos_list, is_grace)
-
-Where:
-- hands_dict = {"Left": {xy, label, confidence, ...}, "Right": {...}} or {}
-- hand_protos_list = [(mediapipe_proto, "Left"), (mediapipe_proto, "Right")] or []
-- is_grace = bool
-
-```python
-from __future__ import annotations
-
-import os
-from collections import deque
-
-import cv2
-
-try:
-    import mediapipe as mp
-except Exception:
-    mp = None
-
-os.environ.setdefault("GLOG_minloglevel", "2")
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-
-from .utils import _ensure_mediapipe_solutions
-
-
-class HandTracker:
-    @staticmethod
-    def _map_label(raw_label: str, is_mirrored: bool) -> str:
-        raw = str(raw_label)
-        if raw not in ("Left", "Right"):
-            return raw
-        if is_mirrored:
-            return "Right" if raw == "Left" else "Left"
-        return raw
-
-    def __init__(self) -> None:
-        self._process_size: tuple[int, int] | None = None
-        self._last_rgb_frame = None
-        _ensure_mediapipe_solutions()
-
-        self._mp_hands = mp.solutions.hands
-        self._draw_utils = mp.solutions.drawing_utils
-        self._draw_styles = mp.solutions.drawing_styles
-
-        self._hands = self._mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            model_complexity=0,
-            min_detection_confidence=0.55,
-            min_tracking_confidence=0.35,
-        )
-
-        self._frames_no_hand = 0
-        self._grace_frames = 3
-        self._last_valid_result: tuple[dict, list, bool] | None = None
-
-    def set_processing_size(self, size: tuple[int, int] | None) -> None:
-        if size is None:
-            self._process_size = None
-            return
-        w, h = size
-        self._process_size = (max(64, int(w)), max(64, int(h)))
-
-    def detect(self, frame_bgr, is_mirrored: bool = False):
-        """Returns (hands_dict, hand_protos_list, is_grace_frame)."""
-        src_h, src_w = frame_bgr.shape[:2]
-
-        detect_frame = frame_bgr
-        if self._process_size is not None:
-            detect_frame = cv2.resize(frame_bgr, self._process_size, 
-                                       interpolation=cv2.INTER_LINEAR)
-
-        dh, dw = detect_frame.shape[:2]
-        rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
-        self._last_rgb_frame = rgb
-        result = self._hands.process(rgb)
-
-        hands_dict = {}
-        protos = []
-
-        if result.multi_hand_landmarks and result.multi_handedness:
-            sx = float(src_w) / max(1, dw)
-            sy = float(src_h) / max(1, dh)
-
-            for idx, hand in enumerate(result.multi_hand_landmarks):
-                if idx >= len(result.multi_handedness):
-                    break
-                raw_label = result.multi_handedness[idx].classification[0].label
-                label = self._map_label(raw_label, is_mirrored)
-                conf = float(result.multi_handedness[idx].classification[0].score)
-
-                if conf < 0.40:
-                    continue
-
-                xy = [(int(lm.x * dw * sx), int(lm.y * dh * sy)) 
-                      for lm in hand.landmark]
-                z = [float(lm.z) for lm in hand.landmark]
-
-                # If we already have this label, keep the higher-confidence one
-                if label in hands_dict:
-                    if conf <= hands_dict[label]["confidence"]:
-                        continue
-
-                hands_dict[label] = {
-                    "xy": xy,
-                    "z": z,
-                    "label": label,
-                    "confidence": conf,
-                    "frame_size": (dw, dh),
-                }
-                protos.append((hand, label))
-
-        if hands_dict:
-            self._frames_no_hand = 0
-            self._last_valid_result = (hands_dict, protos, False)
-            return hands_dict, protos, False
-        else:
-            self._frames_no_hand += 1
-            if (self._frames_no_hand < self._grace_frames 
-                    and self._last_valid_result is not None):
-                cached_dict, cached_protos, _ = self._last_valid_result
-                return cached_dict, cached_protos, True
-            self._last_valid_result = None
-            return {}, [], False
-
-    def draw(self, frame_rgb, hand_protos, label: str = "Right") -> None:
-        """Draw hand landmarks. Accepts either:
-        - A list of (proto, label) tuples (new dual-hand format)
-        - A single proto object (legacy single-hand format)
-        """
-        if hand_protos is None:
-            return
-
-        # Handle legacy single-proto call: draw(rgb, proto, label_str)
-        if not isinstance(hand_protos, list):
-            pairs = [(hand_protos, label)]
-        else:
-            pairs = hand_protos
-
-        for proto, lbl in pairs:
-            if proto is None:
-                continue
-            color = (0, 255, 120) if lbl == "Right" else (255, 180, 50)
-            try:
-                conn_spec = self._draw_utils.DrawingSpec(
-                    color=color, thickness=2, circle_radius=2)
-                lmk_spec = self._draw_styles.get_default_hand_landmarks_style()
-                self._draw_utils.draw_landmarks(
-                    frame_rgb, proto, self._mp_hands.HAND_CONNECTIONS,
-                    lmk_spec, conn_spec)
-            except Exception:
-                pass
-
-    def close(self) -> None:
-        try:
-            if hasattr(self, "_hands") and self._hands:
-                self._hands.close()
-        except Exception:
-            pass
-```
-
-=== FILE 3: Replace src/gesture_detector.py COMPLETELY ===
-
-The new GestureDetector.detect() accepts EITHER:
-- A dict with "Left"/"Right" keys (dual-hand mode) via detect_dual(hands_dict)  
-- A single hand_data dict (legacy) via detect(hand_data)
-
-In DUAL-HAND mode (default):
-- LEFT HAND index finger tip (landmark 8) = cursor position (handled in main_window)
-- RIGHT HAND: thumb+index pinch = left click, thumb+middle pinch = right click, peace sign = scroll, hold pinch = drag
-- The gesture detector ONLY processes the RIGHT hand for gestures
-
-In LEGACY/SINGLE-HAND mode:
-- Same hand does both cursor and gestures (backward compatible)
-
-Replace the ENTIRE file with:
-
-```python
-from __future__ import annotations
-
-import math
-import time
-
-try:
-    from .fast_math import pinch_dist_2d, ema_step
-except Exception:
-    def pinch_dist_2d(x1, y1, x2, y2):
-        dx = x1 - x2; dy = y1 - y2
-        return math.sqrt(dx * dx + dy * dy)
-    def ema_step(prev, target, alpha):
-        return prev + alpha * (target - prev)
-
-from .models import GestureResult, GestureType
-from .tuning import (
-    GESTURE_ACTION_COOLDOWN_S,
-    GESTURE_CONFIRM_HOLD_S,
-    GESTURE_DOUBLE_CLICK_WINDOW_S,
-    GESTURE_DRAG_ACTIVATE_S,
-    GESTURE_RIGHT_CLICK_HOLD_S,
-    GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S,
-)
-
-
-class GestureDetector:
-    def __init__(self) -> None:
-        self._state = GestureType.PAUSE
-        self._candidate = GestureType.PAUSE
-        self._stable_start_t = 0.0
-
-        self._dragging = False
-        self._left_pinch_active = False
-        self._right_pinch_active = False
-        self._left_pinch_since: float | None = None
-        self._right_pinch_start_t: float | None = None
-
-        self._scroll_prev_y: float | None = None
-        self._scroll_velocity_ema = 0.0
-        self._scroll_direction = 0
-        self._scroll_accumulator = 0.0
-        self._scroll_last_switch_time = 0.0
-
-        self._action_cooldown_s = float(GESTURE_ACTION_COOLDOWN_S)
-        self._drag_activate_s = float(GESTURE_DRAG_ACTIVATE_S)
-
-        self._pinch_enter = 0.22
-        self._pinch_exit = 0.36
-        self._confirm_hold_s = float(GESTURE_CONFIRM_HOLD_S)
-        self._hand_scale = 24.0
-
-        self._last_click_time = 0.0
-        self._last_right_click_time = 0.0
-        self._left_click_release_time = -float('inf')
-
-        self._scroll_step_factor = 0.08
-        self._scroll_deadband_factor = 0.06
-        self._double_click_window_s = float(GESTURE_DOUBLE_CLICK_WINDOW_S)
-        self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
-        self._scroll_step_limit = 8
-        self._scroll_gain = 1.0
-        self._right_click_hold_s = max(0.15, float(GESTURE_RIGHT_CLICK_HOLD_S))
-
-        self._per_action_cooldown = {
-            GestureType.LEFT_CLICK: 0.25,
-            GestureType.RIGHT_CLICK: 0.50,
-            GestureType.DOUBLE_CLICK: 0.50,
-            GestureType.SCROLL: 0.0,
-            GestureType.DRAG: 0.0,
-            GestureType.MOVE: 0.0,
-        }
-        self._last_action_time: dict[GestureType, float] = {}
-
-        # Z-tap (kept for settings compat, disabled by default)
-        self._z_tap_enabled = False
-
-    @property
-    def dragging(self) -> bool:
-        return self._dragging
-
-    def reset_cooldowns(self) -> None:
-        self._last_action_time.clear()
-
-    def _make_result(self, gesture: GestureType, scroll_delta: int = 0) -> GestureResult:
-        return GestureResult(gesture, scroll_delta)
-
-    def _pinch_ratios(self, xy, hand_scale: float) -> tuple[float, float, float]:
-        hs = max(1.0, hand_scale)
-        p4 = xy[4]; p8 = xy[8]; p12 = xy[12]
-        li = pinch_dist_2d(float(p4[0]), float(p4[1]), float(p8[0]), float(p8[1])) / hs
-        ri = pinch_dist_2d(float(p4[0]), float(p4[1]), float(p12[0]), float(p12[1])) / hs
-        pm = pinch_dist_2d(float(p8[0]), float(p8[1]), float(p12[0]), float(p12[1])) / hs
-        return li, ri, pm
-
-    def _check_action_cooldown(self, gesture: GestureType, now: float) -> bool:
-        cooldown = self._per_action_cooldown.get(gesture, self._action_cooldown_s)
-        last = self._last_action_time.get(gesture, 0.0)
-        return (now - last) >= cooldown
-
-    def _record_action(self, gesture: GestureType, now: float) -> None:
-        self._last_action_time[gesture] = now
-
-    def _resolve_scroll(self, current_y: float, hand_scale: float) -> int:
-        if self._scroll_prev_y is None:
-            self._scroll_prev_y = current_y
-            self._scroll_velocity_ema = 0.0
-            self._scroll_direction = 0
-            self._scroll_accumulator = 0.0
-            return 0
-
-        dy = float(self._scroll_prev_y) - current_y
-        self._scroll_prev_y = current_y
-
-        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.25)
-        v = self._scroll_velocity_ema
-
-        deadband = max(1.0, hand_scale * self._scroll_deadband_factor)
-        if abs(v) <= deadband:
-            self._scroll_accumulator *= 0.5
-            return 0
-
-        step = max(1.0, hand_scale * self._scroll_step_factor)
-        self._scroll_accumulator += v / step
-
-        steps = int(self._scroll_accumulator)
-        if steps == 0:
-            return 0
-        self._scroll_accumulator -= steps
-        steps = max(-self._scroll_step_limit, min(self._scroll_step_limit, steps))
-
-        direction = 1 if steps > 0 else -1
-        if self._scroll_direction == 0:
-            self._scroll_direction = direction
-        elif direction != self._scroll_direction:
-            now = time.monotonic()
-            if now - self._scroll_last_switch_time < self._scroll_dir_switch_cooldown_s:
-                self._scroll_accumulator = 0.0
-                return 0
-            self._scroll_direction = direction
-            self._scroll_last_switch_time = now
-            self._scroll_velocity_ema = 0.0
-            self._scroll_accumulator = 0.0
-            return 0
-
-        return int(steps * max(1, self._scroll_gain))
-
-    def _clear_scroll(self) -> None:
-        self._scroll_prev_y = None
-        self._scroll_velocity_ema = 0.0
-        self._scroll_direction = 0
-        self._scroll_accumulator = 0.0
-
-    # =====================================================================
-    # DUAL-HAND MODE (default) — left hand = cursor, right hand = actions
-    # =====================================================================
-    def detect_dual(self, hands_dict: dict, is_grace: bool = False) -> GestureResult:
-        """Process gestures from dual-hand input.
-        
-        LEFT hand: cursor tracking (handled in main_window, not here)
-        RIGHT hand: click/scroll/drag gestures
-        
-        If only LEFT hand visible: return MOVE (cursor follows left index)
-        If only RIGHT hand visible: process gestures, cursor uses right index
-        If neither: PAUSE
-        """
-        now = time.monotonic()
-        right_hand = hands_dict.get("Right")
-        left_hand = hands_dict.get("Left")
-
-        # No hands at all
-        if not right_hand and not left_hand:
-            self._reset_all(now)
-            return self._make_result(GestureType.PAUSE, 0)
-
-        # Only left hand (cursor hand) — just MOVE, no actions
-        if not right_hand and left_hand:
-            self._state = GestureType.MOVE
-            self._dragging = False
-            return self._make_result(GestureType.MOVE, 0)
-
-        # Right hand is present — process gestures
-        return self._process_action_hand(right_hand, now, is_grace)
-
-    # =====================================================================
-    # SINGLE-HAND MODE (legacy compat) — one hand does cursor + actions
-    # =====================================================================
-    def detect(self, hand_data: dict | None, is_grace_frame: bool = False) -> GestureResult:
-        """Legacy single-hand detect. Same hand does cursor + gestures."""
-        now = time.monotonic()
-        if hand_data is None:
-            self._reset_all(now)
-            return self._make_result(GestureType.PAUSE, 0)
-
-        return self._process_action_hand(hand_data, now, is_grace_frame)
-
-    # =====================================================================
-    # SHARED ACTION ENGINE — processes one hand for click/scroll/drag
-    # =====================================================================
-    def _process_action_hand(self, hand_data: dict, now: float, 
-                              is_grace: bool = False) -> GestureResult:
-        xy = hand_data.get("xy")
-        if not xy or len(xy) < 21:
-            return self._make_result(GestureType.PAUSE, 0)
-
-        confidence = float(hand_data.get("confidence", 0.0))
-        if confidence < 0.20:
-            return self._make_result(GestureType.PAUSE, 0)
-
-        # Compute hand scale
-        try:
-            wrist = xy[0]; mcp9 = xy[9]
-            self._hand_scale = max(24.0, pinch_dist_2d(
-                float(wrist[0]), float(wrist[1]),
-                float(mcp9[0]), float(mcp9[1])))
-        except (IndexError, TypeError):
-            return self._make_result(GestureType.PAUSE, 0)
-
-        li, ri, pm = self._pinch_ratios(xy, self._hand_scale)
-        enter = float(self._pinch_enter)
-        exit_ = float(self._pinch_exit)
-
-        # --- Left pinch (thumb+index) = click/drag ---
-        prev_left = self._left_pinch_active
-        if self._left_pinch_active:
-            if li > exit_:
-                self._left_pinch_active = False
-                self._left_click_release_time = now
-        elif li <= enter:
-            self._left_pinch_active = True
-
-        # --- Right pinch (thumb+middle) = right-click ---
-        # Requires: index finger clearly open (li > exit_), 
-        # middle+thumb close, held for _right_click_hold_s
-        right_enter = enter * 0.50
-        if self._right_pinch_active:
-            if ri > exit_:
-                self._right_pinch_active = False
-                self._right_pinch_start_t = None
-        elif ri <= right_enter and li > exit_ and pm > 0.15:
-            if self._right_pinch_start_t is None:
-                self._right_pinch_start_t = now
-            elif now - self._right_pinch_start_t >= self._right_click_hold_s:
-                self._right_pinch_active = True
-        else:
-            self._right_pinch_start_t = None
-
-        # --- Peace sign (index+middle spread) = scroll ---
-        peace_pose = (pm >= 0.06 and pm <= 0.65 and li > exit_ and ri > exit_)
-
-        # --- Track pinch duration for drag ---
-        if self._left_pinch_active:
-            if self._left_pinch_since is None:
-                self._left_pinch_since = now
-        else:
-            self._left_pinch_since = None
-
-        # --- Route to raw state ---
-        raw_state = GestureType.MOVE
-
-        if self._left_pinch_active and self._left_pinch_since is not None:
-            held = now - self._left_pinch_since
-            if held >= self._drag_activate_s:
-                raw_state = GestureType.DRAG
-            else:
-                raw_state = GestureType.LEFT_CLICK
-        elif self._right_pinch_active:
-            raw_state = GestureType.RIGHT_CLICK
-        elif peace_pose:
-            raw_state = GestureType.SCROLL
-
-        # --- Stability filter ---
-        if raw_state != self._candidate:
-            self._candidate = raw_state
-            self._stable_start_t = now
-
-        hold_elapsed = max(0.0, now - self._stable_start_t)
-        if is_grace:
-            stable_state = self._state if self._state not in {
-                GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
-                GestureType.DOUBLE_CLICK} else GestureType.MOVE
-        elif hold_elapsed >= self._confirm_hold_s:
-            stable_state = self._candidate
-        else:
-            stable_state = self._state
-
-        # --- Clear scroll when not scrolling ---
-        if stable_state != GestureType.SCROLL and self._state != GestureType.SCROLL:
-            self._clear_scroll()
-
-        # --- Emit actions ---
-        if stable_state == GestureType.LEFT_CLICK:
-            if self._check_action_cooldown(GestureType.LEFT_CLICK, now):
-                # Double-click detection
-                if (self._left_click_release_time > 0.0 
-                    and 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s
-                    and self._check_action_cooldown(GestureType.DOUBLE_CLICK, now)):
-                    self._state = GestureType.DOUBLE_CLICK
-                    self._record_action(GestureType.DOUBLE_CLICK, now)
-                    self._record_action(GestureType.LEFT_CLICK, now)
-                    self._dragging = False
-                    return self._make_result(GestureType.DOUBLE_CLICK, 0)
-
-                self._state = GestureType.LEFT_CLICK
-                self._record_action(GestureType.LEFT_CLICK, now)
-                self._dragging = False
-                return self._make_result(GestureType.LEFT_CLICK, 0)
-            self._state = GestureType.MOVE
-            return self._make_result(GestureType.MOVE, 0)
-
-        if stable_state == GestureType.RIGHT_CLICK:
-            if self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
-                self._state = GestureType.RIGHT_CLICK
-                self._record_action(GestureType.RIGHT_CLICK, now)
-                self._dragging = False
-                return self._make_result(GestureType.RIGHT_CLICK, 0)
-            self._state = GestureType.MOVE
-            return self._make_result(GestureType.MOVE, 0)
-
-        if stable_state == GestureType.DRAG:
-            self._dragging = True
-            self._state = GestureType.DRAG
-            return self._make_result(GestureType.DRAG, 0)
-
-        if stable_state == GestureType.SCROLL:
-            delta = self._resolve_scroll(float(xy[8][1]), self._hand_scale)
-            self._state = GestureType.SCROLL
-            self._dragging = False
-            return self._make_result(GestureType.SCROLL, delta)
-
-        self._state = GestureType.MOVE
-        self._dragging = False
-        return self._make_result(GestureType.MOVE, 0)
-
-    def _reset_all(self, now: float) -> None:
-        self._state = GestureType.PAUSE
-        self._candidate = GestureType.PAUSE
-        self._stable_start_t = now
-        self._dragging = False
-        self._left_pinch_active = False
-        self._right_pinch_active = False
-        self._left_pinch_since = None
-        self._right_pinch_start_t = None
-        self._clear_scroll()
-```
-
-=== FILE 4: Update src/tuning.py ===
-
-Change these values:
-- GESTURE_RIGHT_CLICK_HOLD_S = 0.18  (was 0.10, prevents accidental right-clicks)
-- GESTURE_DRAG_ACTIVATE_S = 0.45     (was 0.38, prevents accidental drags)
-- GESTURE_CONFIRM_HOLD_S = 0.04      (was 0.03, slightly more stable)
-- GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45  (was 0.38, more forgiving)
-
-=== FILE 5: Update src/settings_store.py ===
-
-Add these new keys to DEFAULTS dict:
-    "cursor_mode": "dual_hand",       # "dual_hand" | "single_hand" | "eye_tracking"
-    "eye_tracking_gain": 1.8,
-    "hand_only_mode": True,           # Change default from False to True
-
-=== FILE 6: Update src/models.py ===
-
-No changes needed — all existing GestureType values must remain unchanged.
-
-=== VERIFICATION CHECKLIST ===
-After applying, confirm:
-1. HandTracker.detect() returns (dict, list, bool) — NOT (single_dict, proto, bool)
-2. GestureDetector has both detect() and detect_dual() methods
-3. EyeTracker exists at src/eye_tracker.py
-4. No circular imports
-5. All import paths resolve
-```
-
----
-
-## PROMPT 2 — Main Window Rewire
-
-```
-You are updating src/main_window.py for the Holographic Touch gesture mouse app.
-
-The HandTracker and GestureDetector have been rewritten (Prompt 1 was already applied):
-- HandTracker.detect() now returns (hands_dict, hand_protos_list, is_grace)
-  where hands_dict = {"Left": {...}, "Right": {...}} and hand_protos_list = [(proto, label), ...]
-- GestureDetector has detect_dual(hands_dict) for dual-hand and detect(hand_data) for single-hand
-- EyeTracker is a new class at src/eye_tracker.py
-
-=== IMPORTANT RULES ===
-- Do NOT rewrite the entire file — only change the specific sections listed below
-- Keep ALL existing UI layout code, styles, tray, hotkey, overlay — do NOT touch those
-- Every change is surgical and described with FIND → REPLACE blocks
-- Output the COMPLETE file content for main_window.py
-
-=== CHANGE 1: Update imports ===
-
-Add at the top imports section, after the existing imports:
-```python
-from .eye_tracker import EyeTracker
-```
-
-The import for FaceTracker should remain — it's still used as legacy fallback.
-
-=== CHANGE 2: Update MainWindow.__init__ ===
-
-Find where self.face_tracker is created:
-```python
-        try:
-            self.face_tracker: FaceTracker | None = FaceTracker()
-        except Exception:
-            self.face_tracker = None
-```
-
-After that block, ADD:
-```python
-        # Eye tracker (experimental — enabled in settings)
-        self.eye_tracker: EyeTracker | None = None
-        self._cursor_mode: str = str(settings.get("cursor_mode", "dual_hand"))
-        if self._cursor_mode == "eye_tracking":
-            try:
-                gain = float(settings.get("eye_tracking_gain", 1.8))
-                self.eye_tracker = EyeTracker(gain=gain)
-            except Exception:
-                self.eye_tracker = None
-```
-
-Find where self._hand_only_mode is set:
-```python
-        self._hand_only_mode: bool = _as_bool(
-            settings.get("hand_only_mode", False), False)
-```
-
-Change to:
-```python
-        self._hand_only_mode: bool = self._cursor_mode != "eye_tracking"
-```
-
-This makes dual_hand and single_hand both use hand-based cursor, only eye_tracking uses eyes.
-
-=== CHANGE 3: Rewrite _process_loop cursor dispatch ===
-
-Find the _process_loop method. Replace the ENTIRE body from "while self.running:" through the end of the method with:
-
-```python
-    def _process_loop(self) -> None:
-        last_overlay = GestureType.NONE
-        last_action = GestureType.NONE
-        last_task_view_action = 0.0
-        last_hand_time = time.monotonic()
-
-        _boost_runtime_priority()
-
-        while self.running:
-            if time.monotonic() - last_hand_time > 5.0:
-                time.sleep(0.005)
-
-            try:
-                frame = self.camera.latest()
-                if frame is None:
-                    continue
-
-                if self._mirror_camera:
-                    frame = cv2.flip(frame, 1)
-
-                h, w = frame.shape[:2]
-                self.mapper.set_camera_size(w, h)
-
-                # ── FACE / EYE TRACKER ─────────────────────────────
-                face_pos: tuple[int, int] | None = None
-                eye_pos: tuple[int, int] | None = None
-
-                if self._cursor_mode == "eye_tracking" and self.eye_tracker is not None:
-                    eye_pos = self.eye_tracker.detect(frame)
-                elif self.face_tracker is not None and self.face_tracker.available:
-                    face_pos = self.face_tracker.detect(frame)
-
-                self._nose_pos = face_pos
-                if face_pos is None and eye_pos is None:
-                    self._face_lost_frames += 1
-                    if self._face_lost_frames > 3:
-                        self._scroll_nose_y = None
-                else:
-                    self._face_lost_frames = 0
-                _face_tracked = (face_pos is not None) or (eye_pos is not None)
-
-                # ── HAND TRACKER ───────────────────────────────────
-                tracker = self.tracker
-                if tracker is None:
-                    continue
-
-                hands_dict, hand_protos, is_grace = tracker.detect(
-                    frame, is_mirrored=self._mirror_camera)
-
-                rgb_cached = getattr(tracker, '_last_rgb_frame', None)
-
-                if hands_dict:
-                    last_hand_time = time.monotonic()
-                    # Compute hand scale from whichever hand is available
-                    for _hd in hands_dict.values():
-                        _xy = _hd.get("xy", [])
-                        if len(_xy) >= 10:
-                            _w = _xy[0]; _m = _xy[9]
-                            scale = ((_w[0]-_m[0])**2 + (_w[1]-_m[1])**2)**0.5
-                            self.mapper.set_hand_scale(scale)
-                            break
-                    self._camera_error_text = ""
-                else:
-                    self._camera_error_text = self.camera.last_error
-
-                # ── GESTURE DETECTION ──────────────────────────────
-                if self._cursor_mode == "dual_hand":
-                    result = self.gestures.detect_dual(hands_dict, is_grace)
-                else:
-                    # Single-hand or eye-tracking: use right hand for gestures
-                    action_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                    result = self.gestures.detect(action_hand, is_grace)
-
-                if result is None:
-                    result = GestureResult(GestureType.PAUSE, 0)
-
-                gesture = result.gesture
-                gesture_changed = gesture != last_action
-
-                # Confidence gate
-                _action_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                if _action_hand and float(_action_hand.get("confidence", 0)) < 0.55:
-                    if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
-                                   GestureType.DOUBLE_CLICK}:
-                        gesture = GestureType.MOVE
-                        result = GestureResult(GestureType.MOVE, 0)
-                        gesture_changed = gesture != last_action
-
-                # ── CURSOR POSITION ────────────────────────────────
-                _has_cursor = False
-                sx, sy = self._frozen_sx, self._frozen_sy
-
-                if self._cursor_mode == "eye_tracking":
-                    # Eye tracking mode: eyes drive cursor
-                    if eye_pos is not None:
-                        sx, sy = self.mapper.map_point(eye_pos[0], eye_pos[1])
-                        _has_cursor = True
-                    elif face_pos is not None:
-                        sx, sy = self.mapper.map_point(face_pos[0], face_pos[1])
-                        _has_cursor = True
-                    else:
-                        _has_cursor = self._frozen_sx >= 0
-
-                elif self._cursor_mode == "dual_hand":
-                    # Dual-hand: LEFT hand index finger = cursor
-                    left_hand = hands_dict.get("Left")
-                    if gesture in self._freeze_on:
-                        # Freeze cursor during clicks
-                        _has_cursor = self._frozen_sx >= 0
-                    elif left_hand and len(left_hand.get("xy", [])) > 8:
-                        tip = left_hand["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-                        _has_cursor = True
-                    elif hands_dict.get("Right") and len(hands_dict["Right"].get("xy", [])) > 8:
-                        # Fallback: if only right hand, use right index for cursor
-                        tip = hands_dict["Right"]["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-                        _has_cursor = True
-                    else:
-                        _has_cursor = self._frozen_sx >= 0
-
-                else:
-                    # Single-hand legacy: index finger = cursor
-                    _any_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                    if gesture in self._freeze_on:
-                        _has_cursor = self._frozen_sx >= 0
-                    elif _any_hand and len(_any_hand.get("xy", [])) > 8:
-                        tip = _any_hand["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-                        _has_cursor = True
-                    else:
-                        _has_cursor = self._frozen_sx >= 0
-
-                if _has_cursor:
-                    self._frozen_sx, self._frozen_sy = sx, sy
-
-                # ── DISPATCH ACTIONS ───────────────────────────────
-                _allow_action = not is_grace
-
-                if self.mouse_enabled and _has_cursor and gesture in self._CURSOR_GESTURES:
-                    if gesture != GestureType.SCROLL:
-                        self.mouse.move(sx, sy)
-
-                    if gesture == GestureType.MOVE:
-                        pass
-                    elif gesture == GestureType.LEFT_CLICK and gesture_changed and _allow_action:
-                        self.mouse.left_click()
-                    elif gesture == GestureType.DOUBLE_CLICK and gesture_changed and _allow_action:
-                        self.mouse.double_click()
-                    elif gesture == GestureType.RIGHT_CLICK and gesture_changed and _allow_action:
-                        self.mouse.right_click()
-                    elif gesture == GestureType.SCROLL and _allow_action:
-                        self.mouse.scroll(int(result.scroll_delta * self._scroll_multiplier))
-                    elif gesture == GestureType.DRAG:
-                        if not self._drag_active:
-                            self.mouse.start_drag()
-                            self._drag_active = True
-
-                    if gesture != GestureType.DRAG and self.mouse.is_dragging:
-                        self.mouse.end_drag()
-                        self._drag_active = False
-                else:
-                    if self.mouse.is_dragging:
-                        self.mouse.end_drag()
-                        self._drag_active = False
-
-                if not self.mouse_enabled and self.mouse.is_dragging:
-                    self.mouse.end_drag()
-                    self._drag_active = False
-
-                # ── UPDATE UI STATE ────────────────────────────────
-                if gesture != last_overlay:
-                    overlay = _OVERLAY_LABELS.get(gesture, "")
-                    last_overlay = gesture
-                else:
-                    overlay = self._overlay_text
-
-                if gesture != last_action:
-                    ts = time.strftime("%H:%M:%S")
-                    self._gesture_history.appendleft((gesture, ts))
-
-                last_action = gesture
-
-                now = time.monotonic()
-                dt = now - self._fps_prev
-                self._fps_prev = now
-                if dt > 0:
-                    fps_i = 1.0 / dt
-                    self.fps = fps_i if self.fps == 0 else 0.9 * self.fps + 0.1 * fps_i
-
-                # Finger count
-                _finger_count = 0
-                _count_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                if _count_hand:
-                    try:
-                        _xy = _count_hand.get("xy", [])
-                        if len(_xy) >= 21:
-                            _w = _xy[0]
-                            for _t, _p in zip([4,8,12,16,20], [2,6,10,14,18]):
-                                _td = ((_xy[_t][0]-_w[0])**2+(_xy[_t][1]-_w[1])**2)**0.5
-                                _pd = ((_xy[_p][0]-_w[0])**2+(_xy[_p][1]-_w[1])**2)**0.5
-                                if _td > _pd:
-                                    _finger_count += 1
-                    except Exception:
-                        pass
-
-                with self._lock:
-                    self._frame = frame
-                    self._rgb_frame = rgb_cached
-                    self._gesture = gesture
-                    self._overlay_text = overlay
-                    self._hand_proto = hand_protos  # Now a list of (proto, label)
-                    self._hand_data = _count_hand
-                    self._fingers = _finger_count
-                    self._face_tracked = _face_tracked
-
-            except Exception:
-                continue
-```
-
-=== CHANGE 4: Update _render to handle new hand_protos format ===
-
-In _render(), find where hand skeleton is drawn:
-```python
-        if hand_proto is not None and tracker is not None:
-            label = hand_data["label"] if hand_data else "Right"
-            tracker.draw(rgb, hand_proto, label)
-```
-
-Replace with:
-```python
-        if hand_proto is not None and tracker is not None:
-            # hand_proto is now a list of (proto, label) tuples
-            if isinstance(hand_proto, list):
-                tracker.draw(rgb, hand_proto)
-            else:
-                label = hand_data["label"] if hand_data else "Right"
-                tracker.draw(rgb, hand_proto, label)
-```
-
-Also in _render(), add eye tracker drawing. After the face_tracker.draw() call, add:
-```python
-        if self._cursor_mode == "eye_tracking" and self.eye_tracker is not None:
-            self.eye_tracker.draw(rgb)
-```
-
-=== CHANGE 5: Update _render badge text ===
-
-Find:
-```python
-        if gesture == GestureType.MOVE and not self._hand_only_mode:
-            _badge_text = "TRACKING" if self._face_tracked else "ACQUIRING"
-```
-
-Replace with:
-```python
-        if gesture == GestureType.MOVE:
-            if self._cursor_mode == "dual_hand":
-                _badge_text = "DUAL HAND"
-            elif self._cursor_mode == "eye_tracking":
-                _badge_text = "IRIS TRACK" if self._face_tracked else "ACQUIRING"
-            else:
-                _badge_text = "TRACKING" if self._face_tracked else "ACQUIRING"
-```
-
-=== CHANGE 6: Update Settings Dialog — add cursor mode selector ===
-
-In the SettingsDialog, in the Gestures tab, find the hand_only_chk checkbox and REPLACE it with a cursor mode combo box:
-
-Remove:
-```python
-        self.hand_only_chk = QCheckBox(...)
-        self.hand_only_chk.setChecked(...)
-        self.hand_only_chk.setToolTip(...)
-        gesture_layout.addWidget(self.hand_only_chk)
-```
-
-Replace with:
-```python
-        cursor_mode_label = QLabel("Cursor Control Mode")
-        cursor_mode_label.setObjectName("section")
-        self.cursor_mode_combo = QComboBox()
-        self.cursor_mode_combo.addItem("Dual Hand (Left=Cursor, Right=Actions)", "dual_hand")
-        self.cursor_mode_combo.addItem("Single Hand (same hand)", "single_hand")
-        self.cursor_mode_combo.addItem("Eye Tracking (experimental)", "eye_tracking")
-        current_mode = str(settings.get("cursor_mode", "dual_hand"))
-        idx = self.cursor_mode_combo.findData(current_mode)
-        if idx >= 0:
-            self.cursor_mode_combo.setCurrentIndex(idx)
-        gesture_layout.addWidget(cursor_mode_label)
-        gesture_layout.addWidget(self.cursor_mode_combo)
-```
-
-Add the signal connection:
-```python
-        self.cursor_mode_combo.currentIndexChanged.connect(self._on_cursor_mode_changed)
-```
-
-Add the handler method to SettingsDialog:
-```python
-    def _on_cursor_mode_changed(self, idx: int) -> None:
-        mode = self.cursor_mode_combo.itemData(idx)
-        if mode:
-            settings.set("cursor_mode", str(mode))
-            QMessageBox.information(self, "Restart Required", 
-                "Cursor mode change requires restarting the camera.")
-```
-
-Remove the _on_hand_only_changed handler and its signal connection.
-
-=== CHANGE 7: Update guide rows ===
-
-Update guide_rows for dual-hand mode in _build_ui and _update_guide_rows:
-
-```python
-        guide_rows_dual = [
-            ("move",        "Move cursor",   "Left hand index finger"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
-        ]
-```
-
-=== CHANGE 8: Update _quit_app and closeEvent ===
-
-Add eye_tracker cleanup alongside face_tracker:
-```python
-        try:
-            if self.eye_tracker is not None:
-                self.eye_tracker.close()
-        except Exception:
-            pass
-```
-
-=== VERIFICATION CHECKLIST ===
-1. _process_loop handles hands_dict (a dict of dicts), not a single hand_data
-2. Cursor follows LEFT hand index finger in dual_hand mode
-3. RIGHT hand gestures fire clicks/scroll/drag
-4. Eye tracking mode uses iris positions for cursor
-5. Settings dialog has cursor mode dropdown instead of checkbox
-6. No print() spam in the processing loop
-7. Drag is properly started/ended
-8. _render handles both list and single-proto formats
-```
-
----
-
-## PROMPT 3 — Final Polish, UI Styles, Verification
-
-```
-You are doing the FINAL polish pass on the Holographic Touch app.
-Prompts 1 and 2 have been applied. The dual-hand system and eye tracker are wired up.
-
-This prompt handles: UI style refresh, guide text updates, mode indicator, 
-startup defaults, and a manual test script.
-
-=== IMPORTANT RULES ===
-- Only modify the specific sections listed
-- Keep all functionality from Prompts 1 and 2 intact
-- No new features — only polish and verify
-
-=== CHANGE 1: Update main window stylesheet ===
-
-In MainWindow._build_ui(), find the self.setStyleSheet(...) call and update
-the #badge style to handle the new DUAL HAND badge width:
-
-Find:
-```
-            #badge {
-```
-
-Replace the entire #badge block with:
-```css
-            #badge {
-                border-radius: 12px; padding: 6px 18px; font-weight: 700;
-                background: rgba(15, 18, 25, 0.8); color: #E2E8F0;
-                min-width: 100px; max-width: 220px;
-                font-size: 13px; letter-spacing: 1.5px;
-                border: 1px solid rgba(39, 39, 42, 0.4);
-                text-align: center;
-            }
-```
-
-=== CHANGE 2: Update mode indicator in status panel ===
-
-In _build_ui, find self.mode_lbl and update its initial text:
-
-```python
-        _mode_labels = {
-            "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
-            "single_hand": "Mode: Single Hand",
-            "eye_tracking": "Mode: Eye Tracking (experimental)",
-        }
-        self.mode_lbl = QLabel(_mode_labels.get(self._cursor_mode, "Mode: Dual Hand"))
-        self.mode_lbl.setObjectName("secondary")
-        self.mode_lbl.setWordWrap(True)
-```
-
-=== CHANGE 3: Update _update_guide_rows to support all 3 modes ===
-
-```python
-    def _update_guide_rows(self) -> None:
-        guide_rows_dual = [
-            ("move",        "Move cursor",   "Left hand index finger"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
-        ]
-        guide_rows_single = [
-            ("move",        "Move cursor",   "Index finger up"),
-            ("left_click",  "Left click",    "Thumb+Index pinch"),
-            ("double_click","Double click",  "Quick double pinch"),
-            ("drag",        "Drag",          "Hold pinch"),
-            ("right_click", "Right click",   "Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Peace sign up/down"),
-        ]
-        guide_rows_eye = [
-            ("move",        "Move cursor",   "Look around (iris tracking)"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
-        ]
-
-        if self._cursor_mode == "dual_hand":
-            rows = guide_rows_dual
-        elif self._cursor_mode == "eye_tracking":
-            rows = guide_rows_eye
-        else:
-            rows = guide_rows_single
-
-        for idx, (il, tl, dl) in enumerate(self._guide_row_widgets):
-            if idx < len(rows):
-                icon_key, action_desc, gesture_desc = rows[idx]
-                il.setPixmap(self.icons[icon_key].pixmap(QSize(18, 18)))
-                tl.setText(gesture_desc)
-                dl.setText(action_desc)
-
-        _mode_labels = {
-            "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
-            "single_hand": "Mode: Single Hand",
-            "eye_tracking": "Mode: Eye Tracking (experimental)",
-        }
-        if hasattr(self, "mode_lbl"):
-            self.mode_lbl.setText(
-                _mode_labels.get(self._cursor_mode, "Mode: Dual Hand"))
-```
-
-=== CHANGE 4: Update constants.py ===
-
-The overlay labels should include a clean MOVE label:
-
-In src/constants.py, ensure GestureType.MOVE maps to "MOVE" (no change needed if already correct).
-
-=== CHANGE 5: Update _render hand display for dual-hand ===
-
-In _render(), update the hand status label to show both hands:
-
-Find:
-```python
-        if not self._hand_only_mode:
-```
-
-Replace with:
-```python
-        if self._cursor_mode == "eye_tracking":
-            self.hand_lbl.setText(
-                f"Eyes: {'Tracking' if _face_on else 'Lost'}  |  "
-                f"Hand: {'Detected' if hand_proto else 'None'}")
-        elif self._cursor_mode == "dual_hand":
-            # Show both hands status
-            _left_ok = False
-            _right_ok = False
-            if isinstance(hand_proto, list):
-                for _, lbl in hand_proto:
-                    if lbl == "Left": _left_ok = True
-                    if lbl == "Right": _right_ok = True
-            self.hand_lbl.setText(
-                f"L: {'●' if _left_ok else '○'}  R: {'●' if _right_ok else '○'}")
-        else:
-```
-
-=== CHANGE 6: Create manual test checklist file ===
-
-Create a file tests/MANUAL_TEST_CHECKLIST.md:
-
-```markdown
-# Holographic Touch — Manual Test Checklist
-
-Run through each item. All must pass before release.
-
-## Startup
-- [ ] App launches without errors
-- [ ] Camera detects and starts
-- [ ] No console spam (only startup messages)
-- [ ] FPS counter shows 20+ FPS
-
-## Dual-Hand Mode (default)
-- [ ] Show LEFT hand: cursor follows left index finger smoothly
-- [ ] Show RIGHT hand: cursor follows right index (fallback)
-- [ ] Show BOTH hands: cursor follows LEFT, gestures use RIGHT
-- [ ] Move left hand across camera view: cursor reaches all screen edges
-- [ ] Cursor is smooth — no jitter, no pausing, no teleporting
-
-## Left Click (Right hand: thumb+index pinch)
-- [ ] Pinch right thumb+index: single left click fires
-- [ ] Release and pinch again: another click (no spam)
-- [ ] Click registers on UI elements (try clicking buttons, links)
-
-## Double Click
-- [ ] Quick pinch-release-pinch within 0.45s: double click fires
-- [ ] Slow pinch-release-pinch (>0.5s): two single clicks, not double
-
-## Right Click
-- [ ] Right hand: pinch thumb+middle while index is extended
-- [ ] Must hold 0.18s before triggering (no accidental fires)
-- [ ] Context menu appears at cursor position
-
-## Scroll
-- [ ] Right hand: peace sign (index+middle extended)
-- [ ] Move hand UP: page scrolls UP
-- [ ] Move hand DOWN: page scrolls DOWN  
-- [ ] Scroll is smooth — no jerking
-- [ ] Stop hand: scroll stops
-
-## Drag
-- [ ] Right hand: hold thumb+index pinch for 0.45s
-- [ ] Drag activates — move left hand to drag
-- [ ] Release pinch: drag ends cleanly
-- [ ] No stuck drags
-
-## Eye Tracking (experimental)
-- [ ] Change to eye tracking mode in Settings → Gestures
-- [ ] Restart camera
-- [ ] Cursor follows eye/head movement
-- [ ] Right hand gestures still work for clicks/scroll
-
-## UI
-- [ ] Badge shows "DUAL HAND" in dual mode, "IRIS TRACK" in eye mode
-- [ ] Hand status shows L: ● R: ● when both hands visible
-- [ ] Settings dialog opens and closes without crash
-- [ ] Cursor mode dropdown works in settings
-- [ ] Window resizes without layout breaking
-- [ ] All text readable, no clipping
-
-## Stability
-- [ ] Wave hand in/out of view: no crashes, no ghost clicks
-- [ ] Cover camera: app handles gracefully
-- [ ] Run for 5 minutes: no memory leak, no FPS degradation
-- [ ] Enable Mouse → Minimize → Overlay appears → works
-```
-
-=== VERIFICATION ===
-After this prompt, the app should be:
-1. Dual-hand mode works as default — left cursor, right actions
-2. Eye tracking available as experimental option
-3. Single-hand mode still works (legacy)
-4. All gestures functional: click, double-click, right-click, scroll, drag
-5. Cursor is smooth and responsive
-6. UI is polished and adapts to all modes
-7. No console spam
-8. Manual test checklist passes 100%
-```
-
----
-
-## Application Order
-
-1. **Apply Prompt 1** → creates eye_tracker.py, rewrites hand_tracker.py and gesture_detector.py, updates tuning + settings
-2. **Apply Prompt 2** → rewrites main_window.py process loop, cursor dispatch, settings dialog  
-3. **Apply Prompt 3** → final UI polish, guide updates, test checklist
-
-After all 3 prompts: start the app, open Settings → Gestures, confirm "Dual Hand" is selected, start camera, and test with both hands.
+=== MASTER_PROMPT.txt ===
+MASTER PROMPT — Holographic Touch Complete Fix
+================================================
+Paste this entire prompt to Claude Opus or GPT-4o with your project_compact_export.txt attached.
+================================================
+
+You are fixing the "Holographic Touch" gesture-mouse app (PySide6 + OpenCV + MediaPipe, Python 3.12, Windows).
+The full source is attached as project_compact_export.txt. Read every file before writing any code.
+
+OUTPUT RULES (read before writing anything):
+- Output COMPLETE file replacements — no "# ... existing code ..." or "# unchanged" placeholders
+- Every method must have a return statement on every path
+- No new imports unless explicitly listed — use only what already exists in the project
+- Preserve every existing class/method name and signature unless explicitly told to change it
+- Write all 6 files below. Do not skip any.
+
+═══════════════════════════════════════════════════════════════
+PROBLEM SUMMARY — fix ALL of these, nothing else:
+═══════════════════════════════════════════════════════════════
+
+1. MODE SWITCHING WITH 5-MINUTE LOCK
+   Current bug: when a hand briefly leaves the camera in dual-hand mode the app
+   has no protection — future code could flip modes accidentally.
+   Fix: add self._mode_lock_until: float = 0.0 in MainWindow.__init__
+        Any time the user changes mode (via Settings), set _mode_lock_until = time.monotonic() + 300.0
+        In _process_loop, NEVER auto-switch modes. Mode only changes via Settings dialog.
+        The 5-minute lock is for the Settings dialog: after changing mode, the combo-box
+        is disabled for 5 minutes (show a countdown label next to it). This prevents
+        accidental re-clicks. The user CAN override it by clicking the mode combo again
+        after 30 seconds (show "Override available in Xs" countdown).
+
+2. PROMINENT MODE STATUS BOX
+   The mode_lbl already exists but is too subtle.
+   Fix: In _render(), update mode_lbl every frame with colored text:
+        - DUAL HAND mode: color #22D3EE (cyan), text "⬡ DUAL HAND  L=Cursor  R=Actions"
+        - SINGLE HAND mode: color #A78BFA (purple), text "◈ SINGLE HAND  Any hand = cursor+actions"
+        Also add a second badge next to gesture_lbl showing the mode — a small pill
+        with bg color matching mode color.
+
+3. SINGLE HAND MODE — WORKS WITH EITHER HAND, BETTER CURSOR SMOOTHING
+   Current code: single-hand picks `hands_dict.get("Right") or hands_dict.get("Left")` which is correct.
+   Fix needed: cursor jitter in single-hand.
+   Fix: In _process_loop, for single-hand cursor tracking, apply an ADDITIONAL 3-frame
+        rolling average on the raw camera landmark point BEFORE passing to mapper.map_point().
+        Add self._sh_cursor_history: list = [] (maxlen 3) to MainWindow.__init__.
+        Each frame in single-hand mode: append (tip_x, tip_y) to _sh_cursor_history,
+        average the last min(3, len) entries, use the average as the camera point.
+        This kills jitter without adding perceived lag.
+
+4. CONTROL MARGIN — WIDEN DETECTION ZONE
+   Current bug: when hand moves near the edge of the camera frame (outside the blue
+   control-region box) MediaPipe stops tracking.
+   Fix: In _process_loop, pass the FULL frame to tracker.detect() (already done — good).
+        The issue is the CursorMapper clips cursor output to screen edges but the
+        DETECTION still uses the full frame — so detection is fine. The real problem
+        is the frame_r margin is set too large by default, making the active zone tiny.
+        Fix: Change DEFAULT frame_r in settings_store.py DEFAULTS from 90 to 40.
+        Change the slider default in SettingsDialog to match.
+        Also: in CursorMapper.map_point(), change the soft-deadzone from 1.5px to 0.8px
+        for hand-only mode (set CURSOR_SOFT_DEADZONE_PX = 0.8 in tuning.py).
+
+5. SCROLL — MAKE IT WORK INTUITIVELY
+   Current: scroll uses index tip Y (xy[8][1]) inside _resolve_scroll.
+   Problems: direction feels random, too sensitive, hard to enter peace-sign pose.
+   Fix in gesture_detector.py _process_action_hand():
+     - Peace sign detection: pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_
+       (widened pm range — easier to enter at various distances)
+     - In _resolve_scroll(), change tracking point from xy[8] to the MIDPOINT of
+       xy[8] and xy[12] (average of index and middle tips Y coords):
+         scroll_y = (float(xy[8][1]) + float(xy[12][1])) * 0.5
+       This is more stable than single finger.
+     - Increase EMA alpha from 0.25 to 0.35 for faster response
+     - deadband: change from hand_scale * 0.06 to hand_scale * 0.04 (easier to trigger)
+     - scroll_step_factor: change from 0.08 to 0.06 (smoother steps)
+     - Direction: hand moves UP (Y decreases in image) → scroll UP (positive delta) ✓
+       Already correct — dy = prev_y - current_y, positive when moving up. Keep this.
+     - scroll_step_limit: keep at 8
+     - In tuning.py: GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25 (was 0.10, stops jitter)
+
+6. DRAG — MORE RELIABLE
+   Current: drag activates after 0.45s hold.
+   Fix: Keep 0.45s. But add visual feedback in _render() — while left pinch is held
+        but drag hasn't activated yet, draw a progress arc on the camera preview.
+        Specifically: read self.gestures._left_pinch_since and self.gestures._drag_activate_s.
+        If _left_pinch_since is not None, compute progress = (now - _left_pinch_since) / _drag_activate_s
+        clamped 0–1. Draw a small cyan arc at the cursor position on the rgb frame.
+        When drag IS active, draw a filled dot (drag indicator).
+        The arc/dot drawing happens in _render() on the rgb frame before QImage conversion.
+        To get drag progress in _render() (which runs on UI thread), store it as
+        self._drag_progress: float = 0.0 and update it in _process_loop under self._lock.
+
+7. RANDOM GESTURE FIXES (right-click and accidental clicks)
+   - right_enter threshold: keep at enter * 0.50 (already correct)
+   - In _process_loop confidence gate: raise threshold for RIGHT_CLICK from 0.55 to 0.65
+     (right-click requires higher confidence than left-click)
+   - In GestureDetector.__init__: _right_click_hold_s = max(0.25, GESTURE_RIGHT_CLICK_HOLD_S)
+     (was 0.15 — increase minimum to 0.25s)
+   - pm > 0.15 check for right pinch: raise to pm > 0.20 (index must be more clearly open)
+
+═══════════════════════════════════════════════════════════════
+FILES TO OUTPUT (complete replacements):
+═══════════════════════════════════════════════════════════════
+
+FILE 1: src/tuning.py
+─────────────────────
+Output the complete file with these values changed:
+  CURSOR_SOFT_DEADZONE_PX = 0.8          # was 1.5
+  GESTURE_CONFIRM_HOLD_S = 0.04          # was 0.03
+  GESTURE_DRAG_ACTIVATE_S = 0.45         # was 0.38
+  GESTURE_RIGHT_CLICK_HOLD_S = 0.25      # was 0.10 — stops random right clicks
+  GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45   # was 0.38
+  GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25  # was 0.10 — stops scroll jitter
+All other values unchanged.
+
+FILE 2: src/settings_store.py
+──────────────────────────────
+Output the complete file with DEFAULTS changed:
+  "frame_r": 40,       # was 90 — wider active zone by default
+  "hand_only_mode": True,  # default to hand-based tracking
+  "cursor_mode": "dual_hand",  # already there, keep
+Keep all other DEFAULTS unchanged. Keep all methods unchanged.
+
+FILE 3: src/gesture_detector.py
+────────────────────────────────
+Output the complete file with ALL methods intact. Changes:
+a) In __init__:
+   - self._right_click_hold_s = max(0.25, float(GESTURE_RIGHT_CLICK_HOLD_S))
+   - self._scroll_deadband_factor = 0.04   # was 0.06
+   - self._scroll_step_factor = 0.06       # was 0.08
+
+b) In _process_action_hand():
+   - peace_pose: change pm bounds to: pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_
+   - right pinch pm check: change pm > 0.15 to pm > 0.20
+   - scroll call: change from float(xy[8][1]) to (float(xy[8][1]) + float(xy[12][1])) * 0.5
+
+c) In _resolve_scroll():
+   - EMA alpha: change 0.25 to 0.35
+   - deadband: change hand_scale * self._scroll_deadband_factor (keep formula, value changed in __init__)
+   - Keep all else unchanged — direction logic is already correct
+
+FILE 4: src/cursor_mapper.py
+──────────────────────────────
+Output the complete file. Only change:
+  In map_point(), the soft deadzone line:
+    if speed < self._deadzone_px:
+  The _deadzone_px is already set from CURSOR_SOFT_DEADZONE_PX in tuning.py (now 0.8).
+  No other changes needed — the tuning.py change propagates here automatically.
+  But add this guard to set_frame_margin(): clamp minimum margin to 10 (not 0), ensuring
+  the active zone is always at least 10px from each edge:
+    self.frame_r = max(10, min(int(margin_px), self.max_effective_margin_px()))
+
+FILE 5: src/main_window.py
+────────────────────────────
+Output the COMPLETE file. Targeted changes only (keep all existing logic):
+
+a) In MainWindow.__init__, after existing self._freeze_on = {...} block, ADD:
+   self._mode_lock_until: float = 0.0          # prevents mode-switch spam
+   self._sh_cursor_history: list = []           # 3-frame rolling avg for single-hand
+   self._drag_progress: float = 0.0             # for drag arc UI
+
+b) In _process_loop, in the single-hand cursor section (else branch at bottom of cursor pos):
+   Replace:
+       elif _any_hand and len(_any_hand.get("xy", [])) > 8:
+           tip = _any_hand["xy"][8]
+           sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
+           _has_cursor = True
+   With:
+       elif _any_hand and len(_any_hand.get("xy", [])) > 8:
+           tip = _any_hand["xy"][8]
+           self._sh_cursor_history.append((int(tip[0]), int(tip[1])))
+           if len(self._sh_cursor_history) > 3:
+               self._sh_cursor_history.pop(0)
+           avg_x = int(sum(p[0] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
+           avg_y = int(sum(p[1] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
+           sx, sy = self.mapper.map_point(avg_x, avg_y)
+           _has_cursor = True
+   Also reset _sh_cursor_history when hand is lost:
+   In the else branch (no cursor): self._sh_cursor_history.clear()
+
+c) In _process_loop, under the self._lock block at end of frame processing, ADD:
+   # Update drag progress for UI arc
+   if self.gestures._left_pinch_since is not None:
+       _dp = (time.monotonic() - self.gestures._left_pinch_since) / max(0.01, self.gestures._drag_activate_s)
+       self._drag_progress = min(1.0, _dp)
+   else:
+       self._drag_progress = 0.0
+
+d) In _render(), after the cv2.rectangle control region block and before the QImage block, ADD:
+   # Drag progress arc
+   with self._lock:
+       _dp = self._drag_progress
+       _drag_on = self._drag_active
+   if _dp > 0.05 or _drag_on:
+       try:
+           h_rgb, w_rgb = rgb.shape[:2]
+           cx_arc = w_rgb // 2
+           cy_arc = h_rgb - 30
+           if _drag_on:
+               cv2.circle(rgb, (cx_arc, cy_arc), 12, (0, 200, 255), -1, cv2.LINE_AA)
+               cv2.putText(rgb, "DRAG", (cx_arc - 18, cy_arc + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
+           else:
+               angle = int(360 * _dp)
+               cv2.ellipse(rgb, (cx_arc, cy_arc), (14, 14), -90, 0, angle,
+                           (0, 200, 255), 3, cv2.LINE_AA)
+       except Exception:
+           pass
+
+e) In _render(), update mode_lbl with colored text each frame:
+   Find the block that updates self.hand_lbl and add BEFORE it:
+       _mode_color = "#22D3EE" if self._cursor_mode == "dual_hand" else "#A78BFA"
+       _mode_icon = "⬡" if self._cursor_mode == "dual_hand" else "◈"
+       _mode_text_map = {
+           "dual_hand": f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions",
+           "single_hand": f"{_mode_icon} SINGLE HAND  Any hand",
+           "eye_tracking": "◉ EYE TRACKING  experimental",
+       }
+       if hasattr(self, "mode_lbl"):
+           self.mode_lbl.setText(_mode_text_map.get(self._cursor_mode, ""))
+           self.mode_lbl.setStyleSheet(f"color: {_mode_color}; font-weight: 700; font-size: 12px;")
+
+f) In SettingsDialog._on_cursor_mode_changed() (the slot that handles mode combo change):
+   ADD at the start of the method:
+       self._mw._mode_lock_until = time.monotonic() + 300.0
+       settings.set("cursor_mode", ...)   # keep existing logic
+   And disable the cursor_mode combo for 30 seconds with a QTimer that re-enables it
+   and shows "Mode locked for Xs" in a nearby label (add self.mode_lock_lbl = QLabel("")).
+
+g) In the confidence gate in _process_loop, raise RIGHT_CLICK check:
+   Find:
+       if _action_hand and float(_action_hand.get("confidence", 0)) < 0.55:
+           if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}:
+   Replace with:
+       if _action_hand:
+           _conf = float(_action_hand.get("confidence", 0))
+           if _conf < 0.55 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+               gesture = GestureType.MOVE
+               result = GestureResult(GestureType.MOVE, 0)
+               gesture_changed = gesture != last_action
+           elif _conf < 0.65 and gesture == GestureType.RIGHT_CLICK:
+               gesture = GestureType.MOVE
+               result = GestureResult(GestureType.MOVE, 0)
+               gesture_changed = gesture != last_action
+
+FILE 6: src/hand_tracker.py
+─────────────────────────────
+Output the complete file. Only change: in HandTracker.__init__():
+  Change max_num_hands from 1 to 2 in self._hands (the main MediaPipe Hands instance):
+      self._hands = self._mp_hands.Hands(
+          static_image_mode=False,
+          max_num_hands=2,             # ← was 1, now detects both hands
+          model_complexity=0,
+          min_detection_confidence=0.50,   # slightly lower — catches hands near edges
+          min_tracking_confidence=0.30,    # lower — keeps tracking longer at edges
+      )
+
+  In detect(), update the processing loop to collect ALL detected hands into hands_dict:
+  The current code only takes chosen_idx=0. Replace the single-hand extraction with:
+      hands_dict = {}
+      hand_protos_list = []
+      for i, (hand, handedness_item) in enumerate(zip(
+              result.multi_hand_landmarks, result.multi_handedness)):
+          raw_label = handedness_item.classification[0].label
+          label = self._map_label(raw_label, is_mirrored=is_mirrored)
+          confidence = float(handedness_item.classification[0].score)
+          if confidence < 0.30:
+              continue
+          if self._process_size is None:
+              xy = [(max(0, min(src_w - 1, int(lm.x * src_w))),
+                     max(0, min(src_h - 1, int(lm.y * src_h)))) for lm in hand.landmark]
+          else:
+              sx_s = float(src_w) / float(max(1, detect_w))
+              sy_s = float(src_h) / float(max(1, detect_h))
+              xy = [(max(0, min(src_w - 1, int(lm.x * detect_w * sx_s))),
+                     max(0, min(src_h - 1, int(lm.y * detect_h * sy_s)))) for lm in hand.landmark]
+          z = [float(lm.z) for lm in hand.landmark]
+          hdata = {"xy": xy, "z": z, "label": label, "confidence": confidence,
+                   "frame_size": (detect_w, detect_h)}
+          # Last writer wins for same label (take higher confidence)
+          if label not in hands_dict or confidence > hands_dict[label]["confidence"]:
+              hands_dict[label] = hdata
+              if i < len(hand_protos_list):
+                  hand_protos_list[i] = (hand, label)
+              else:
+                  hand_protos_list.append((hand, label))
+
+      if not hands_dict:
+          # grace frame logic
+          self._frames_no_hand += 1
+          if self._frames_no_hand < self._grace_frames and self._last_valid_result is not None:
+              hd, hp = self._last_valid_result
+              return hd, hp, True
+          self._label_history.clear()
+          self._hand_lock_frames = 0
+          self._hand_locked = False
+          self._low_conf_drop_frames = 0
+          self._last_valid_result = None
+          return {}, [], False
+
+      self._frames_no_hand = 0
+      self._last_valid_result = (hands_dict, hand_protos_list)
+      return hands_dict, hand_protos_list, False
+
+  Also update _last_valid_result type annotation to tuple[dict, list] | None.
+  Also update the grace-frame return to use {}, [] instead of None, None.
+  Also update the ONNX path to return {"Right": hand_data}, [(_OnnxHandProto(xy_onnx), "Right")], False
+
+  IMPORTANT: the return signature is now (dict, list, bool) where dict = {"Left": {...}, "Right": {...}}
+  and list = [(proto, label), ...]. The rest of main_window.py already handles this format.
+
+═══════════════════════════════════════════════════════════════
+VERIFICATION — after writing all 6 files, confirm:
+═══════════════════════════════════════════════════════════════
+1. HandTracker.detect() returns (dict, list, bool) — hands_dict keys are "Left"/"Right"
+2. GestureDetector.detect_dual() and detect() both exist and work
+3. _sh_cursor_history rolling average is applied in single-hand cursor path only
+4. _drag_progress is updated in _process_loop and drawn as arc in _render()
+5. Right-click requires 0.65 confidence and 0.25s hold
+6. Scroll uses midpoint of index+middle Y, EMA alpha 0.35, deadband factor 0.04
+7. Default frame_r is 40 (not 90)
+8. Mode lock sets _mode_lock_until = now + 300.0 when mode changes in settings
+9. mode_lbl updates every frame in _render() with colored text
+10. No "# ... existing code ..." placeholders anywhere
 
 === README.txt ===
 Windows Hover (USB build)
@@ -3240,7 +1196,7 @@ This build is optimized for:
 - gestures (Left hand): media volume up/down and next/previous track only
 
 === requirements.txt ===
-mediapipe==0.10.21
+mediapipe>=0.10.33
 opencv-contrib-python>=4.10.0.84
 numpy>=1.26.0
 numba>=0.59.0
@@ -3915,7 +1871,7 @@ class CursorMapper:
 
     def set_frame_margin(self, margin_px: int) -> None:
         with self._mapper_lock:
-            self.frame_r = max(0, min(int(margin_px), self.max_effective_margin_px()))
+            self.frame_r = max(10, min(int(margin_px), self.max_effective_margin_px()))
             if self.cam_w <= 1 or self.cam_h <= 1:
                 return
             self._margin_x_ratio = max(0.0, min(self._max_inner_margin_ratio,
@@ -4516,13 +2472,13 @@ class GestureDetector:
         self._last_right_click_time = 0.0
         self._left_click_release_time = -float('inf')
 
-        self._scroll_step_factor = 0.08
-        self._scroll_deadband_factor = 0.06
+        self._scroll_step_factor = 0.06
+        self._scroll_deadband_factor = 0.04
         self._double_click_window_s = float(GESTURE_DOUBLE_CLICK_WINDOW_S)
         self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
         self._scroll_step_limit = 8
         self._scroll_gain = 1.0
-        self._right_click_hold_s = max(0.15, float(GESTURE_RIGHT_CLICK_HOLD_S))
+        self._right_click_hold_s = max(0.25, float(GESTURE_RIGHT_CLICK_HOLD_S))
 
         self._per_action_cooldown = {
             GestureType.LEFT_CLICK: 0.25,
@@ -4574,7 +2530,7 @@ class GestureDetector:
         dy = float(self._scroll_prev_y) - current_y
         self._scroll_prev_y = current_y
 
-        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.25)
+        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.35)
         v = self._scroll_velocity_ema
 
         deadband = max(1.0, hand_scale * self._scroll_deadband_factor)
@@ -4699,7 +2655,7 @@ class GestureDetector:
             if ri > exit_:
                 self._right_pinch_active = False
                 self._right_pinch_start_t = None
-        elif ri <= right_enter and li > exit_ and pm > 0.15:
+        elif ri <= right_enter and li > exit_ and pm > 0.20:
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
             elif now - self._right_pinch_start_t >= self._right_click_hold_s:
@@ -4708,7 +2664,7 @@ class GestureDetector:
             self._right_pinch_start_t = None
 
         # --- Peace sign (index+middle spread) = scroll ---
-        peace_pose = (pm >= 0.06 and pm <= 0.65 and li > exit_ and ri > exit_)
+        peace_pose = (pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_)
 
         # --- Track pinch duration for drag ---
         if self._left_pinch_active:
@@ -4785,7 +2741,8 @@ class GestureDetector:
             return self._make_result(GestureType.DRAG, 0)
 
         if stable_state == GestureType.SCROLL:
-            delta = self._resolve_scroll(float(xy[8][1]), self._hand_scale)
+            scroll_y = (float(xy[8][1]) + float(xy[12][1])) * 0.5
+            delta = self._resolve_scroll(scroll_y, self._hand_scale)
             self._state = GestureType.SCROLL
             self._dragging = False
             return self._make_result(GestureType.SCROLL, delta)
@@ -4847,13 +2804,13 @@ class HandTracker:
             static_image_mode=False,
             max_num_hands=2,
             model_complexity=0,
-            min_detection_confidence=0.55,
-            min_tracking_confidence=0.35,
+            min_detection_confidence=0.50,
+            min_tracking_confidence=0.30,
         )
 
         self._frames_no_hand = 0
         self._grace_frames = 3
-        self._last_valid_result: tuple[dict, list, bool] | None = None
+        self._last_valid_result: tuple[dict, list] | None = None
 
     def set_processing_size(self, size: tuple[int, int] | None) -> None:
         if size is None:
@@ -4890,7 +2847,7 @@ class HandTracker:
                 label = self._map_label(raw_label, is_mirrored)
                 conf = float(result.multi_handedness[idx].classification[0].score)
 
-                if conf < 0.40:
+                if conf < 0.30:
                     continue
 
                 xy = [(int(lm.x * dw * sx), int(lm.y * dh * sy))
@@ -4913,13 +2870,13 @@ class HandTracker:
 
         if hands_dict:
             self._frames_no_hand = 0
-            self._last_valid_result = (hands_dict, protos, False)
+            self._last_valid_result = (hands_dict, protos)
             return hands_dict, protos, False
         else:
             self._frames_no_hand += 1
             if (self._frames_no_hand < self._grace_frames
                     and self._last_valid_result is not None):
-                cached_dict, cached_protos, _ = self._last_valid_result
+                cached_dict, cached_protos = self._last_valid_result
                 return cached_dict, cached_protos, True
             self._last_valid_result = None
             return {}, [], False
@@ -5279,6 +3236,10 @@ class SettingsDialog(QDialog):
             self.cursor_mode_combo.setCurrentIndex(idx)
         gesture_layout.addWidget(cursor_mode_label)
         gesture_layout.addWidget(self.cursor_mode_combo)
+        self.mode_lock_lbl = QLabel("")
+        self.mode_lock_lbl.setObjectName("muted")
+        self.mode_lock_lbl.setWordWrap(True)
+        gesture_layout.addWidget(self.mode_lock_lbl)
         gesture_layout.addStretch(1)
 
         perf_tab = QWidget()
@@ -5330,6 +3291,10 @@ class SettingsDialog(QDialog):
         about_btn.clicked.connect(self._show_about)
         apply_btn.clicked.connect(self._apply_performance)
         close_btn.clicked.connect(self.accept)
+
+        self._mode_lock_timer = QTimer(self)
+        self._mode_lock_timer.timeout.connect(self._tick_mode_lock)
+        self._tick_mode_lock()
 
         self.setStyleSheet(
             """
@@ -5450,9 +3415,30 @@ class SettingsDialog(QDialog):
     def _on_cursor_mode_changed(self, idx: int) -> None:
         mode = self.cursor_mode_combo.itemData(idx)
         if mode:
+            self._mw._mode_lock_until = time.monotonic() + 300.0
             settings.set("cursor_mode", str(mode))
+            self._tick_mode_lock()
+            if not self._mode_lock_timer.isActive():
+                self._mode_lock_timer.start(1000)
             QMessageBox.information(self, "Restart Required",
                 "Cursor mode change requires restarting the camera.")
+
+    def _tick_mode_lock(self) -> None:
+        rem = int(max(0.0, self._mw._mode_lock_until - time.monotonic()))
+        if rem <= 0:
+            self.cursor_mode_combo.setEnabled(True)
+            self.mode_lock_lbl.setText("")
+            if self._mode_lock_timer.isActive():
+                self._mode_lock_timer.stop()
+            return
+
+        if rem > 270:
+            self.cursor_mode_combo.setEnabled(False)
+            self.mode_lock_lbl.setText(
+                f"Mode locked for {rem}s. Override available in {rem - 270}s")
+        else:
+            self.cursor_mode_combo.setEnabled(True)
+            self.mode_lock_lbl.setText(f"Mode lock active: {rem}s remaining (override enabled)")
 
     def _on_performance_toggled(self, state: int) -> None:
         value = bool(state)
@@ -5614,6 +3600,9 @@ class MainWindow(QMainWindow):
             GestureType.RIGHT_CLICK,
             GestureType.DOUBLE_CLICK,
         }
+        self._mode_lock_until: float = 0.0
+        self._sh_cursor_history: list = []
+        self._drag_progress: float = 0.0
         self._start_worker: threading.Thread | None = None
 
         self._build_ui()
@@ -5714,6 +3703,9 @@ class MainWindow(QMainWindow):
         self.gesture_lbl.setObjectName("badge")
         self.gesture_lbl.setWordWrap(False)
         self.gesture_lbl.setMinimumWidth(140)
+        self.mode_badge_lbl = QLabel("MODE")
+        self.mode_badge_lbl.setObjectName("modeBadge")
+        self.mode_badge_lbl.setWordWrap(False)
 
         _mode_labels = {
             "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
@@ -5737,7 +3729,12 @@ class MainWindow(QMainWindow):
         self.confidence_lbl.setWordWrap(True)
         
         sl.addWidget(status_title)
-        sl.addWidget(self.gesture_lbl)
+        badge_row = QHBoxLayout()
+        badge_row.setSpacing(8)
+        badge_row.addWidget(self.gesture_lbl)
+        badge_row.addWidget(self.mode_badge_lbl)
+        badge_row.addStretch(1)
+        sl.addLayout(badge_row)
         sl.addSpacing(8)
         sl.addWidget(self.mode_lbl)
         sl.addWidget(self.hand_lbl)
@@ -6026,6 +4023,13 @@ class MainWindow(QMainWindow):
                 font-size: 13px; letter-spacing: 1.5px;
                 border: 1px solid rgba(39, 39, 42, 0.4);
                 text-align: center;
+            }
+            #modeBadge {
+                border-radius: 10px; padding: 5px 10px; font-weight: 700;
+                min-width: 90px; font-size: 11px; letter-spacing: 1px;
+                text-align: center; color: #E2E8F0;
+                background: rgba(39, 39, 42, 0.45);
+                border: 1px solid rgba(39, 39, 42, 0.4);
             }
             #historyItem { 
                 font-weight: 500; 
@@ -6594,9 +4598,13 @@ class MainWindow(QMainWindow):
 
                 # Confidence gate
                 _action_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                if _action_hand and float(_action_hand.get("confidence", 0)) < 0.55:
-                    if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
-                                   GestureType.DOUBLE_CLICK}:
+                if _action_hand:
+                    _conf = float(_action_hand.get("confidence", 0))
+                    if _conf < 0.55 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+                        gesture = GestureType.MOVE
+                        result = GestureResult(GestureType.MOVE, 0)
+                        gesture_changed = gesture != last_action
+                    elif _conf < 0.65 and gesture == GestureType.RIGHT_CLICK:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
@@ -6641,9 +4649,15 @@ class MainWindow(QMainWindow):
                         _has_cursor = self._frozen_sx >= 0
                     elif _any_hand and len(_any_hand.get("xy", [])) > 8:
                         tip = _any_hand["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
+                        self._sh_cursor_history.append((int(tip[0]), int(tip[1])))
+                        if len(self._sh_cursor_history) > 3:
+                            self._sh_cursor_history.pop(0)
+                        avg_x = int(sum(p[0] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
+                        avg_y = int(sum(p[1] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
+                        sx, sy = self.mapper.map_point(avg_x, avg_y)
                         _has_cursor = True
                     else:
+                        self._sh_cursor_history.clear()
                         _has_cursor = self._frozen_sx >= 0
 
                 if _has_cursor:
@@ -6728,6 +4742,12 @@ class MainWindow(QMainWindow):
                     self._hand_data = _count_hand
                     self._fingers = _finger_count
                     self._face_tracked = _face_tracked
+                    # Update drag progress for UI arc
+                    if self.gestures._left_pinch_since is not None:
+                        _dp = (time.monotonic() - self.gestures._left_pinch_since) / max(0.01, self.gestures._drag_activate_s)
+                        self._drag_progress = min(1.0, _dp)
+                    else:
+                        self._drag_progress = 0.0
 
             except Exception:
                 continue
@@ -6774,6 +4794,32 @@ class MainWindow(QMainWindow):
         self.fingers_lbl.setText(f"Fingers: {fingers}")
         with self._lock:
             _face_on = self._face_tracked
+
+        _mode_color = "#22D3EE" if self._cursor_mode == "dual_hand" else "#A78BFA"
+        _mode_icon = "⬡" if self._cursor_mode == "dual_hand" else "◈"
+        _mode_text_map = {
+            "dual_hand": f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions",
+            "single_hand": f"{_mode_icon} SINGLE HAND  Any hand = cursor+actions",
+            "eye_tracking": "◉ EYE TRACKING  experimental",
+        }
+        if hasattr(self, "mode_lbl"):
+            self.mode_lbl.setText(_mode_text_map.get(self._cursor_mode, ""))
+            self.mode_lbl.setStyleSheet(f"color: {_mode_color}; font-weight: 700; font-size: 12px;")
+
+        if hasattr(self, "mode_badge_lbl"):
+            _pill = {
+                "dual_hand": ("DUAL", "#22D3EE"),
+                "single_hand": ("SINGLE", "#A78BFA"),
+                "eye_tracking": ("EYE", "#FBBF24"),
+            }
+            _txt, _col = _pill.get(self._cursor_mode, ("MODE", "#64748B"))
+            self.mode_badge_lbl.setText(_txt)
+            self.mode_badge_lbl.setStyleSheet(
+                f"border-radius: 10px; padding: 5px 10px; font-weight: 700;"
+                f"min-width: 90px; font-size: 11px; letter-spacing: 1px;"
+                f"text-align: center; color: {_col}; background: {_col}33; border: 1px solid {_col}66;"
+            )
+
         if self._cursor_mode == "eye_tracking":
             self.hand_lbl.setText(
                 f"Eyes: {'Tracking' if _face_on else 'Lost'}  |  "
@@ -6835,6 +4881,26 @@ class MainWindow(QMainWindow):
         if self._show_control_region:
             left, top, right, bottom = self.mapper.control_region()
             cv2.rectangle(rgb, (left, top), (right, bottom), (34, 211, 238), 2, cv2.LINE_AA)
+
+        # Drag progress arc
+        with self._lock:
+            _dp = self._drag_progress
+            _drag_on = self._drag_active
+        if _dp > 0.05 or _drag_on:
+            try:
+                h_rgb, w_rgb = rgb.shape[:2]
+                cx_arc = w_rgb // 2
+                cy_arc = h_rgb - 30
+                if _drag_on:
+                    cv2.circle(rgb, (cx_arc, cy_arc), 12, (0, 200, 255), -1, cv2.LINE_AA)
+                    cv2.putText(rgb, "DRAG", (cx_arc - 18, cy_arc + 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
+                else:
+                    angle = int(360 * _dp)
+                    cv2.ellipse(rgb, (cx_arc, cy_arc), (14, 14), -90, 0, angle,
+                                (0, 200, 255), 3, cv2.LINE_AA)
+            except Exception:
+                pass
 
         # FIX: Draw face skeleton + nose cursor dot so it's visible on screen
         if not self._hand_only_mode and self.face_tracker is not None:
@@ -7485,7 +5551,7 @@ from pathlib import Path
 class SettingsStore:
     DEFAULTS = {
         "camera_index": 0,
-        "frame_r": 90,
+        "frame_r": 40,
         "smoothening": 4.8,
         "debug_overlay": False,
         "scroll_multiplier": 1.0,
@@ -7575,7 +5641,7 @@ CAMERA_FAIL_SLEEP_S = 0.001
 # Cursor mapper
 CURSOR_INNER_RATIO = 0.80
 CURSOR_SPEED_NORM_RATIO = 0.05
-CURSOR_SOFT_DEADZONE_PX = 1.5
+CURSOR_SOFT_DEADZONE_PX = 0.8
 
 # Gesture — only constants actually used in the new distance engine
 GESTURE_CONFIRM_HOLD_S = 0.04
@@ -7583,8 +5649,8 @@ GESTURE_ACTION_COOLDOWN_S = 0.18
 GESTURE_LOCK_S = 0.08
 GESTURE_DRAG_ACTIVATE_S = 0.45
 GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45
-GESTURE_RIGHT_CLICK_HOLD_S = 0.18
-GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.10
+GESTURE_RIGHT_CLICK_HOLD_S = 0.25
+GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25
 
 # Hand tracker
 HAND_LOCK_CONFIDENCE_THRESHOLD = 0.40
