@@ -160,37 +160,23 @@ class GestureDetector:
             pass
         return result
 
-    def _finger_states(self, landmarks_xy) -> FingerStates:
-        wrist = landmarks_xy[0]
+    def _pinch_ratios(self, xy, hand_scale: float) -> tuple[float, float, float]:
+        """Return (li, ri, pm) all normalized by hand_scale.
 
-        # Thumb: distance from tip to pinky base vs MCP to pinky base.
-        # Works at any hand angle/rotation.
-        thumb_tip = landmarks_xy[4]
-        thumb_mcp = landmarks_xy[2]
-        pinky_base = landmarks_xy[17]
-        dist_tip_to_pinky = self._distance(thumb_tip, pinky_base)
-        dist_mcp_to_pinky = self._distance(thumb_mcp, pinky_base)
-        thumb = dist_tip_to_pinky > (dist_mcp_to_pinky * 1.2)
+        li = thumb-to-index distance   → left click pinch
+        ri = thumb-to-middle distance  → right click pinch
+        pm = index-to-middle distance  → peace sign / scroll mode
+        Pure 2D distance. Works at any hand angle. No Y-axis."""
+        hs = max(1.0, hand_scale)
+        li = self._distance(xy[4], xy[8]) / hs
+        ri = self._distance(xy[4], xy[12]) / hs
+        pm = self._distance(xy[8], xy[12]) / hs
+        return li, ri, pm
 
-        # Fingers: tip-to-wrist > pip-to-wrist AND tip-to-mcp > min_ext.
-        # Fully rotation-invariant — works when hand is vertical, tilted,
-        # sideways, or at any angle. min_ext threshold uses hand_scale.
-        def _up(tip_i: int, pip_i: int, mcp_i: int) -> bool:
-            tip = landmarks_xy[tip_i]
-            pip = landmarks_xy[pip_i]
-            mcp = landmarks_xy[mcp_i]
-            d_tip = self._distance(tip, wrist)
-            d_pip = self._distance(pip, wrist)
-            d_ext = self._distance(tip, mcp)
-            return d_tip > d_pip and d_ext > (self._hand_scale * 0.30)
-
-        return FingerStates(
-            thumb=thumb,
-            index=_up(8, 6, 5),
-            middle=_up(12, 10, 9),
-            ring=_up(16, 14, 13),
-            pinky=_up(20, 18, 17),
-        )
+    def _finger_states(self, landmarks_xy) -> "FingerStates":
+        """Legacy stub — kept for compatibility. Not used in hybrid mode."""
+        return FingerStates(thumb=False, index=True,
+                            middle=False, ring=False, pinky=False)
 
     # REMOVED: finger_count() — use _finger_states() instead (line 128)
 
@@ -400,112 +386,77 @@ class GestureDetector:
         except (IndexError, TypeError):
             return self._make_result(GestureType.PAUSE, 0, 0.0)
 
-        fs = self._finger_states(xy)
         confidence = float(hand_data.get("confidence", 0.0))
         if confidence < 0.20:
             return self._make_result(GestureType.PAUSE, 0, 0.0)
 
-        self._update_pinch_states(xy, fs, self._hand_scale, now)
+        # ── HYBRID DISTANCE ENGINE ──────────────────────────────────────
+        # All gesture detection is pure 2D distance. No Y-axis checks.
+        # Works at every hand angle, camera distance, and lighting level.
+        li, ri, pm = self._pinch_ratios(xy, self._hand_scale)
 
+        enter = float(self._pinch_enter)   # 0.22
+        exit_ = float(self._pinch_exit)    # 0.36
+
+        # Left pinch (thumb ↔ index) — hysteresis
+        if self._left_pinch_active:
+            if li > exit_:
+                self._left_pinch_active = False
+                self._left_click_release_time = now
+        elif li <= enter:
+            self._left_pinch_active = True
+
+        # Right pinch (thumb ↔ middle) — only activates when left is open
+        if self._right_pinch_active:
+            if ri > exit_:
+                self._right_pinch_active = False
+        elif ri <= enter and li > exit_ and pm > 0.10:
+            if self._right_pinch_start_t is None:
+                self._right_pinch_start_t = now
+            if now - self._right_pinch_start_t >= self._right_click_hold_s:
+                self._right_pinch_active = True
+        else:
+            if not (ri <= enter and li > exit_ and pm > 0.10):
+                self._right_pinch_start_t = None
+
+        # Peace sign (index ↔ middle spread) — scroll mode
+        # pm in [0.05, 0.40] means fingers are spread but not pinching thumb
+        peace_pose = (pm >= 0.05 and pm <= 0.40 and li > exit_ and ri > exit_)
+
+        # Track left pinch hold duration for drag
         if self._left_pinch_active:
             if self._left_pinch_since is None:
                 self._left_pinch_since = now
         else:
             self._left_pinch_since = None
-            # Clear gesture memory when pinch released
             self._gesture_entry_set.discard(GestureType.LEFT_CLICK)
             self._gesture_entry_set.discard(GestureType.DOUBLE_CLICK)
             self._gesture_entry_set.discard(GestureType.DRAG)
 
-        pinch_guard_active = (
-            self._left_pinch_active
-            or self._right_pinch_active
-            or (0.0 < (now - self._left_click_release_time) < self._keyboard_after_pinch_s)
-        )
-
-        move_pose = fs.index and (not fs.middle) and (not fs.ring) and (not fs.pinky)
-        # FIX 5: Tighten scroll vs move separation with stricter landmark validation
-        # Require ring+pinky to be clearly curled, not just "not up"
-        scroll_pose = False
-        if fs.index and fs.middle and (not fs.ring) and (not fs.pinky):
-            # Extra validation: ring and pinky tips must be BELOW their PIPs (clearly curled)
-            ring_tip_y = xy[16][1]
-            ring_pip_y = xy[14][1]
-            pinky_tip_y = xy[20][1]
-            pinky_pip_y = xy[18][1]
-            # In pixel space: tip y > pip y means tip is lower (below) = finger is curled
-            ring_curled = ring_tip_y > ring_pip_y
-            pinky_curled = pinky_tip_y > pinky_pip_y
-            if ring_curled and pinky_curled:
-                scroll_pose = True
-        
-        open_palm = fs.thumb and fs.index and fs.middle and fs.ring and fs.pinky
-
-        # Keyboard gesture: pinky + index extended, thumb extended (three-finger salute)
-        # Middle and ring must be CURLED to avoid false triggers with open palm / scroll.
-        keyboard_pose = (
-            fs.index
-            and fs.pinky
-            and fs.thumb
-            and (not fs.middle)
-            and (not fs.ring)
-        )
-
+        # ── ROUTING ─────────────────────────────────────────────────────
         raw_state = GestureType.PAUSE
         media_delta = 0
-        
-        # Debug disabled
-        _debug = False
-        
-        if _debug:
-            print(f"[ROUTING] left_pinch={self._left_pinch_active}, right_pinch={self._right_pinch_active}, move_pose={move_pose}, scroll_pose={scroll_pose}")
+        self._task_view_since = None
+        self._keyboard_hold_start = None
+        self._keyboard_fired = False
 
-        # Both hands share cursor/click/scroll logic.
-        # Left hand additionally supports media controls via open_palm hold.
-
-        if open_palm and not self._left_pinch_active and not self._right_pinch_active:
-            if self._task_view_since is None:
-                self._task_view_since = now
-            if now - self._task_view_since >= self._task_view_hold_s:  # type: ignore
-                raw_state = GestureType.TASK_VIEW
+        if self._left_pinch_active and self._left_pinch_since is not None:
+            held = now - self._left_pinch_since
+            if held >= self._drag_activate_s:
+                raw_state = GestureType.DRAG
             else:
-                raw_state = GestureType.PAUSE
+                raw_state = GestureType.LEFT_CLICK
+        elif self._right_pinch_active:
+            raw_state = GestureType.RIGHT_CLICK
+        elif peace_pose:
+            raw_state = GestureType.SCROLL
         else:
-            self._task_view_since = None
+            # Default: MOVE (cursor always controlled by nose in hybrid mode)
+            self._last_move_time = now
+            raw_state = GestureType.MOVE
+        # ────────────────────────────────────────────────────────────────
 
-            if keyboard_pose and not pinch_guard_active:
-                if self._keyboard_hold_start is None:
-                    self._keyboard_hold_start = now
-                hold_elapsed = now - self._keyboard_hold_start  # type: ignore
-                if hold_elapsed >= self._keyboard_hold_s and not self._keyboard_fired:
-                    raw_state = GestureType.KEYBOARD
-                    self._keyboard_fired = True
-                else:
-                    raw_state = GestureType.PAUSE
-            else:
-                self._keyboard_hold_start = None
-                self._keyboard_fired = False
-
-                if self._left_pinch_active and self._left_pinch_since is not None and (now - self._left_pinch_since >= self._drag_activate_s):  # type: ignore
-                    raw_state = GestureType.DRAG
-                elif self._left_pinch_active and (not self._right_pinch_active):
-                    raw_state = GestureType.LEFT_CLICK
-                elif self._right_pinch_active and (not self._left_pinch_active):
-                    raw_state = GestureType.RIGHT_CLICK
-                elif scroll_pose and (not self._left_pinch_active) and (not self._right_pinch_active):
-                    raw_state = GestureType.SCROLL
-                elif move_pose:
-                    self._last_move_time = now
-                    raw_state = GestureType.MOVE
-                else:
-                    # Fast-motion pose dropout grace: if we were just in MOVE
-                    # within the last 80 ms, stay in MOVE to absorb blurry frames.
-                    move_grace_s = 0.08
-                    last_move = getattr(self, "_last_move_time", 0.0)
-                    if self._state == GestureType.MOVE and (now - last_move) < move_grace_s:
-                        raw_state = GestureType.MOVE
-                    else:
-                        raw_state = GestureType.PAUSE
+        fs = self._finger_states(xy)
 
         if raw_state != self._candidate:
             self._candidate = raw_state

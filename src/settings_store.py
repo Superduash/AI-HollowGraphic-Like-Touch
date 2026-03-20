@@ -22,6 +22,7 @@ class SettingsStore:
         "show_control_region": True,
         "mirror_camera": True,
         "performance_mode": False,
+        "hand_only_mode": False,
         "bilateral_gestures": True,
         "hand_model_quality": 1,
         "overlay_x": -1,
