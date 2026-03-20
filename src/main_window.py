@@ -94,6 +94,7 @@ class StatusOverlay(QWidget):
         )
         self.setFixedSize(320, 150)
         self._drag_pos = None
+        self._was_dragged = False
         self._last_badge_gesture: GestureType = GestureType.NONE
 
         root = QFrame(self)
@@ -193,10 +194,14 @@ class StatusOverlay(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         if self._drag_pos and event.buttons() == Qt.MouseButton.LeftButton:
+            self._was_dragged = True
             self.move(event.globalPosition().toPoint() - self._drag_pos)
 
     def mouseReleaseEvent(self, event) -> None:
         self._drag_pos = None
+
+    def was_dragged(self) -> bool:
+        return self._was_dragged
 
 
 class SettingsDialog(QDialog):
@@ -323,6 +328,8 @@ class SettingsDialog(QDialog):
         self.hold_slider.setRange(50, 500)
         self.hold_slider.setValue(int(_as_float(settings.get("confirm_hold_s", 0.06), self._mw.gestures._confirm_hold_s) * 1000))
         self.hold_lbl.setText(f"Hold Time: {self._mw.gestures._confirm_hold_s:.2f}s")
+        self.swap_dual_roles_chk = QCheckBox("Swap dual-hand roles (Left cursor, Right gestures)")
+        self.swap_dual_roles_chk.setChecked(not bool(settings.get("dual_right_cursor", True)))
         gesture_layout.addWidget(gesture_title)
         gesture_layout.addWidget(self.scroll_lbl)
         gesture_layout.addWidget(self.scroll_slider)
@@ -330,6 +337,7 @@ class SettingsDialog(QDialog):
         gesture_layout.addWidget(self.pinch_slider)
         gesture_layout.addWidget(self.hold_lbl)
         gesture_layout.addWidget(self.hold_slider)
+        gesture_layout.addWidget(self.swap_dual_roles_chk)
         eye_coming = QLabel("Eye Tracking: Coming Soon")
         eye_coming.setObjectName("muted")
         gesture_layout.addWidget(eye_coming)
@@ -505,6 +513,7 @@ class SettingsDialog(QDialog):
             "pinch_sensitivity": pinch_enter,
             "pinch_exit_sensitivity": pinch_enter + 0.08,
             "confirm_hold_s": self.hold_slider.value() / 1000.0,
+            "dual_right_cursor": not bool(self.swap_dual_roles_chk.isChecked()),
             "debug_overlay": bool(self.debug_chk.isChecked()),
         }
 
@@ -527,6 +536,7 @@ class SettingsDialog(QDialog):
         self.scroll_slider.setValue(int(_as_float(d.get("scroll_multiplier", 1.0), 1.0) * 10))
         self.pinch_slider.setValue(int(_as_float(d.get("pinch_sensitivity", 0.22), 0.22) * 100))
         self.hold_slider.setValue(int(_as_float(d.get("confirm_hold_s", 0.03), 0.03) * 1000))
+        self.swap_dual_roles_chk.setChecked(not bool(d.get("dual_right_cursor", True)))
         self.debug_chk.setChecked(bool(d.get("debug_overlay", True)))
 
     def _apply_changes(self) -> None:
@@ -641,12 +651,15 @@ class MainWindow(QMainWindow):
         self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.08, _as_float(settings.get("pinch_exit_sensitivity", 0.45), 0.45))
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
         self._scroll_multiplier: float = _as_float(settings.get("scroll_multiplier", 1.0), 1.0)
+        self._dual_right_cursor: bool = _as_bool(settings.get("dual_right_cursor", True), True)
         self.debug = _as_bool(settings.get("debug_overlay", False), False)
         self._mirror_camera: bool = _as_bool(settings.get("mirror_camera", True), True)
         self._show_control_region: bool = _as_bool(settings.get("show_control_region", True), True)
 
         self.fps = 0.0
         self._fps_prev = time.monotonic()
+        self._fps_ui_last_ts = 0.0
+        self._fps_ui_value = 0.0
         self.running = False
         self.proc_thread: threading.Thread | None = None
         self.mouse_enabled = False
@@ -798,7 +811,7 @@ class MainWindow(QMainWindow):
         self.mode_badge_lbl.setWordWrap(False)
 
         _mode_labels = {
-            "dual_hand": "Mode: Dual Hand (R=Cursor L=Actions)",
+            "dual_hand": f"Mode: Dual Hand ({'R=Cursor L=Actions' if self._dual_right_cursor else 'L=Cursor R=Actions'})",
             "single_hand": "Mode: Single Hand",
         }
         self.mode_lbl = QLabel(_mode_labels.get(self._cursor_mode, "Mode: Dual Hand"))
@@ -851,13 +864,15 @@ class MainWindow(QMainWindow):
         self._guide_action_col = 2
         self._guide_row_widgets: list[tuple] = []
 
+        cursor_hand = "Right" if self._dual_right_cursor else "Left"
+        action_hand = "Left" if self._dual_right_cursor else "Right"
         guide_rows_dual = [
-            ("move",        "Move cursor",   "Right hand index finger"),
-            ("left_click",  "Left click",    "Left: Thumb+Index pinch"),
-            ("double_click","Double click",  "Left: Quick double pinch"),
-            ("drag",        "Drag",          "Left: Hold pinch"),
-            ("right_click", "Right click",   "Left: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Left: Peace sign up/down"),
+            ("move",        "Move cursor",   f"{cursor_hand} hand index finger"),
+            ("left_click",  "Left click",    f"{action_hand}: Thumb+Index pinch"),
+            ("double_click","Double click",  f"{action_hand}: Quick double pinch"),
+            ("drag",        "Drag",          f"{action_hand}: Hold pinch"),
+            ("right_click", "Right click",   f"{action_hand}: Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        f"{action_hand}: Peace sign up/down"),
         ]
         guide_rows_single = [
             ("move",        "Move cursor",   "Index finger up"),
@@ -1312,6 +1327,7 @@ class MainWindow(QMainWindow):
         pinch_enter = _as_float(data.get("pinch_sensitivity", self.gestures._pinch_enter), self.gestures._pinch_enter)
         pinch_exit = _as_float(data.get("pinch_exit_sensitivity", max(pinch_enter + 0.08, self.gestures._pinch_exit)), max(pinch_enter + 0.08, self.gestures._pinch_exit))
         hold_s = _as_float(data.get("confirm_hold_s", self.gestures._confirm_hold_s), self.gestures._confirm_hold_s)
+        dual_right_cursor = _as_bool(data.get("dual_right_cursor", self._dual_right_cursor), self._dual_right_cursor)
         debug = _as_bool(data.get("debug_overlay", self.debug), self.debug)
 
         self._mirror_camera = mirror
@@ -1322,6 +1338,7 @@ class MainWindow(QMainWindow):
         self.gestures._pinch_enter = pinch_enter
         self.gestures._pinch_exit = max(pinch_enter + 0.08, pinch_exit)
         self.gestures._confirm_hold_s = hold_s
+        self._dual_right_cursor = dual_right_cursor
         self.debug = debug
 
         settings.set("auto_start_camera", auto_start)
@@ -1335,7 +1352,9 @@ class MainWindow(QMainWindow):
         settings.set("pinch_sensitivity", pinch_enter)
         settings.set("pinch_exit_sensitivity", self.gestures._pinch_exit)
         settings.set("confirm_hold_s", hold_s)
+        settings.set("dual_right_cursor", dual_right_cursor)
         settings.set("debug_overlay", debug)
+        self._update_guide_rows()
         self._sync_margin_controls()
 
         if start_maximized:
@@ -1387,13 +1406,15 @@ class MainWindow(QMainWindow):
 
     def _update_guide_rows(self) -> None:
         """Rebuild the protocol guide to reflect current mode."""
+        cursor_hand = "Right" if self._dual_right_cursor else "Left"
+        action_hand = "Left" if self._dual_right_cursor else "Right"
         guide_rows_dual = [
-            ("move",        "Move cursor",   "Right hand index finger"),
-            ("left_click",  "Left click",    "Left: Thumb+Index pinch"),
-            ("double_click","Double click",  "Left: Quick double pinch"),
-            ("drag",        "Drag",          "Left: Hold pinch"),
-            ("right_click", "Right click",   "Left: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Left: Peace sign up/down"),
+            ("move",        "Move cursor",   f"{cursor_hand} hand index finger"),
+            ("left_click",  "Left click",    f"{action_hand}: Thumb+Index pinch"),
+            ("double_click","Double click",  f"{action_hand}: Quick double pinch"),
+            ("drag",        "Drag",          f"{action_hand}: Hold pinch"),
+            ("right_click", "Right click",   f"{action_hand}: Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        f"{action_hand}: Peace sign up/down"),
         ]
         guide_rows_single = [
             ("move",        "Move cursor",   "Index finger up"),
@@ -1416,7 +1437,7 @@ class MainWindow(QMainWindow):
                 dl.setText(action_desc)
 
         _mode_labels = {
-            "dual_hand": "Mode: Dual Hand (R=Cursor L=Actions)",
+            "dual_hand": f"Mode: Dual Hand ({'R=Cursor L=Actions' if self._dual_right_cursor else 'L=Cursor R=Actions'})",
             "single_hand": "Mode: Single Hand",
         }
         if hasattr(self, "mode_lbl"):
@@ -1607,13 +1628,16 @@ class MainWindow(QMainWindow):
 
         ox = _as_int(settings.get("overlay_x", -1), -1)
         oy = _as_int(settings.get("overlay_y", -1), -1)
-        if ox >= 0 and oy >= 0:
+        use_custom_overlay_pos = _as_bool(settings.get("overlay_custom_pos", False), False)
+        if use_custom_overlay_pos and ox >= 0 and oy >= 0:
             self._overlay.move(ox, oy)  # type: ignore
 
     def _hide_overlay(self) -> None:
         if self._overlay is not None:
-            settings.set("overlay_x", self._overlay.x())  # type: ignore
-            settings.set("overlay_y", self._overlay.y())  # type: ignore
+            if self._overlay.was_dragged():
+                settings.set("overlay_x", self._overlay.x())  # type: ignore
+                settings.set("overlay_y", self._overlay.y())  # type: ignore
+                settings.set("overlay_custom_pos", True)
             self._overlay.close()  # type: ignore
             self._overlay = None
 
@@ -1731,7 +1755,8 @@ class MainWindow(QMainWindow):
 
                 # ── GESTURE DETECTION ──────────────────────────────
                 if self._cursor_mode == "dual_hand":
-                    result = self.gestures.detect_dual(hands_dict, is_grace)
+                    cursor_label = "Right" if self._dual_right_cursor else "Left"
+                    result = self.gestures.detect_dual(hands_dict, is_grace, cursor_label=cursor_label)
                 else:
                     # Single-hand mode: one hand does cursor + actions
                     action_hand = hands_dict.get("Right") or hands_dict.get("Left")
@@ -1747,11 +1772,11 @@ class MainWindow(QMainWindow):
                 _action_hand = hands_dict.get("Right") or hands_dict.get("Left")
                 if _action_hand:
                     _conf = float(_action_hand.get("confidence", 0))
-                    if _conf < 0.55 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+                    if _conf < 0.45 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
-                    elif _conf < 0.65 and gesture == GestureType.RIGHT_CLICK:
+                    elif _conf < 0.50 and gesture == GestureType.RIGHT_CLICK:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
@@ -1761,17 +1786,18 @@ class MainWindow(QMainWindow):
                 sx, sy = self._frozen_sx, self._frozen_sy
 
                 if self._cursor_mode == "dual_hand":
-                    # Dual-hand: RIGHT hand index finger = cursor
-                    right_hand = hands_dict.get("Right")
+                    # Dual-hand: cursor hand is configurable (default right).
+                    cursor_hand_label = "Right" if self._dual_right_cursor else "Left"
+                    cursor_hand = hands_dict.get(cursor_hand_label)
                     if gesture in self._freeze_on:
                         # Freeze cursor during clicks
                         _has_cursor = self._frozen_sx >= 0
-                    elif right_hand and len(right_hand.get("xy", [])) > 8:
-                        tip = right_hand["xy"][8]
+                    elif cursor_hand and len(cursor_hand.get("xy", [])) > 8:
+                        tip = cursor_hand["xy"][8]
                         sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
                         _has_cursor = True
                     else:
-                        # Do not swap cursor hand to left in dual mode; keep cursor stable.
+                        # Do not swap hands automatically in dual mode; keep cursor stable.
                         _has_cursor = self._frozen_sx >= 0
 
                 else:
@@ -1894,7 +1920,11 @@ class MainWindow(QMainWindow):
             hand_proto = self._hand_proto
             hand_data = self._hand_data
 
-        self.fps_lbl.setText(f"FPS {self.fps:.0f}")
+        now_ui = time.monotonic()
+        if now_ui - self._fps_ui_last_ts >= 1.0:
+            self._fps_ui_last_ts = now_ui
+            self._fps_ui_value = self.fps
+            self.fps_lbl.setText(f"FPS {self._fps_ui_value:.0f}")
         if self.running and self._camera_error_text:
             self.cam_status.setText(self._camera_error_text)
         # In cursor-driven modes, MOVE maps to mode-specific status labels.
@@ -1928,7 +1958,11 @@ class MainWindow(QMainWindow):
         _mode_color = "#22D3EE" if self._cursor_mode == "dual_hand" else "#A78BFA"
         _mode_icon = "⬡" if self._cursor_mode == "dual_hand" else "◈"
         _mode_text_map = {
-            "dual_hand": f"{_mode_icon} DUAL HAND  R=Cursor  L=Actions",
+            "dual_hand": (
+                f"{_mode_icon} DUAL HAND  R=Cursor  L=Actions"
+                if self._dual_right_cursor
+                else f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions"
+            ),
             "single_hand": f"{_mode_icon} SINGLE HAND  Any hand = cursor+actions",
         }
         if hasattr(self, "mode_lbl"):
@@ -1985,7 +2019,7 @@ class MainWindow(QMainWindow):
 
         if self._overlay is not None:
             try:
-                self._overlay.update_status(gesture, self.fps, hand_proto is not None)  # type: ignore
+                self._overlay.update_status(gesture, self._fps_ui_value, hand_proto is not None)  # type: ignore
             except Exception:
                 pass
 

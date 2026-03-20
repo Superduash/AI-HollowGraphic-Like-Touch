@@ -46,6 +46,7 @@ class HandTracker:
         self._draw_styles = mp.solutions.drawing_styles
 
         self._hands = self._create_hands_model()
+        self._prev_xy_by_label: dict[str, list[tuple[int, int]]] = {}
 
         self._frames_no_hand = 0
         self._grace_frames = 3
@@ -72,9 +73,9 @@ class HandTracker:
             return self._mp_hands.Hands(
                 static_image_mode=False,
                 max_num_hands=2,
-                model_complexity=0,
-                min_detection_confidence=0.50,
-                min_tracking_confidence=0.30,
+                model_complexity=1,
+                min_detection_confidence=0.55,
+                min_tracking_confidence=0.45,
             )
         finally:
             try:
@@ -138,6 +139,18 @@ class HandTracker:
                       for lm in hand.landmark]
                 z = [float(lm.z) for lm in hand.landmark]
 
+                prev_xy = self._prev_xy_by_label.get(label)
+                if prev_xy is not None and len(prev_xy) == len(xy):
+                    # Adaptive EMA: smooth enough to reduce jitter, but keep realtime hand following.
+                    blend = 0.70 if conf >= 0.75 else (0.62 if conf >= 0.55 else 0.52)
+                    smoothed_xy: list[tuple[int, int]] = []
+                    for i, (cx, cy) in enumerate(xy):
+                        px, py = prev_xy[i]
+                        sx_i = int(px + (cx - px) * blend)
+                        sy_i = int(py + (cy - py) * blend)
+                        smoothed_xy.append((sx_i, sy_i))
+                    xy = smoothed_xy
+
                 # If we already have this label, keep the higher-confidence one
                 if label in hands_dict:
                     if conf <= hands_dict[label]["confidence"]:
@@ -150,6 +163,7 @@ class HandTracker:
                     "confidence": conf,
                     "frame_size": (dw, dh),
                 }
+                self._prev_xy_by_label[label] = list(xy)
                 protos.append((hand, label))
 
                 # Track whether a hand is near camera borders where detections can flap.
@@ -177,6 +191,7 @@ class HandTracker:
                 return cached_dict, cached_protos, True
             self._last_valid_near_edge = False
             self._last_valid_result = None
+            self._prev_xy_by_label.clear()
             return {}, [], False
 
     def draw(self, frame_rgb, hand_protos, label: str = "Right") -> None:

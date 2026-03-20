@@ -127,8 +127,8 @@ class CursorMapper:
             t = (v - 1.0) / 9.0
             self._alpha_min_face = 0.18 + t * 0.07
             self._alpha_max_face = 0.60 + t * 0.10
-            self._alpha_min_hand = 0.12 + t * 0.07
-            self._alpha_max_hand = 0.45 + t * 0.10
+            self._alpha_min_hand = 0.20 + t * 0.10
+            self._alpha_max_hand = 0.68 + t * 0.18
             self._alpha_min = self._alpha_min_face
             self._alpha_max = self._alpha_max_face
 
@@ -233,10 +233,10 @@ class CursorMapper:
         margin_px = 15
         if (raw_x <= self._screen_x + margin_px) or (raw_x >= self._screen_x + self.scr_w - margin_px) or \
            (raw_y <= self._screen_y + margin_px) or (raw_y >= self._screen_y + self.scr_h - margin_px):
-            alpha *= 0.25
+            alpha *= 0.55
 
         scr_diag = math.sqrt(float(self.scr_w ** 2 + self.scr_h ** 2))
-        max_jump = scr_diag * 0.08
+        max_jump = scr_diag * 0.14
         jump_dx = raw_x - self._flt_x
         jump_dy = raw_y - self._flt_y
         jump_dist = math.sqrt(jump_dx * jump_dx + jump_dy * jump_dy)

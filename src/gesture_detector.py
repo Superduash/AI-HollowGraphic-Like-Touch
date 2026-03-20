@@ -60,6 +60,12 @@ class GestureDetector:
         self._scroll_step_limit = 8
         self._scroll_gain = 1.0
         self._right_click_hold_s = max(0.25, float(GESTURE_RIGHT_CLICK_HOLD_S))
+        self._right_click_hold_s = min(self._right_click_hold_s, 0.22)
+
+        # EMA-smoothed pinch ratios reduce false click flicker while keeping response quick.
+        self._li_ema: float | None = None
+        self._ri_ema: float | None = None
+        self._pm_ema: float | None = None
 
         self._per_action_cooldown = {
             GestureType.LEFT_CLICK: 0.25,
@@ -157,19 +163,27 @@ class GestureDetector:
     # =====================================================================
     # DUAL-HAND MODE (default) — right hand = cursor, left hand = actions
     # =====================================================================
-    def detect_dual(self, hands_dict: dict, is_grace: bool = False) -> GestureResult:
+    def detect_dual(
+        self,
+        hands_dict: dict,
+        is_grace: bool = False,
+        cursor_label: str = "Right",
+    ) -> GestureResult:
         """Process gestures from dual-hand input.
 
-        RIGHT hand: cursor tracking (handled in main_window, not here)
-        LEFT hand: click/scroll/drag gestures
+        By default RIGHT hand: cursor tracking, LEFT hand: click/scroll/drag.
+        When cursor_label="Left", roles are swapped.
 
-        If only RIGHT hand visible: return MOVE (cursor follows right index)
-        If only LEFT hand visible: no cursor hand, keep MOVE (no action gestures)
+        If only cursor hand visible: return MOVE (cursor follows cursor hand)
+        If only action hand visible: no cursor hand, keep MOVE (no action gestures)
         If neither: PAUSE
         """
         now = time.monotonic()
-        cursor_hand = hands_dict.get("Right")
-        action_hand = hands_dict.get("Left")
+        cursor_label_norm = "Left" if str(cursor_label) == "Left" else "Right"
+        action_label = "Right" if cursor_label_norm == "Left" else "Left"
+
+        cursor_hand = hands_dict.get(cursor_label_norm)
+        action_hand = hands_dict.get(action_label)
 
         # No hands at all
         if not cursor_hand and not action_hand:
@@ -225,7 +239,20 @@ class GestureDetector:
         except (IndexError, TypeError):
             return self._make_result(GestureType.PAUSE, 0)
 
-        li, ri, pm = self._pinch_ratios(xy, self._hand_scale)
+        li_raw, ri_raw, pm_raw = self._pinch_ratios(xy, self._hand_scale)
+        pinch_alpha = 0.42 if confidence < 0.6 else 0.55
+        if self._li_ema is None:
+            self._li_ema = li_raw
+            self._ri_ema = ri_raw
+            self._pm_ema = pm_raw
+        else:
+            self._li_ema = ema_step(self._li_ema, li_raw, pinch_alpha)
+            self._ri_ema = ema_step(self._ri_ema, ri_raw, pinch_alpha)
+            self._pm_ema = ema_step(self._pm_ema, pm_raw, pinch_alpha)
+
+        li = float(self._li_ema)
+        ri = float(self._ri_ema)
+        pm = float(self._pm_ema)
         enter = float(self._pinch_enter)
         exit_ = float(self._pinch_exit)
 
@@ -235,18 +262,18 @@ class GestureDetector:
             if li > exit_:
                 self._left_pinch_active = False
                 self._left_click_release_time = now
-        elif li <= enter:
+        elif li <= (enter * 0.94):
             self._left_pinch_active = True
 
         # --- Right pinch (thumb+middle) = right-click ---
         # Requires: index finger clearly open (li > exit_),
         # middle+thumb close, held for _right_click_hold_s
-        right_enter = enter * 0.50
+        right_enter = enter * 0.68
         if self._right_pinch_active:
             if ri > exit_:
                 self._right_pinch_active = False
                 self._right_pinch_start_t = None
-        elif ri <= right_enter and li > exit_ and pm > 0.20:
+        elif ri <= right_enter and li > (enter * 1.08) and pm > 0.18:
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
             elif now - self._right_pinch_start_t >= self._right_click_hold_s:
@@ -255,7 +282,7 @@ class GestureDetector:
             self._right_pinch_start_t = None
 
         # --- Peace sign (index+middle spread) = scroll ---
-        peace_pose = (pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_)
+        peace_pose = (pm >= 0.08 and pm <= 0.72 and li > exit_ and ri > exit_)
 
         # --- Track pinch duration for drag ---
         if self._left_pinch_active:
@@ -350,5 +377,8 @@ class GestureDetector:
         self._left_pinch_active = False
         self._right_pinch_active = False
         self._left_pinch_since = None
+        self._li_ema = None
+        self._ri_ema = None
+        self._pm_ema = None
         self._right_pinch_start_t = None
         self._clear_scroll()
