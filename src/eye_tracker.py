@@ -31,7 +31,7 @@ class EyeTracker:
         if not _OK or mp is None:
             return
         try:
-            self._mesh = mp.solutions.face_mesh.FaceMesh(
+            self._mesh = mp.solutions.face_mesh.FaceMesh( # type: ignore
                 max_num_faces=1,
                 refine_landmarks=True,
                 min_detection_confidence=0.5,

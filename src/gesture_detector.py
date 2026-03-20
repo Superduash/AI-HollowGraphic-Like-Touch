@@ -53,13 +53,13 @@ class GestureDetector:
         self._last_right_click_time = 0.0
         self._left_click_release_time = -float('inf')
 
-        self._scroll_step_factor = 0.08
-        self._scroll_deadband_factor = 0.06
+        self._scroll_step_factor = 0.06
+        self._scroll_deadband_factor = 0.04
         self._double_click_window_s = float(GESTURE_DOUBLE_CLICK_WINDOW_S)
         self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
         self._scroll_step_limit = 8
         self._scroll_gain = 1.0
-        self._right_click_hold_s = max(0.15, float(GESTURE_RIGHT_CLICK_HOLD_S))
+        self._right_click_hold_s = max(0.25, float(GESTURE_RIGHT_CLICK_HOLD_S))
 
         self._per_action_cooldown = {
             GestureType.LEFT_CLICK: 0.25,
@@ -111,7 +111,7 @@ class GestureDetector:
         dy = float(self._scroll_prev_y) - current_y
         self._scroll_prev_y = current_y
 
-        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.25)
+        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.35)
         v = self._scroll_velocity_ema
 
         deadband = max(1.0, hand_scale * self._scroll_deadband_factor)
@@ -236,7 +236,7 @@ class GestureDetector:
             if ri > exit_:
                 self._right_pinch_active = False
                 self._right_pinch_start_t = None
-        elif ri <= right_enter and li > exit_ and pm > 0.15:
+        elif ri <= right_enter and li > exit_ and pm > 0.20:
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
             elif now - self._right_pinch_start_t >= self._right_click_hold_s:
@@ -245,7 +245,7 @@ class GestureDetector:
             self._right_pinch_start_t = None
 
         # --- Peace sign (index+middle spread) = scroll ---
-        peace_pose = (pm >= 0.06 and pm <= 0.65 and li > exit_ and ri > exit_)
+        peace_pose = (pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_)
 
         # --- Track pinch duration for drag ---
         if self._left_pinch_active:
@@ -322,7 +322,8 @@ class GestureDetector:
             return self._make_result(GestureType.DRAG, 0)
 
         if stable_state == GestureType.SCROLL:
-            delta = self._resolve_scroll(float(xy[8][1]), self._hand_scale)
+            scroll_y = (float(xy[8][1]) + float(xy[12][1])) * 0.5
+            delta = self._resolve_scroll(scroll_y, self._hand_scale)
             self._state = GestureType.SCROLL
             self._dragging = False
             return self._make_result(GestureType.SCROLL, delta)

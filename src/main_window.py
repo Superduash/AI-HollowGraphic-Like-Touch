@@ -317,6 +317,10 @@ class SettingsDialog(QDialog):
             self.cursor_mode_combo.setCurrentIndex(idx)
         gesture_layout.addWidget(cursor_mode_label)
         gesture_layout.addWidget(self.cursor_mode_combo)
+        self.mode_lock_lbl = QLabel("")
+        self.mode_lock_lbl.setObjectName("muted")
+        self.mode_lock_lbl.setWordWrap(True)
+        gesture_layout.addWidget(self.mode_lock_lbl)
         gesture_layout.addStretch(1)
 
         perf_tab = QWidget()
@@ -368,6 +372,10 @@ class SettingsDialog(QDialog):
         about_btn.clicked.connect(self._show_about)
         apply_btn.clicked.connect(self._apply_performance)
         close_btn.clicked.connect(self.accept)
+
+        self._mode_lock_timer = QTimer(self)
+        self._mode_lock_timer.timeout.connect(self._tick_mode_lock)
+        self._tick_mode_lock()
 
         self.setStyleSheet(
             """
@@ -488,9 +496,30 @@ class SettingsDialog(QDialog):
     def _on_cursor_mode_changed(self, idx: int) -> None:
         mode = self.cursor_mode_combo.itemData(idx)
         if mode:
+            self._mw._mode_lock_until = time.monotonic() + 300.0
             settings.set("cursor_mode", str(mode))
+            self._tick_mode_lock()
+            if not self._mode_lock_timer.isActive():
+                self._mode_lock_timer.start(1000)
             QMessageBox.information(self, "Restart Required",
                 "Cursor mode change requires restarting the camera.")
+
+    def _tick_mode_lock(self) -> None:
+        rem = int(max(0.0, self._mw._mode_lock_until - time.monotonic()))
+        if rem <= 0:
+            self.cursor_mode_combo.setEnabled(True)
+            self.mode_lock_lbl.setText("")
+            if self._mode_lock_timer.isActive():
+                self._mode_lock_timer.stop()
+            return
+
+        if rem > 270:
+            self.cursor_mode_combo.setEnabled(False)
+            self.mode_lock_lbl.setText(
+                f"Mode locked for {rem}s. Override available in {rem - 270}s")
+        else:
+            self.cursor_mode_combo.setEnabled(True)
+            self.mode_lock_lbl.setText(f"Mode lock active: {rem}s remaining (override enabled)")
 
     def _on_performance_toggled(self, state: int) -> None:
         value = bool(state)
@@ -652,6 +681,9 @@ class MainWindow(QMainWindow):
             GestureType.RIGHT_CLICK,
             GestureType.DOUBLE_CLICK,
         }
+        self._mode_lock_until: float = 0.0
+        self._sh_cursor_history: list = []
+        self._drag_progress: float = 0.0
         self._start_worker: threading.Thread | None = None
 
         self._build_ui()
@@ -752,6 +784,9 @@ class MainWindow(QMainWindow):
         self.gesture_lbl.setObjectName("badge")
         self.gesture_lbl.setWordWrap(False)
         self.gesture_lbl.setMinimumWidth(140)
+        self.mode_badge_lbl = QLabel("MODE")
+        self.mode_badge_lbl.setObjectName("modeBadge")
+        self.mode_badge_lbl.setWordWrap(False)
 
         _mode_labels = {
             "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
@@ -775,7 +810,12 @@ class MainWindow(QMainWindow):
         self.confidence_lbl.setWordWrap(True)
         
         sl.addWidget(status_title)
-        sl.addWidget(self.gesture_lbl)
+        badge_row = QHBoxLayout()
+        badge_row.setSpacing(8)
+        badge_row.addWidget(self.gesture_lbl)
+        badge_row.addWidget(self.mode_badge_lbl)
+        badge_row.addStretch(1)
+        sl.addLayout(badge_row)
         sl.addSpacing(8)
         sl.addWidget(self.mode_lbl)
         sl.addWidget(self.hand_lbl)
@@ -1064,6 +1104,13 @@ class MainWindow(QMainWindow):
                 font-size: 13px; letter-spacing: 1.5px;
                 border: 1px solid rgba(39, 39, 42, 0.4);
                 text-align: center;
+            }
+            #modeBadge {
+                border-radius: 10px; padding: 5px 10px; font-weight: 700;
+                min-width: 90px; font-size: 11px; letter-spacing: 1px;
+                text-align: center; color: #E2E8F0;
+                background: rgba(39, 39, 42, 0.45);
+                border: 1px solid rgba(39, 39, 42, 0.4);
             }
             #historyItem { 
                 font-weight: 500; 
@@ -1632,9 +1679,13 @@ class MainWindow(QMainWindow):
 
                 # Confidence gate
                 _action_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                if _action_hand and float(_action_hand.get("confidence", 0)) < 0.55:
-                    if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
-                                   GestureType.DOUBLE_CLICK}:
+                if _action_hand:
+                    _conf = float(_action_hand.get("confidence", 0))
+                    if _conf < 0.55 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+                        gesture = GestureType.MOVE
+                        result = GestureResult(GestureType.MOVE, 0)
+                        gesture_changed = gesture != last_action
+                    elif _conf < 0.65 and gesture == GestureType.RIGHT_CLICK:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
@@ -1679,9 +1730,15 @@ class MainWindow(QMainWindow):
                         _has_cursor = self._frozen_sx >= 0
                     elif _any_hand and len(_any_hand.get("xy", [])) > 8:
                         tip = _any_hand["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
+                        self._sh_cursor_history.append((int(tip[0]), int(tip[1])))
+                        if len(self._sh_cursor_history) > 3:
+                            self._sh_cursor_history.pop(0)
+                        avg_x = int(sum(p[0] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
+                        avg_y = int(sum(p[1] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
+                        sx, sy = self.mapper.map_point(avg_x, avg_y)
                         _has_cursor = True
                     else:
+                        self._sh_cursor_history.clear()
                         _has_cursor = self._frozen_sx >= 0
 
                 if _has_cursor:
@@ -1766,6 +1823,12 @@ class MainWindow(QMainWindow):
                     self._hand_data = _count_hand
                     self._fingers = _finger_count
                     self._face_tracked = _face_tracked
+                    # Update drag progress for UI arc
+                    if self.gestures._left_pinch_since is not None:
+                        _dp = (time.monotonic() - self.gestures._left_pinch_since) / max(0.01, self.gestures._drag_activate_s)
+                        self._drag_progress = min(1.0, _dp)
+                    else:
+                        self._drag_progress = 0.0
 
             except Exception:
                 continue
@@ -1812,6 +1875,32 @@ class MainWindow(QMainWindow):
         self.fingers_lbl.setText(f"Fingers: {fingers}")
         with self._lock:
             _face_on = self._face_tracked
+
+        _mode_color = "#22D3EE" if self._cursor_mode == "dual_hand" else "#A78BFA"
+        _mode_icon = "⬡" if self._cursor_mode == "dual_hand" else "◈"
+        _mode_text_map = {
+            "dual_hand": f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions",
+            "single_hand": f"{_mode_icon} SINGLE HAND  Any hand = cursor+actions",
+            "eye_tracking": "◉ EYE TRACKING  experimental",
+        }
+        if hasattr(self, "mode_lbl"):
+            self.mode_lbl.setText(_mode_text_map.get(self._cursor_mode, ""))
+            self.mode_lbl.setStyleSheet(f"color: {_mode_color}; font-weight: 700; font-size: 12px;")
+
+        if hasattr(self, "mode_badge_lbl"):
+            _pill = {
+                "dual_hand": ("DUAL", "#22D3EE"),
+                "single_hand": ("SINGLE", "#A78BFA"),
+                "eye_tracking": ("EYE", "#FBBF24"),
+            }
+            _txt, _col = _pill.get(self._cursor_mode, ("MODE", "#64748B"))
+            self.mode_badge_lbl.setText(_txt)
+            self.mode_badge_lbl.setStyleSheet(
+                f"border-radius: 10px; padding: 5px 10px; font-weight: 700;"
+                f"min-width: 90px; font-size: 11px; letter-spacing: 1px;"
+                f"text-align: center; color: {_col}; background: {_col}33; border: 1px solid {_col}66;"
+            )
+
         if self._cursor_mode == "eye_tracking":
             self.hand_lbl.setText(
                 f"Eyes: {'Tracking' if _face_on else 'Lost'}  |  "
@@ -1873,6 +1962,26 @@ class MainWindow(QMainWindow):
         if self._show_control_region:
             left, top, right, bottom = self.mapper.control_region()
             cv2.rectangle(rgb, (left, top), (right, bottom), (34, 211, 238), 2, cv2.LINE_AA)
+
+        # Drag progress arc
+        with self._lock:
+            _dp = self._drag_progress
+            _drag_on = self._drag_active
+        if _dp > 0.05 or _drag_on:
+            try:
+                h_rgb, w_rgb = rgb.shape[:2]
+                cx_arc = w_rgb // 2
+                cy_arc = h_rgb - 30
+                if _drag_on:
+                    cv2.circle(rgb, (cx_arc, cy_arc), 12, (0, 200, 255), -1, cv2.LINE_AA)
+                    cv2.putText(rgb, "DRAG", (cx_arc - 18, cy_arc + 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
+                else:
+                    angle = int(360 * _dp)
+                    cv2.ellipse(rgb, (cx_arc, cy_arc), (14, 14), -90, 0, angle,
+                                (0, 200, 255), 3, cv2.LINE_AA)
+            except Exception:
+                pass
 
         # FIX: Draw face skeleton + nose cursor dot so it's visible on screen
         if not self._hand_only_mode and self.face_tracker is not None:

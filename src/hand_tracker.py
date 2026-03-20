@@ -39,13 +39,13 @@ class HandTracker:
             static_image_mode=False,
             max_num_hands=2,
             model_complexity=0,
-            min_detection_confidence=0.55,
-            min_tracking_confidence=0.35,
+            min_detection_confidence=0.50,
+            min_tracking_confidence=0.30,
         )
 
         self._frames_no_hand = 0
         self._grace_frames = 3
-        self._last_valid_result: tuple[dict, list, bool] | None = None
+        self._last_valid_result: tuple[dict, list] | None = None
 
     def set_processing_size(self, size: tuple[int, int] | None) -> None:
         if size is None:
@@ -82,7 +82,7 @@ class HandTracker:
                 label = self._map_label(raw_label, is_mirrored)
                 conf = float(result.multi_handedness[idx].classification[0].score)
 
-                if conf < 0.40:
+                if conf < 0.30:
                     continue
 
                 xy = [(int(lm.x * dw * sx), int(lm.y * dh * sy))
@@ -105,13 +105,13 @@ class HandTracker:
 
         if hands_dict:
             self._frames_no_hand = 0
-            self._last_valid_result = (hands_dict, protos, False)
+            self._last_valid_result = (hands_dict, protos)
             return hands_dict, protos, False
         else:
             self._frames_no_hand += 1
             if (self._frames_no_hand < self._grace_frames
                     and self._last_valid_result is not None):
-                cached_dict, cached_protos, _ = self._last_valid_result
+                cached_dict, cached_protos = self._last_valid_result
                 return cached_dict, cached_protos, True
             self._last_valid_result = None
             return {}, [], False

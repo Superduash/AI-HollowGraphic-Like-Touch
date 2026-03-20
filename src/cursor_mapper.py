@@ -139,7 +139,7 @@ class CursorMapper:
 
     def set_frame_margin(self, margin_px: int) -> None:
         with self._mapper_lock:
-            self.frame_r = max(0, min(int(margin_px), self.max_effective_margin_px()))
+            self.frame_r = max(10, min(int(margin_px), self.max_effective_margin_px()))
             if self.cam_w <= 1 or self.cam_h <= 1:
                 return
             self._margin_x_ratio = max(0.0, min(self._max_inner_margin_ratio,

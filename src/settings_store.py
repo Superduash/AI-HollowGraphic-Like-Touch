@@ -7,7 +7,7 @@ from pathlib import Path
 class SettingsStore:
     DEFAULTS = {
         "camera_index": 0,
-        "frame_r": 90,
+        "frame_r": 40,
         "smoothening": 4.8,
         "debug_overlay": False,
         "scroll_multiplier": 1.0,
