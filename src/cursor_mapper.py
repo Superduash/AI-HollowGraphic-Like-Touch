@@ -53,6 +53,7 @@ class CursorMapper:
         self._alpha_max = 0.72
         self._inner_ratio = CURSOR_INNER_RATIO
         self._max_inner_margin_ratio = 0.35
+        self._outer_slack_ratio = 0.04
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
         self._margin_x_ratio = self._inner_margin_ratio
         self._margin_y_ratio = self._inner_margin_ratio
@@ -180,10 +181,22 @@ class CursorMapper:
         raw_nx = clamp(float(cam_x) / float(max(1, self.cam_w - 1)), 0.0, 1.0)
         raw_ny = clamp(float(cam_y) / float(max(1, self.cam_h - 1)), 0.0, 1.0)
 
-        nx = map_range(raw_nx, self._margin_x_ratio,
-                       self._margin_x_ratio + self._inner_x_ratio, 0.0, 1.0)
-        ny = map_range(raw_ny, self._margin_y_ratio,
-                       self._margin_y_ratio + self._inner_y_ratio, 0.0, 1.0)
+        # Keep control box visible as the primary guide, but allow a small
+        # outside spill zone so corners/sides are reachable without strain.
+        nx = map_range(
+            raw_nx,
+            self._margin_x_ratio - self._outer_slack_ratio,
+            self._margin_x_ratio + self._inner_x_ratio + self._outer_slack_ratio,
+            0.0,
+            1.0,
+        )
+        ny = map_range(
+            raw_ny,
+            self._margin_y_ratio - self._outer_slack_ratio,
+            self._margin_y_ratio + self._inner_y_ratio + self._outer_slack_ratio,
+            0.0,
+            1.0,
+        )
         nx = clamp(nx, 0.0, 1.0)
         ny = clamp(ny, 0.0, 1.0)
 
@@ -233,7 +246,7 @@ class CursorMapper:
         margin_px = 15
         if (raw_x <= self._screen_x + margin_px) or (raw_x >= self._screen_x + self.scr_w - margin_px) or \
            (raw_y <= self._screen_y + margin_px) or (raw_y >= self._screen_y + self.scr_h - margin_px):
-            alpha *= 0.55
+            alpha *= 0.75
 
         scr_diag = math.sqrt(float(self.scr_w ** 2 + self.scr_h ** 2))
         max_jump = scr_diag * 0.14
