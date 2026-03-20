@@ -9,14 +9,6 @@ from typing import Any, cast
 
 import cv2  # type: ignore
 
-# ── BUG C FIX: pyautogui configuration for Windows ──
-try:
-    import pyautogui  # type: ignore
-    pyautogui.FAILSAFE = False
-    pyautogui.PAUSE = 0
-except ImportError:
-    pyautogui = None  # type: ignore
-
 import qtawesome as qta  # type: ignore
 from PySide6.QtCore import QMetaObject, QSize, Signal, Slot, Qt, QTimer  # type: ignore
 from PySide6.QtGui import QAction, QImage, QPixmap  # type: ignore
@@ -242,6 +234,8 @@ class SettingsDialog(QDialog):
             self.camera_combo.setCurrentIndex(max(0, match))
         self.auto_start_chk = QCheckBox("Auto-start camera on launch")
         self.auto_start_chk.setChecked(bool(settings.get("auto_start_camera", False)))
+        self.minimize_to_tray_chk = QCheckBox("Minimize to tray on close")
+        self.minimize_to_tray_chk.setChecked(bool(settings.get("minimize_to_tray", False)))
         self.mirror_chk = QCheckBox("Mirror camera feed")
         self.mirror_chk.setChecked(bool(settings.get("mirror_camera", True)))
         self.region_chk = QCheckBox("Show control region box")
@@ -250,6 +244,7 @@ class SettingsDialog(QDialog):
         camera_layout.addWidget(cam_label)
         camera_layout.addWidget(self.camera_combo)
         camera_layout.addWidget(self.auto_start_chk)
+        camera_layout.addWidget(self.minimize_to_tray_chk)
         camera_layout.addWidget(self.mirror_chk)
         camera_layout.addWidget(self.region_chk)
         camera_layout.addStretch(1)
@@ -349,6 +344,7 @@ class SettingsDialog(QDialog):
 
         self.camera_combo.activated.connect(self._on_camera_changed)
         self.auto_start_chk.stateChanged.connect(self._on_auto_start_changed)
+        self.minimize_to_tray_chk.stateChanged.connect(self._on_minimize_to_tray_changed)
         self.mirror_chk.stateChanged.connect(self._on_mirror_changed)
         self.region_chk.stateChanged.connect(self._on_region_changed)
         self.smooth_slider.valueChanged.connect(self._on_smooth_changed)
@@ -434,6 +430,9 @@ class SettingsDialog(QDialog):
 
     def _on_auto_start_changed(self, state: int) -> None:
         settings.set("auto_start_camera", bool(state))
+
+    def _on_minimize_to_tray_changed(self, state: int) -> None:
+        settings.set("minimize_to_tray", bool(state))
 
     def _on_mirror_changed(self, state: int) -> None:
         value = bool(state)
@@ -577,6 +576,9 @@ class MainWindow(QMainWindow):
         self.mapper.set_camera_size(640, 480)
         self.mapper.set_frame_margin(_as_int(settings.get("frame_r", 90), 90))
         self.mapper.set_smoothening(_as_float(settings.get("smoothening", 4.8), 4.8))
+        self.mapper.set_prediction_strength(
+            float(settings.get("cursor_prediction", 0.45))
+        )
         self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.06), 0.06)
         self.gestures._pinch_enter = _as_float(settings.get("pinch_sensitivity", 0.30), 0.30)
         self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.08, _as_float(settings.get("pinch_exit_sensitivity", 0.45), 0.45))
@@ -599,6 +601,7 @@ class MainWindow(QMainWindow):
 
         self._lock = threading.Lock()
         self._frame = None
+        self._rgb_frame: "np.ndarray | None" = None
         self._hand_proto = None
         self._hand_data = None
         self._gesture = GestureType.PAUSE
@@ -614,6 +617,16 @@ class MainWindow(QMainWindow):
         self._last_debug_label: str = ""
         self._drag_active = False
         self._start_worker: threading.Thread | None = None
+        
+        # FIX 2: Cursor freeze on gesture entry to prevent index finger motion during click
+        self._frozen_sx: int = -1
+        self._frozen_sy: int = -1
+        self._cursor_frozen: bool = False
+        self._freeze_gestures = {
+            GestureType.LEFT_CLICK,
+            GestureType.RIGHT_CLICK,
+            GestureType.DOUBLE_CLICK,
+        }
 
         self._build_ui()
         self._camera_start_result.connect(self._on_camera_start_done)
@@ -1441,7 +1454,6 @@ class MainWindow(QMainWindow):
             try:
                 frame = self.camera.latest()  # type: ignore
                 if frame is None:
-                    time.sleep(0.001)
                     continue
 
                 if self._mirror_camera:  # type: ignore
@@ -1452,10 +1464,15 @@ class MainWindow(QMainWindow):
 
                 tracker = self.tracker  # type: ignore
                 if tracker is None:
-                    time.sleep(0.01)
                     continue
 
                 hand_data, hand_proto, is_grace = tracker.detect(frame, is_mirrored=self._mirror_camera)  # type: ignore
+                # Cache the RGB-converted frame that hand_tracker already produced internally,
+                # so _render() doesn't need to reconvert.
+                if hasattr(tracker, '_last_rgb_frame'):
+                    rgb_cached = tracker._last_rgb_frame
+                else:
+                    rgb_cached = None
 
                 if hand_proto is not None:
                     last_hand_time = time.monotonic()
@@ -1485,7 +1502,6 @@ class MainWindow(QMainWindow):
                     and gesture == GestureType.KEYBOARD
                     and gesture_changed
                     and hand_data
-                    and hand_data.get("label") == "Right"
                     and (not is_grace)
                 ):
                     self._launch_keyboard()
@@ -1499,7 +1515,6 @@ class MainWindow(QMainWindow):
                 if (
                     self.mouse_enabled
                     and hand_data
-                    and hand_data.get("label") == "Left"
                     and (not is_grace)
                     and gesture in {
                         GestureType.MEDIA_VOL_UP,
@@ -1514,7 +1529,7 @@ class MainWindow(QMainWindow):
                         else:
                             self._execute_media(gesture, result.scroll_delta)
 
-                if self.mouse_enabled and (not is_grace) and hand_data and hand_data.get("label") == "Right" and gesture not in {
+                if self.mouse_enabled and (not is_grace) and hand_data and gesture not in {
                     GestureType.NONE,
                     GestureType.PAUSE,
                     GestureType.TASK_VIEW,
@@ -1524,11 +1539,28 @@ class MainWindow(QMainWindow):
                     GestureType.MEDIA_NEXT,
                     GestureType.MEDIA_PREV,
                 }:
-                    tip = hand_data["xy"][8]
+                    # FIX 1: Use middle MCP (LM9) as cursor anchor instead of index tip (LM8)
+                    # LM9 is stable during pinch; LM8 moves toward thumb, causing cursor jump
+                    tip = hand_data["xy"][9]
                     cam_x = int(tip[0])
                     cam_y = int(tip[1])
                     sx, sy = self.mapper.map_point(cam_x, cam_y)
 
+                    # FIX 2: Freeze cursor position on click gesture entry
+                    # Prevents index finger motion from moving cursor during click hold
+                    if gesture in self._freeze_gestures:
+                        if not self._cursor_frozen:
+                            # First frame of click — lock current position
+                            self._frozen_sx = sx
+                            self._frozen_sy = sy
+                            self._cursor_frozen = True
+                        # Use frozen position for entire duration of click gesture
+                        sx = self._frozen_sx
+                        sy = self._frozen_sy
+                    else:
+                        self._cursor_frozen = False
+
+                    # Dispatch movement and gesture actions using (sx, sy)
                     if gesture == GestureType.MOVE:
                         self.mouse.move(sx, sy)
                     elif gesture == GestureType.LEFT_CLICK and gesture_changed:
@@ -1538,6 +1570,7 @@ class MainWindow(QMainWindow):
                         self.mouse.move(sx, sy)
                         self.mouse.double_click()
                     elif gesture == GestureType.RIGHT_CLICK and gesture_changed:
+                        self.mouse.move(sx, sy)
                         self.mouse.right_click()
                     elif gesture == GestureType.SCROLL:
                         self.mouse.scroll(int(result.scroll_delta * self._scroll_multiplier))
@@ -1581,6 +1614,7 @@ class MainWindow(QMainWindow):
 
                 with self._lock:
                     self._frame = frame
+                    self._rgb_frame = rgb_cached
                     self._gesture = gesture
                     self._overlay_text = overlay
                     self._hand_proto = hand_proto
@@ -1588,12 +1622,12 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 import logging
                 logging.exception(f"Process loop error: {exc}")
-                time.sleep(0.005)
                 continue
 
     def _render(self) -> None:
         with self._lock:
             frame = self._frame
+            rgb_cached = self._rgb_frame
             gesture = self._gesture
             overlay = self._overlay_text
             fingers = self._fingers
@@ -1646,13 +1680,18 @@ class MainWindow(QMainWindow):
 
         self._sync_margin_controls()
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        tracker = self.tracker
+        if rgb_cached is not None:
+            rgb = rgb_cached
+        elif tracker is not None and hasattr(tracker, '_last_rgb_frame') and tracker._last_rgb_frame is not None:
+            rgb = tracker._last_rgb_frame
+        else:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         if self._show_control_region:
             left, top, right, bottom = self.mapper.control_region()
             cv2.rectangle(rgb, (left, top), (right, bottom), (34, 211, 238), 2, cv2.LINE_AA)
 
-        tracker = self.tracker
         if hand_proto is not None and tracker is not None:
             label = hand_data["label"] if hand_data else "Right"
             tracker.draw(rgb, hand_proto, label)
@@ -1706,7 +1745,12 @@ class MainWindow(QMainWindow):
         QApplication.instance().quit()  # type: ignore
 
     def closeEvent(self, event) -> None:
-        if self._tray is not None and self._tray.isVisible() and not self._quitting:  # type: ignore
+        if (
+            bool(settings.get("minimize_to_tray", False))
+            and self._tray is not None
+            and self._tray.isVisible()
+            and not self._quitting
+        ):  # type: ignore
             self.hide()
             event.ignore()
             return

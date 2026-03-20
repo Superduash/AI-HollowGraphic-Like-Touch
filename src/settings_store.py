@@ -9,16 +9,21 @@ class SettingsStore:
         "camera_index": 0,
         "frame_r": 90,
         "smoothening": 4.8,
+        "cursor_prediction": 0.45,
         "debug_overlay": False,
         "scroll_multiplier": 1.0,
-        "pinch_sensitivity": 0.30,
-        "pinch_exit_sensitivity": 0.45,
-        "confirm_hold_s": 0.06,
+        # FIX 4: Tighten pinch thresholds — was 0.30/0.45, requires deliberate pinch
+        "pinch_sensitivity": 0.22,  # was 0.30 — avoid accidental proximity triggers
+        "pinch_exit_sensitivity": 0.38,  # was 0.45 — cleaner release hysteresis
+        "confirm_hold_s": 0.05,  # was 0.06 — slightly faster gesture confirmation
         "z_tap_enabled": False,
         "auto_start_camera": False,
+        "minimize_to_tray": False,
         "show_control_region": True,
         "mirror_camera": True,
         "performance_mode": False,
+        "bilateral_gestures": True,
+        "hand_model_quality": 1,
         "overlay_x": -1,
         "overlay_y": -1,
         "window_x": -1,
@@ -59,11 +64,11 @@ class SettingsStore:
                         merged.get("pinch_sensitivity") == 0.20
                         and merged.get("pinch_exit_sensitivity") == 0.30
                     ):
-                        merged["pinch_sensitivity"] = 0.30
-                        merged["pinch_exit_sensitivity"] = 0.45
+                        merged["pinch_sensitivity"] = 0.22
+                        merged["pinch_exit_sensitivity"] = 0.38
 
                     if merged.get("confirm_hold_s") == 0.22:
-                        merged["confirm_hold_s"] = 0.06
+                        merged["confirm_hold_s"] = 0.05
         except Exception:
             pass
         self._data = merged

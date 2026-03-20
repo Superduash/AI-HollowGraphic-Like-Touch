@@ -3,6 +3,24 @@ from __future__ import annotations
 import math
 import platform
 
+try:
+    from .fast_math import ema_step, clamp, map_range
+except Exception:
+    def ema_step(prev: float, target: float, alpha: float) -> float:
+        return prev + alpha * (target - prev)
+
+    def clamp(value: float, lo: float, hi: float) -> float:
+        if value < lo:
+            return lo
+        if value > hi:
+            return hi
+        return value
+
+    def map_range(value: float, in_lo: float, in_hi: float, out_lo: float, out_hi: float) -> float:
+        if in_hi == in_lo:
+            return out_lo
+        t = (value - in_lo) / (in_hi - in_lo)
+        return out_lo + t * (out_hi - out_lo)
 from .tuning import (
     CURSOR_INNER_RATIO,
     CURSOR_SOFT_DEADZONE_PX,
@@ -26,6 +44,9 @@ class CursorMapper:
         self._flt_x = -1.0
         self._flt_y = -1.0
         self._initialized = False
+        self._prev_flt_x: float = -1.0
+        self._prev_flt_y: float = -1.0
+        self._pred_strength: float = 0.45   # 0=no prediction, 1=full 1-frame lookahead
 
         self._deadzone_px = float(CURSOR_SOFT_DEADZONE_PX)
         self._alpha_min = 0.18
@@ -93,6 +114,10 @@ class CursorMapper:
         self._alpha_min = 0.18 + t * 0.12
         self._alpha_max = 0.55 + t * 0.20
 
+    def set_prediction_strength(self, v: float) -> None:
+        """0.0 = no prediction (pure follow), 1.0 = full velocity lookahead."""
+        self._pred_strength = max(0.0, min(1.0, float(v)))
+
     def set_frame_margin(self, margin_px: int) -> None:
         self.frame_r = max(0, min(int(margin_px), self.max_effective_margin_px()))
         px = float(min(self.cam_w, self.cam_h))
@@ -123,16 +148,18 @@ class CursorMapper:
         self._raw_y = -1.0
         self._flt_x = -1.0
         self._flt_y = -1.0
+        self._prev_flt_x = -1.0
+        self._prev_flt_y = -1.0
         self._initialized = False
 
     def _map_to_screen(self, cam_x: int, cam_y: int) -> tuple[float, float]:
-        raw_nx = max(0.0, min(1.0, float(cam_x) / float(max(1, self.cam_w - 1))))
-        raw_ny = max(0.0, min(1.0, float(cam_y) / float(max(1, self.cam_h - 1))))
+        raw_nx = clamp(float(cam_x) / float(max(1, self.cam_w - 1)), 0.0, 1.0)
+        raw_ny = clamp(float(cam_y) / float(max(1, self.cam_h - 1)), 0.0, 1.0)
 
-        nx = (raw_nx - self._inner_margin_ratio) / self._inner_ratio
-        ny = (raw_ny - self._inner_margin_ratio) / self._inner_ratio
-        nx = max(0.0, min(1.0, nx))
-        ny = max(0.0, min(1.0, ny))
+        nx = map_range(raw_nx, self._inner_margin_ratio, self._inner_margin_ratio + self._inner_ratio, 0.0, 1.0)
+        ny = map_range(raw_ny, self._inner_margin_ratio, self._inner_margin_ratio + self._inner_ratio, 0.0, 1.0)
+        nx = clamp(nx, 0.0, 1.0)
+        ny = clamp(ny, 0.0, 1.0)
 
         sx = float(self._screen_x) + nx * float(self.scr_w)
         sy = float(self._screen_y) + ny * float(self.scr_h)
@@ -186,7 +213,21 @@ class CursorMapper:
             raw_x = self._flt_x + jump_dx * scale
             raw_y = self._flt_y + jump_dy * scale
 
-        self._flt_x = self._flt_x + alpha * (raw_x - self._flt_x)
-        self._flt_y = self._flt_y + alpha * (raw_y - self._flt_y)
+        self._flt_x = ema_step(self._flt_x, raw_x, alpha)
+        self._flt_y = ema_step(self._flt_y, raw_y, alpha)
 
-        return int(self._flt_x), int(self._flt_y)
+        # Velocity extrapolation: predict next position from current velocity.
+        # Uses exponentially smoothed filtered position to avoid amplifying noise.
+        if self._initialized and self._prev_flt_x >= 0:
+            vx = self._flt_x - self._prev_flt_x
+            vy = self._flt_y - self._prev_flt_y
+            pred_x = self._flt_x + vx * self._pred_strength
+            pred_y = self._flt_y + vy * self._pred_strength
+        else:
+            pred_x = self._flt_x
+            pred_y = self._flt_y
+
+        self._prev_flt_x = self._flt_x
+        self._prev_flt_y = self._flt_y
+
+        return int(pred_x), int(pred_y)

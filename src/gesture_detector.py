@@ -2,7 +2,41 @@ from __future__ import annotations
 
 import math
 import time
+import numpy as np
 
+try:
+    from .fast_math import pinch_dist_3d, pinch_dist_2d, ema_step, landmark_distances_np
+except Exception:
+    def pinch_dist_3d(x1, y1, z1, x2, y2, z2):
+        dx = x1 - x2
+        dy = y1 - y2
+        dz = z1 - z2
+        return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    def pinch_dist_2d(x1, y1, x2, y2):
+        dx = x1 - x2
+        dy = y1 - y2
+        return math.sqrt(dx * dx + dy * dy)
+
+    def ema_step(prev, target, alpha):
+        return prev + alpha * (target - prev)
+
+    def landmark_distances_np(xy):
+        pts = np.asarray(xy, dtype=np.float32)
+        diff = pts[1:] - pts[:-1]
+        dists = np.empty(21, dtype=np.float32)
+        dists[0] = 0.0
+        dists[1:] = np.sqrt((diff * diff).sum(axis=1))
+        return dists
+
+try:
+    from .gesture_classifier import load_model, predict_gesture as _ml_predict
+except Exception:
+    def load_model() -> bool:
+        return False
+
+    def _ml_predict(xy, label="Right"):
+        return None, 0.0
 from .models import FingerStates, GestureResult, GestureType  # type: ignore
 from .tuning import (  # type: ignore
     GESTURE_ACTION_COOLDOWN_S,
@@ -18,6 +52,8 @@ from .tuning import (  # type: ignore
     GESTURE_Z_TAP_ENTER,
     GESTURE_Z_TAP_EXIT,
 )
+
+_ML_READY = load_model()
 
 
 class GestureDetector:
@@ -82,7 +118,7 @@ class GestureDetector:
         self._right_click_hold_s = float(GESTURE_RIGHT_CLICK_HOLD_S)
 
         self._per_action_cooldown = {
-            GestureType.LEFT_CLICK: 0.30,
+            GestureType.LEFT_CLICK: 0.25,  # FIX 7: was 0.30 — faster click recovery for rapid clicks
             GestureType.RIGHT_CLICK: 0.50,
             GestureType.DOUBLE_CLICK: 0.50,
             GestureType.MEDIA_NEXT: 0.8,
@@ -97,6 +133,10 @@ class GestureDetector:
         }
         self._last_action_time: dict[GestureType, float] = {}
         self._gesture_entry_set: set[GestureType] = set()
+        self._use_ml = _ML_READY
+        self._ml_confidence_threshold = 0.70
+        if self._use_ml:
+            print("[GESTURE] ML classifier loaded")
 
     @property
     def dragging(self) -> bool:
@@ -123,28 +163,26 @@ class GestureDetector:
     def _finger_states(self, landmarks_xy) -> FingerStates:
         wrist = landmarks_xy[0]
 
-        thumb_tip = landmarks_xy[4]
-        thumb_ip = landmarks_xy[3]
-        dx_tip = abs(thumb_tip[0] - wrist[0])
-        dx_ip = abs(thumb_ip[0] - wrist[0])
-        thumb = dx_tip > dx_ip
+        # Vectorized finger extension detection using numpy
+        # Tip indices: thumb=4, index=8, middle=12, ring=16, pinky=20
+        # MCP  indices: thumb=2, index=5, middle=9,  ring=13, pinky=17
+        tips = [4, 8, 12, 16, 20]
+        mcps = [2, 5,  9, 13, 17]
+        pts = np.asarray(landmarks_xy[:21], dtype='float32')
+        tip_pts = pts[tips]
+        mcp_pts = pts[mcps]
+        # Finger is "up" (extended) if tip is higher than its MCP (lower y value)
+        # For thumb: use x-axis comparison (mirrored camera)
+        extended = tip_pts[:, 1] < mcp_pts[:, 1]
+        thumb_extended = bool(tip_pts[0, 0] > mcp_pts[0, 0]) if len(landmarks_xy[0]) >= 2 else bool(extended[0])
 
-        def is_extended(tip_idx: int, pip_idx: int, mcp_idx: int) -> bool:
-            tip = landmarks_xy[tip_idx]
-            pip = landmarks_xy[pip_idx]
-            mcp = landmarks_xy[mcp_idx]
-            d_tip_wrist = self._distance(tip, wrist)
-            d_pip_wrist = self._distance(pip, wrist)
-            d_tip_mcp = self._distance(tip, mcp)
-            min_ext = 0.40 * self._hand_scale
-            
-            return d_tip_wrist > d_pip_wrist and d_tip_mcp > min_ext
-
-        index = is_extended(8, 6, 5)
-        middle = is_extended(12, 10, 9)
-        ring = is_extended(16, 14, 13)
-        pinky = is_extended(20, 18, 17)
-        return FingerStates(thumb, index, middle, ring, pinky)
+        return FingerStates(
+            thumb=thumb_extended,
+            index=bool(extended[1]),
+            middle=bool(extended[2]),
+            ring=bool(extended[3]),
+            pinky=bool(extended[4]),
+        )
 
     # REMOVED: finger_count() — use _finger_states() instead (line 128)
 
@@ -171,21 +209,27 @@ class GestureDetector:
         pinch_enter = hand_scale * pinch_enter_ratio
         pinch_exit = hand_scale * pinch_exit_ratio
 
-        left_dist = self._distance(xy[4], xy[8])
-        right_dist = self._distance(xy[4], xy[12])
+        if len(xy[4]) >= 3:
+            left_dist = pinch_dist_3d(xy[4][0], xy[4][1], xy[4][2],
+                                       xy[8][0], xy[8][1], xy[8][2])
+            right_dist = pinch_dist_3d(xy[4][0], xy[4][1], xy[4][2],
+                                        xy[12][0], xy[12][1], xy[12][2])
+        else:
+            left_dist = pinch_dist_2d(xy[4][0], xy[4][1], xy[8][0], xy[8][1])
+            right_dist = pinch_dist_2d(xy[4][0], xy[4][1], xy[12][0], xy[12][1])
         pinch_left_ratio = left_dist / max(1.0, hand_scale)
-
-        # Stamp release on physical pinch release, not delayed state-machine exit.
-        if self._state == GestureType.LEFT_CLICK and pinch_left_ratio > self._pinch_exit:
-            self._left_click_release_time = now
 
         left_click_pose = left_dist <= pinch_enter
 
-        mid_extended = self._distance(xy[12], xy[0]) > (self._distance(xy[9], xy[0]) * 0.85)
+        # FIX 6: Raise right-click anti-cross gate with index extension check
+        # Prevents random right-click during left-click when thumb drifts
+        index_tip_y = xy[8][1]
+        index_mcp_y = xy[5][1]
+        index_is_up = index_tip_y < index_mcp_y   # tip above MCP = extended (pixel space: y up)
         right_click_pose = (
             right_dist <= pinch_enter
-            and left_dist > (pinch_enter * 1.4)
-            and mid_extended
+            and left_dist > (pinch_exit * 1.1)
+            and index_is_up  # index must be clearly extended (not pinching left)
         )
 
         if self._left_pinch_active:
@@ -217,7 +261,7 @@ class GestureDetector:
         self._scroll_prev_y = current_y
 
         alpha = 0.20
-        self._scroll_velocity_ema = (1.0 - alpha) * self._scroll_velocity_ema + alpha * dy
+        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, alpha)
         velocity = self._scroll_velocity_ema
 
         hand_scale = max(1.0, hand_scale)
@@ -299,6 +343,25 @@ class GestureDetector:
     def detect(self, hand_data: dict | None, is_grace_frame: bool = False) -> GestureResult:
         now = time.monotonic()
 
+        # ML fast path: if trained model exists and confidence is high, skip rules engine
+        if self._use_ml and hand_data and not is_grace_frame:
+            xy = hand_data.get("xy", [])
+            label = hand_data.get("label", "Right")
+            if len(xy) >= 21:
+                ml_gesture_name, ml_conf = _ml_predict(xy, label)
+                if ml_gesture_name is not None and ml_conf >= self._ml_confidence_threshold:
+                    try:
+                        gesture_type = GestureType(ml_gesture_name)
+                        # Still run cooldown checks for click-type gestures
+                        if gesture_type in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}:
+                            if not self._check_action_cooldown(gesture_type, now):
+                                return self._make_result(GestureType.PAUSE, 0, ml_conf)
+                            self._record_action(gesture_type, now)
+                            self._state = gesture_type
+                        return self._make_result(gesture_type, 0, ml_conf)
+                    except ValueError:
+                        pass   # Unknown gesture name — fall through to rules engine
+
         if hand_data is None:
             self._state = GestureType.PAUSE
             self._candidate = GestureType.PAUSE
@@ -322,12 +385,13 @@ class GestureDetector:
         try:
             wrist = xy[0]
             middle_mcp = xy[9]
-            self._hand_scale = max(24.0, self._distance(wrist, middle_mcp))
+            scale = pinch_dist_2d(float(wrist[0]), float(wrist[1]),
+                                  float(middle_mcp[0]), float(middle_mcp[1]))
+            self._hand_scale = max(24.0, scale)
         except (IndexError, TypeError):
             return self._make_result(GestureType.PAUSE, 0, 0.0)
 
         fs = self._finger_states(xy)
-        hand_label = str(hand_data.get("label", "Right"))
         confidence = float(hand_data.get("confidence", 0.0))
         if confidence < 0.20:
             return self._make_result(GestureType.PAUSE, 0, 0.0)
@@ -351,7 +415,21 @@ class GestureDetector:
         )
 
         move_pose = fs.index and (not fs.middle) and (not fs.ring) and (not fs.pinky)
-        scroll_pose = fs.index and fs.middle and (not fs.ring) and (not fs.pinky)
+        # FIX 5: Tighten scroll vs move separation with stricter landmark validation
+        # Require ring+pinky to be clearly curled, not just "not up"
+        scroll_pose = False
+        if fs.index and fs.middle and (not fs.ring) and (not fs.pinky):
+            # Extra validation: ring and pinky tips must be BELOW their PIPs (clearly curled)
+            ring_tip_y = xy[16][1]
+            ring_pip_y = xy[14][1]
+            pinky_tip_y = xy[20][1]
+            pinky_pip_y = xy[18][1]
+            # In pixel space: tip y > pip y means tip is lower (below) = finger is curled
+            ring_curled = ring_tip_y > ring_pip_y
+            pinky_curled = pinky_tip_y > pinky_pip_y
+            if ring_curled and pinky_curled:
+                scroll_pose = True
+        
         open_palm = fs.thumb and fs.index and fs.middle and fs.ring and fs.pinky
 
         # Keyboard gesture: pinky + index extended, thumb extended (three-finger salute)
@@ -371,7 +449,7 @@ class GestureDetector:
         _debug = False
         
         if _debug:
-            print(f"[ROUTING] hand_label={hand_label}, left_pinch={self._left_pinch_active}, right_pinch={self._right_pinch_active}, move_pose={move_pose}, scroll_pose={scroll_pose}")
+            print(f"[ROUTING] left_pinch={self._left_pinch_active}, right_pinch={self._right_pinch_active}, move_pose={move_pose}, scroll_pose={scroll_pose}")
 
         # Both hands share cursor/click/scroll logic.
         # Left hand additionally supports media controls via open_palm hold.
@@ -446,6 +524,10 @@ class GestureDetector:
                 stable_state = self._candidate
             else:
                 stable_state = self._state
+
+        # Stamp left-click release on state exit, not on state entry.
+        if self._state == GestureType.LEFT_CLICK and stable_state != GestureType.LEFT_CLICK:
+            self._left_click_release_time = now
 
         if stable_state != self._state:
             self._gesture_entry_set.discard(self._state)

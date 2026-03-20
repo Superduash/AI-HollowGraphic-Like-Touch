@@ -349,16 +349,13 @@ class CameraThread:
                         print("[ERROR] No valid camera found after scanning")
                     time.sleep(CAMERA_REOPEN_COOLDOWN_S)
                     continue
-                time.sleep(0.01)
+                time.sleep(CAMERA_FAIL_SLEEP_S)
                 continue
 
             consecutive_failures = 0
             self.actual_height, self.actual_width = frame.shape[:2]
             with self._frame_lock:
                 self._frame = frame
-            
-            # 🔥 Fix thread loop aggression (recommended to avoid freezing)
-            time.sleep(0.005)
 
     def latest(self):
         with self._frame_lock:

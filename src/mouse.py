@@ -55,18 +55,32 @@ class MouseController:
                 import ctypes
 
                 self._user32 = ctypes.windll.user32 # type: ignore
-                self._mouse_event = self._user32.mouse_event # type: ignore
-                self._mouse_event.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p] # type: ignore
-                self._mouse_event.restype = None  # type: ignore
                 self._MOUSEEVENTF_LEFTDOWN = 0x0002
                 self._MOUSEEVENTF_LEFTUP = 0x0004
                 self._MOUSEEVENTF_RIGHTDOWN = 0x0008
                 self._MOUSEEVENTF_RIGHTUP = 0x0010
                 self._MOUSEEVENTF_WHEEL = 0x0800
                 self._WHEEL_DELTA = 120
+
+                # --- SendInput structs (modern API, replaces mouse_event) ---
+                class _MOUSEINPUT(ctypes.Structure):
+                    _fields_ = [
+                        ("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                        ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+                        ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+                    ]
+                class _INPUT(ctypes.Structure):
+                    _fields_ = [("type", ctypes.c_ulong), ("mi", _MOUSEINPUT)]
+
+                self._MOUSEINPUT = _MOUSEINPUT
+                self._INPUT = _INPUT
+                self._SendInput = self._user32.SendInput
+                self._SendInput.argtypes = [ctypes.c_uint, ctypes.POINTER(_INPUT), ctypes.c_int]
+                self._SendInput.restype = ctypes.c_uint
+                self._MOUSEEVENTF_MOVE = 0x0001
+                self._MOUSEEVENTF_ABSOLUTE = 0x8000
             except Exception:
                 self._user32 = None
-                self._mouse_event = None
 
         elif self._platform == "Darwin":
             try:
@@ -78,6 +92,16 @@ class MouseController:
 
         self._worker.start()
         self._media_worker.start()
+
+    def _send_mouse_flags(self, flags: int, mouse_data: int = 0) -> None:
+        """Send a single SendInput mouse event. Windows only."""
+        if self._platform != "Windows" or not hasattr(self, '_SendInput'):
+            return
+        inp = self._INPUT(
+            type=0,
+            mi=self._MOUSEINPUT(0, 0, mouse_data, flags, 0, None)
+        )
+        self._SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
 
     @property
     def is_dragging(self) -> bool:
@@ -131,7 +155,22 @@ class MouseController:
 
     def _set_cursor_pos(self, x: int, y: int) -> None:
         if self._platform == "Windows" and self._user32 is not None:
-            self._user32.SetCursorPos(int(x), int(y)) # type: ignore
+            try:
+                scr_w = self._user32.GetSystemMetrics(0) or 1920
+                scr_h = self._user32.GetSystemMetrics(1) or 1080
+                ax = int(x * 65535 // scr_w)
+                ay = int(y * 65535 // scr_h)
+                inp = self._INPUT(
+                    type=0,
+                    mi=self._MOUSEINPUT(
+                        dx=ax, dy=ay, mouseData=0,
+                        dwFlags=self._MOUSEEVENTF_MOVE | self._MOUSEEVENTF_ABSOLUTE,
+                        time=0, dwExtraInfo=None,
+                    )
+                )
+                self._SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+            except Exception:
+                self._user32.SetCursorPos(int(x), int(y))
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
@@ -141,9 +180,9 @@ class MouseController:
 
     def left_click(self) -> None:
         if self._platform == "Windows" and self._user32 is not None:
-            self._mouse_event(self._MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)  # type: ignore
-            time.sleep(0.01)
-            self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)  # type: ignore
+            self._send_mouse_flags(self._MOUSEEVENTF_LEFTDOWN)
+            time.sleep(0.008)
+            self._send_mouse_flags(self._MOUSEEVENTF_LEFTUP)
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
@@ -156,9 +195,9 @@ class MouseController:
 
     def right_click(self) -> None:
         if self._platform == "Windows" and self._user32 is not None:
-            self._mouse_event(self._MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, None)  # type: ignore
-            time.sleep(0.01)
-            self._mouse_event(self._MOUSEEVENTF_RIGHTUP, 0, 0, 0, None)  # type: ignore
+            self._send_mouse_flags(self._MOUSEEVENTF_RIGHTDOWN)
+            time.sleep(0.008)
+            self._send_mouse_flags(self._MOUSEEVENTF_RIGHTUP)
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
@@ -181,7 +220,7 @@ class MouseController:
         if self._platform == "Windows" and self._user32 is not None:
             clicks = max(-20, min(20, int(amount)))
             delta = int(clicks * self._WHEEL_DELTA)
-            self._mouse_event(self._MOUSEEVENTF_WHEEL, 0, 0, delta & 0xFFFFFFFF, None)  # type: ignore
+            self._send_mouse_flags(self._MOUSEEVENTF_WHEEL, delta & 0xFFFFFFFF)
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
@@ -194,7 +233,7 @@ class MouseController:
         self._dragging = True
 
         if self._platform == "Windows" and self._user32 is not None:
-            self._mouse_event(self._MOUSEEVENTF_LEFTDOWN, 0, 0, 0, None)
+            self._send_mouse_flags(self._MOUSEEVENTF_LEFTDOWN)
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
@@ -209,7 +248,7 @@ class MouseController:
         self._dragging = False
 
         if self._platform == "Windows" and self._user32 is not None:
-            self._mouse_event(self._MOUSEEVENTF_LEFTUP, 0, 0, 0, None)  # type: ignore
+            self._send_mouse_flags(self._MOUSEEVENTF_LEFTUP)
             return
 
         if self._platform == "Darwin" and self._quartz is not None:
