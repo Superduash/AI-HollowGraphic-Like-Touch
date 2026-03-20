@@ -51,7 +51,7 @@ class GestureDetector:
         self._left_media_anchor_y: float | None = None
 
         self._action_cooldown_s = float(GESTURE_ACTION_COOLDOWN_S)
-        self._drag_activate_s = float(GESTURE_DRAG_ACTIVATE_S)
+        self._drag_activate_s = 2.0
 
         self._pinch_enter = 0.22
         self._pinch_exit = 0.36
@@ -68,7 +68,8 @@ class GestureDetector:
         self._last_move_time: float = 0.0
         self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
         self._scroll_step_limit = 8
-        self._right_click_hold_s = float(GESTURE_RIGHT_CLICK_HOLD_S)
+        self._scroll_gain = 1.0          # FIX: was missing — caused AttributeError crash
+        self._right_click_hold_s = max(0.50, float(GESTURE_RIGHT_CLICK_HOLD_S))  # FIX: 0.50s hold reduces accidental right clicks
 
         self._per_action_cooldown = {
             GestureType.LEFT_CLICK: 0.25,  # FIX 7: was 0.30 — faster click recovery for rapid clicks
@@ -230,16 +231,17 @@ class GestureDetector:
             self._left_pinch_active = True
 
         # Right pinch (thumb ↔ middle) — only activates when left is open
+        right_enter = enter * 0.50      # FIX: was 0.75 — too sensitive, caused random right clicks
         if self._right_pinch_active:
             if ri > exit_:
                 self._right_pinch_active = False
-        elif ri <= enter and li > exit_ and pm > 0.10:
+        elif ri <= right_enter and li > exit_ and pm > 0.20:
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
             if now - self._right_pinch_start_t >= self._right_click_hold_s:
                 self._right_pinch_active = True
         else:
-            if not (ri <= enter and li > exit_ and pm > 0.10):
+            if not (ri <= right_enter and li > exit_ and pm > 0.20):
                 self._right_pinch_start_t = None
 
         # Peace sign (index ↔ middle spread) — scroll mode

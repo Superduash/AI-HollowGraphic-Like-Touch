@@ -5,7 +5,9 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = PROJECT_ROOT / "docs" / "artifacts" / "project_compact_export.txt"
+# FIX: was PROJECT_ROOT / "docs" / "artifacts" / "project_compact_export.txt"
+# Now outputs directly to the project root folder for easy access
+DEFAULT_OUTPUT = PROJECT_ROOT / "project_compact_export.txt"
 
 
 DEFAULT_EXCLUDE_DIRS = {

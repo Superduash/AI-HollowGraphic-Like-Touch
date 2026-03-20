@@ -25,12 +25,13 @@ class FaceTracker:
         self._init = False
         self._alpha = 0.50   # EMA — raise for faster response, lower for smoother
         self.available = False
+        self._last_results = None  # FIX: cache results so draw() can use them
 
         if not _OK or mp is None:
             print("[FACE] MediaPipe face_mesh unavailable — head tracking disabled")
             return
         try:
-            self._mesh = mp.solutions.face_mesh.FaceMesh( # type: ignore
+            self._mesh = mp.solutions.face_mesh.FaceMesh(  # type: ignore
                 max_num_faces=1,
                 refine_landmarks=False,
                 min_detection_confidence=0.5,
@@ -49,6 +50,8 @@ class FaceTracker:
             h, w = frame_bgr.shape[:2]
             rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             res = self._mesh.process(rgb)
+            self._last_results = res  # FIX: cache so draw() can render the skeleton
+
             if not res.multi_face_landmarks:
                 self._init = False
                 return None
@@ -58,16 +61,55 @@ class FaceTracker:
                 self._nose_x, self._nose_y = rx, ry
                 self._init = True
             else:
-                # 1.5px deadzone only — CursorMapper handles all smoothing
+                # FIX: reduced deadzone from 1.5 → 0.5px so micro-movements register
+                # CursorMapper handles all smoothing — we just need raw movement here
                 dx = rx - self._nose_x
                 dy = ry - self._nose_y
-                if abs(dx) >= 1.5:
+                if abs(dx) >= 0.5:
                     self._nose_x = rx
-                if abs(dy) >= 1.5:
+                if abs(dy) >= 0.5:
                     self._nose_y = ry
             return int(self._nose_x), int(self._nose_y)
         except Exception:
             return None
+
+    def draw(self, frame_rgb) -> None:
+        """FIX: Draw face mesh skeleton + nose tip dot on the given RGB frame.
+        Call this from _render() right after the control region rectangle is drawn.
+        """
+        if not self.available or self._mesh is None:
+            return
+        if not _OK or mp is None:
+            return
+        if self._last_results is None:
+            return
+        try:
+            res = self._last_results
+            if not res.multi_face_landmarks:
+                return
+
+            mp_drawing = mp.solutions.drawing_utils  # type: ignore
+            mp_face_mesh = mp.solutions.face_mesh  # type: ignore
+
+            # Subtle grey lines so the skeleton is visible but not blinding
+            spec = mp_drawing.DrawingSpec(color=(120, 120, 120), thickness=1, circle_radius=1)
+
+            for face_landmarks in res.multi_face_landmarks:
+                mp_drawing.draw_landmarks(
+                    image=frame_rgb,
+                    landmark_list=face_landmarks,
+                    connections=mp_face_mesh.FACEMESH_TESSELATION,
+                    landmark_drawing_spec=None,
+                    connection_drawing_spec=spec,
+                )
+                # Bright cyan dot on the exact nose tip that drives the cursor
+                nose = face_landmarks.landmark[self.NOSE_TIP]
+                nx = int(nose.x * frame_rgb.shape[1])
+                ny = int(nose.y * frame_rgb.shape[0])
+                cv2.circle(frame_rgb, (nx, ny), 7, (0, 255, 255), -1)
+                cv2.circle(frame_rgb, (nx, ny), 9, (0, 180, 180), 2)  # outer ring
+        except Exception:
+            pass
 
     def close(self) -> None:
         try:

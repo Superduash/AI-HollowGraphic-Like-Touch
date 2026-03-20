@@ -1570,6 +1570,16 @@ class MainWindow(QMainWindow):
                     if result.gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
                                          GestureType.DOUBLE_CLICK}:
                         result = GestureResult(GestureType.MOVE, 0)
+                if self._hand_only_mode and hand_data:
+                    _hc = float(hand_data.get("confidence", 0.0))
+                    if _hc < 0.75 and result.gesture in {
+                        GestureType.LEFT_CLICK,
+                        GestureType.RIGHT_CLICK,
+                        GestureType.DOUBLE_CLICK,
+                        GestureType.DRAG,
+                        GestureType.SCROLL,
+                    }:
+                        result = GestureResult(GestureType.MOVE, 0)
                 gesture = result.gesture
                 gesture_changed = gesture != last_action
                 self._last_debug_label = gesture
@@ -1650,7 +1660,8 @@ class MainWindow(QMainWindow):
                     self._frozen_sx, self._frozen_sy = sx, sy
 
                 # ── Dispatch actions ───────────────────────────────────
-                if self.mouse_enabled and _has_cursor and gesture in self._CURSOR_GESTURES:
+                _hybrid_idle_move = (not self._hand_only_mode and gesture == GestureType.PAUSE)
+                if self.mouse_enabled and _has_cursor and (gesture in self._CURSOR_GESTURES or _hybrid_idle_move):
                     if gesture != GestureType.SCROLL:
                         self.mouse.move(sx, sy)
 
@@ -1832,6 +1843,10 @@ class MainWindow(QMainWindow):
         if self._show_control_region:
             left, top, right, bottom = self.mapper.control_region()
             cv2.rectangle(rgb, (left, top), (right, bottom), (34, 211, 238), 2, cv2.LINE_AA)
+
+        # FIX: Draw face skeleton + nose cursor dot so it's visible on screen
+        if not self._hand_only_mode and self.face_tracker is not None:
+            self.face_tracker.draw(rgb)
 
         if hand_proto is not None and tracker is not None:
             label = hand_data["label"] if hand_data else "Right"
