@@ -616,17 +616,15 @@ class MainWindow(QMainWindow):
         self._last_debug_print_ts = 0.0
         self._last_debug_label: str = ""
         self._drag_active = False
-        self._start_worker: threading.Thread | None = None
-        
-        # FIX 2: Cursor freeze on gesture entry to prevent index finger motion during click
+        self._cursor_frozen = False
         self._frozen_sx: int = -1
         self._frozen_sy: int = -1
-        self._cursor_frozen: bool = False
-        self._freeze_gestures = {
+        self._freeze_on: set = {
             GestureType.LEFT_CLICK,
             GestureType.RIGHT_CLICK,
             GestureType.DOUBLE_CLICK,
         }
+        self._start_worker: threading.Thread | None = None
 
         self._build_ui()
         self._camera_start_result.connect(self._on_camera_start_done)
@@ -1529,50 +1527,46 @@ class MainWindow(QMainWindow):
                         else:
                             self._execute_media(gesture, result.scroll_delta)
 
-                if self.mouse_enabled and (not is_grace) and hand_data and gesture not in {
-                    GestureType.NONE,
-                    GestureType.PAUSE,
-                    GestureType.TASK_VIEW,
-                    GestureType.KEYBOARD,
-                    GestureType.MEDIA_VOL_UP,
-                    GestureType.MEDIA_VOL_DOWN,
-                    GestureType.MEDIA_NEXT,
-                    GestureType.MEDIA_PREV,
-                }:
-                    # FIX 1: Use middle MCP (LM9) as cursor anchor instead of index tip (LM8)
-                    # LM9 is stable during pinch; LM8 moves toward thumb, causing cursor jump
-                    tip = hand_data["xy"][9]
-                    cam_x = int(tip[0])
-                    cam_y = int(tip[1])
+                _cursor_gestures = {
+                    GestureType.MOVE, GestureType.LEFT_CLICK,
+                    GestureType.DOUBLE_CLICK, GestureType.RIGHT_CLICK,
+                    GestureType.DRAG, GestureType.SCROLL,
+                }
+                if self.mouse_enabled and hand_data and gesture in _cursor_gestures:
+                    # LM9 = middle MCP — stays put when thumb+index pinch, unlike LM8
+                    anchor = hand_data["xy"][9]
+                    cam_x = int(anchor[0])
+                    cam_y = int(anchor[1])
                     sx, sy = self.mapper.map_point(cam_x, cam_y)
 
-                    # FIX 2: Freeze cursor position on click gesture entry
-                    # Prevents index finger motion from moving cursor during click hold
-                    if gesture in self._freeze_gestures:
+                    # Freeze cursor the instant a click is confirmed — prevents
+                    # the physical pinch motion from shifting the click target
+                    if gesture in self._freeze_on:
                         if not self._cursor_frozen:
-                            # First frame of click — lock current position
                             self._frozen_sx = sx
                             self._frozen_sy = sy
                             self._cursor_frozen = True
-                        # Use frozen position for entire duration of click gesture
                         sx = self._frozen_sx
                         sy = self._frozen_sy
                     else:
                         self._cursor_frozen = False
 
-                    # Dispatch movement and gesture actions using (sx, sy)
+                    # Allow MOVE during grace (stale coords still good for smooth motion)
+                    # Block discrete actions during grace to prevent ghost events
+                    _allow_action = not is_grace
+
                     if gesture == GestureType.MOVE:
                         self.mouse.move(sx, sy)
-                    elif gesture == GestureType.LEFT_CLICK and gesture_changed:
+                    elif gesture == GestureType.LEFT_CLICK and gesture_changed and _allow_action:
                         self.mouse.move(sx, sy)
                         self.mouse.left_click()
-                    elif gesture == GestureType.DOUBLE_CLICK and gesture_changed:
+                    elif gesture == GestureType.DOUBLE_CLICK and gesture_changed and _allow_action:
                         self.mouse.move(sx, sy)
                         self.mouse.double_click()
-                    elif gesture == GestureType.RIGHT_CLICK and gesture_changed:
+                    elif gesture == GestureType.RIGHT_CLICK and gesture_changed and _allow_action:
                         self.mouse.move(sx, sy)
                         self.mouse.right_click()
-                    elif gesture == GestureType.SCROLL:
+                    elif gesture == GestureType.SCROLL and _allow_action:
                         self.mouse.scroll(int(result.scroll_delta * self._scroll_multiplier))
                     elif gesture == GestureType.DRAG:
                         if not self._drag_active:
@@ -1612,6 +1606,19 @@ class MainWindow(QMainWindow):
                     fps_i = 1.0 / dt
                     self.fps = fps_i if self.fps == 0 else 0.9 * self.fps + 0.1 * fps_i
 
+                _finger_count = 0
+                if hand_data:
+                    try:
+                        _xy = hand_data.get("xy", [])
+                        if len(_xy) >= 21:
+                            _w = _xy[0]
+                            for _t, _p in zip([4, 8, 12, 16, 20], [2, 6, 10, 14, 18]):
+                                _td = ((_xy[_t][0]-_w[0])**2+(_xy[_t][1]-_w[1])**2)**0.5
+                                _pd = ((_xy[_p][0]-_w[0])**2+(_xy[_p][1]-_w[1])**2)**0.5
+                                if _td > _pd:
+                                    _finger_count += 1
+                    except Exception:
+                        pass
                 with self._lock:
                     self._frame = frame
                     self._rgb_frame = rgb_cached
@@ -1619,6 +1626,7 @@ class MainWindow(QMainWindow):
                     self._overlay_text = overlay
                     self._hand_proto = hand_proto
                     self._hand_data = hand_data
+                    self._fingers = _finger_count
             except Exception as exc:
                 import logging
                 logging.exception(f"Process loop error: {exc}")

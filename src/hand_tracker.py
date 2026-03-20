@@ -72,18 +72,18 @@ class HandTracker:
         self._draw = mp.solutions.drawing_utils  # type: ignore[attr-defined]
         self._styles = mp.solutions.drawing_styles  # type: ignore[attr-defined]
 
-        perf_mode = False
+        _perf = False
         try:
             from .settings_store import settings as _s
-            perf_mode = bool(_s.get("performance_mode", False))
+            _perf = bool(_s.get("performance_mode", False))
         except Exception:
             pass
 
-        self._hands = mp.solutions.hands.Hands(
+        self._hands = self._mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
-            model_complexity=0 if perf_mode else 1,
-            min_detection_confidence=0.65,
+            model_complexity=0 if _perf else 1,
+            min_detection_confidence=0.60,
             min_tracking_confidence=0.40,
         )
 
@@ -111,13 +111,14 @@ class HandTracker:
 
     def _resolve_label(self, label: str) -> str:
         self._label_history.append(label)
-        # Simple majority over last 3 frames - fast to stabilize, still noise-resistant
-        counts = {}
-        for l in self._label_history:
-            counts[l] = counts.get(l, 0) + 1
-        label = max(counts, key=counts.get)
-        self._stable_label = label
-        return label
+        history = list(self._label_history)
+        right_count = history.count("Right")
+        left_count = history.count("Left")
+        if right_count > left_count:
+            self._stable_label = "Right"
+        elif left_count > right_count:
+            self._stable_label = "Left"
+        return self._stable_label
 
     def _passes_confidence_gate(self, confidence: float) -> bool:
         if self._hand_locked:

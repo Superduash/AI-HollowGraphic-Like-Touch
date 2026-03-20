@@ -81,8 +81,8 @@ class GestureDetector:
         self._locked_until = 0.0
         self._drag_activate_s = float(GESTURE_DRAG_ACTIVATE_S)
 
-        self._pinch_enter = 0.30
-        self._pinch_exit = 0.45
+        self._pinch_enter = 0.22
+        self._pinch_exit = 0.36
         self._confirm_hold_s = float(GESTURE_CONFIRM_HOLD_S)
         self._media_cooldown_s = 0.5
         self._last_media_action_time = 0.0
@@ -163,21 +163,27 @@ class GestureDetector:
     def _finger_states(self, landmarks_xy) -> FingerStates:
         wrist = landmarks_xy[0]
 
-        # Vectorized finger extension detection using numpy
-        # Tip indices: thumb=4, index=8, middle=12, ring=16, pinky=20
-        # MCP  indices: thumb=2, index=5, middle=9,  ring=13, pinky=17
+        thumb_tip = landmarks_xy[4]
+        thumb_ip = landmarks_xy[3]
+        thumb_mcp = landmarks_xy[2]
+        pinky_base = landmarks_xy[17]
+        dist_tip_to_pinky = self._distance(thumb_tip, pinky_base)
+        dist_mcp_to_pinky = self._distance(thumb_mcp, pinky_base)
+        thumb = dist_tip_to_pinky > (dist_mcp_to_pinky * 1.2)
+
+        # Vectorized finger extension detection
+        # Tip indices: index=8, middle=12, ring=16, pinky=20
+        # MCP  indices: index=5, middle=9, ring=13, pinky=17
         tips = [4, 8, 12, 16, 20]
         mcps = [2, 5,  9, 13, 17]
         pts = np.asarray(landmarks_xy[:21], dtype='float32')
         tip_pts = pts[tips]
         mcp_pts = pts[mcps]
         # Finger is "up" (extended) if tip is higher than its MCP (lower y value)
-        # For thumb: use x-axis comparison (mirrored camera)
         extended = tip_pts[:, 1] < mcp_pts[:, 1]
-        thumb_extended = bool(tip_pts[0, 0] > mcp_pts[0, 0]) if len(landmarks_xy[0]) >= 2 else bool(extended[0])
 
         return FingerStates(
-            thumb=thumb_extended,
+            thumb=thumb,
             index=bool(extended[1]),
             middle=bool(extended[2]),
             ring=bool(extended[3]),
@@ -453,7 +459,6 @@ class GestureDetector:
 
         # Both hands share cursor/click/scroll logic.
         # Left hand additionally supports media controls via open_palm hold.
-        self._left_media_anchor_y = None
 
         if open_palm and not self._left_pinch_active and not self._right_pinch_active:
             if self._task_view_since is None:

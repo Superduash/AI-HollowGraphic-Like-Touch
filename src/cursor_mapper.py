@@ -49,11 +49,15 @@ class CursorMapper:
         self._pred_strength: float = 0.45   # 0=no prediction, 1=full 1-frame lookahead
 
         self._deadzone_px = float(CURSOR_SOFT_DEADZONE_PX)
-        self._alpha_min = 0.18
-        self._alpha_max = 0.55
+        self._alpha_min = 0.25
+        self._alpha_max = 0.72
         self._inner_ratio = CURSOR_INNER_RATIO
         self._max_inner_margin_ratio = 0.35
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
+        self._margin_x_ratio = self._inner_margin_ratio
+        self._margin_y_ratio = self._inner_margin_ratio
+        self._inner_x_ratio = self._inner_ratio
+        self._inner_y_ratio = self._inner_ratio
         self._hand_scale_px = 32.0
 
     @staticmethod
@@ -120,12 +124,17 @@ class CursorMapper:
 
     def set_frame_margin(self, margin_px: int) -> None:
         self.frame_r = max(0, min(int(margin_px), self.max_effective_margin_px()))
-        px = float(min(self.cam_w, self.cam_h))
-        if px <= 1.0:
+        if self.cam_w <= 1 or self.cam_h <= 1:
             return
-        ratio = max(0.0, min(self._max_inner_margin_ratio, self.frame_r / px))
-        self._inner_margin_ratio = ratio
-        self._inner_ratio = max(0.30, 1.0 - (2.0 * self._inner_margin_ratio))
+        self._margin_x_ratio = max(0.0, min(self._max_inner_margin_ratio,
+                                            self.frame_r / float(self.cam_w)))
+        self._margin_y_ratio = max(0.0, min(self._max_inner_margin_ratio,
+                                            self.frame_r / float(self.cam_h)))
+        self._inner_x_ratio = max(0.20, 1.0 - 2.0 * self._margin_x_ratio)
+        self._inner_y_ratio = max(0.20, 1.0 - 2.0 * self._margin_y_ratio)
+        # keep legacy vars in sync for compatibility
+        self._inner_margin_ratio = self._margin_y_ratio
+        self._inner_ratio = self._inner_y_ratio
 
     def max_effective_margin_px(self) -> int:
         px = float(min(self.cam_w, self.cam_h))
@@ -137,10 +146,10 @@ class CursorMapper:
         self._hand_scale_px = max(8.0, float(hand_scale_px))
 
     def control_region(self) -> tuple[int, int, int, int]:
-        left = int(round(self.cam_w * self._inner_margin_ratio))
-        right = int(round(self.cam_w * (1.0 - self._inner_margin_ratio))) - 1
-        top = int(round(self.cam_h * self._inner_margin_ratio))
-        bottom = int(round(self.cam_h * (1.0 - self._inner_margin_ratio))) - 1
+        left = int(round(self.cam_w * self._margin_x_ratio))
+        right = int(round(self.cam_w * (1.0 - self._margin_x_ratio))) - 1
+        top = int(round(self.cam_h * self._margin_y_ratio))
+        bottom = int(round(self.cam_h * (1.0 - self._margin_y_ratio))) - 1
         return max(0, left), max(0, top), min(self.cam_w - 1, right), min(self.cam_h - 1, bottom)
 
     def reset(self) -> None:
@@ -156,8 +165,10 @@ class CursorMapper:
         raw_nx = clamp(float(cam_x) / float(max(1, self.cam_w - 1)), 0.0, 1.0)
         raw_ny = clamp(float(cam_y) / float(max(1, self.cam_h - 1)), 0.0, 1.0)
 
-        nx = map_range(raw_nx, self._inner_margin_ratio, self._inner_margin_ratio + self._inner_ratio, 0.0, 1.0)
-        ny = map_range(raw_ny, self._inner_margin_ratio, self._inner_margin_ratio + self._inner_ratio, 0.0, 1.0)
+        nx = map_range(raw_nx, self._margin_x_ratio,
+                       self._margin_x_ratio + self._inner_x_ratio, 0.0, 1.0)
+        ny = map_range(raw_ny, self._margin_y_ratio,
+                       self._margin_y_ratio + self._inner_y_ratio, 0.0, 1.0)
         nx = clamp(nx, 0.0, 1.0)
         ny = clamp(ny, 0.0, 1.0)
 
@@ -204,7 +215,7 @@ class CursorMapper:
         # Clamp max single-frame jump to 15% of screen diagonal to
         # absorb landmark teleport caused by blur/fast motion.
         scr_diag = math.sqrt(float(self.scr_w ** 2 + self.scr_h ** 2))
-        max_jump = scr_diag * 0.15
+        max_jump = scr_diag * 0.08
         jump_dx = raw_x - self._flt_x
         jump_dy = raw_y - self._flt_y
         jump_dist = math.sqrt(jump_dx * jump_dx + jump_dy * jump_dy)
