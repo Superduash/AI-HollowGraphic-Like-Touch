@@ -125,11 +125,10 @@ class CursorMapper:
         with self._mapper_lock:
             self.smoothening = v
             t = (v - 1.0) / 9.0
-            # Scale within the tuned range — never go below the tuned min
             self._alpha_min_face = 0.18 + t * 0.07
             self._alpha_max_face = 0.60 + t * 0.10
-            self._alpha_min_hand = 0.28 + t * 0.07
-            self._alpha_max_hand = 0.75 + t * 0.10
+            self._alpha_min_hand = 0.12 + t * 0.07
+            self._alpha_max_hand = 0.45 + t * 0.10
             self._alpha_min = self._alpha_min_face
             self._alpha_max = self._alpha_max_face
 
@@ -211,7 +210,6 @@ class CursorMapper:
         dy = raw_y - prev_raw_y
         speed = math.sqrt(dx * dx + dy * dy)
 
-        # Soft deadzone: suppress micro-jitter without fully blocking intentional movement.
         if speed < self._deadzone_px:
             scale = (speed / self._deadzone_px) ** 2
             raw_x = prev_raw_x + dx * scale
@@ -220,7 +218,6 @@ class CursorMapper:
             dy = raw_y - prev_raw_y
             speed = math.sqrt(dx * dx + dy * dy)
 
-        # Store the true (non-deadzoned) raw point for consistent speed tracking.
         self._raw_x = true_raw_x
         self._raw_y = true_raw_y
 
@@ -233,8 +230,11 @@ class CursorMapper:
                 amin, amax = self._alpha_min_face, self._alpha_max_face
         alpha = amin + v_norm * (amax - amin)
 
-        # Clamp max single-frame jump to 15% of screen diagonal to
-        # absorb landmark teleport caused by blur/fast motion.
+        margin_px = 15
+        if (raw_x <= self._screen_x + margin_px) or (raw_x >= self._screen_x + self.scr_w - margin_px) or \
+           (raw_y <= self._screen_y + margin_px) or (raw_y >= self._screen_y + self.scr_h - margin_px):
+            alpha *= 0.25
+
         scr_diag = math.sqrt(float(self.scr_w ** 2 + self.scr_h ** 2))
         max_jump = scr_diag * 0.08
         jump_dx = raw_x - self._flt_x
@@ -248,8 +248,6 @@ class CursorMapper:
         self._flt_x = ema_step(self._flt_x, raw_x, alpha)
         self._flt_y = ema_step(self._flt_y, raw_y, alpha)
 
-        # Velocity extrapolation: predict next position from current velocity.
-        # Uses exponentially smoothed filtered position to avoid amplifying noise.
         if self._initialized and self._prev_flt_x >= 0:
             vx = self._flt_x - self._prev_flt_x
             vy = self._flt_y - self._prev_flt_y

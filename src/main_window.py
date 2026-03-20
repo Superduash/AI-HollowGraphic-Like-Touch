@@ -498,11 +498,17 @@ class SettingsDialog(QDialog):
         if mode:
             self._mw._mode_lock_until = time.monotonic() + 300.0
             settings.set("cursor_mode", str(mode))
+
+            self._mw._cursor_mode = str(mode)
+            self._mw._hand_only_mode = (str(mode) != "eye_tracking")
+            self._mw.mapper._hand_only_mode = self._mw._hand_only_mode
+            self._mw._sh_cursor_history.clear()
+            self._mw.mapper.reset()
+            self._mw._update_guide_rows()
+
             self._tick_mode_lock()
             if not self._mode_lock_timer.isActive():
                 self._mode_lock_timer.start(1000)
-            QMessageBox.information(self, "Restart Required",
-                "Cursor mode change requires restarting the camera.")
 
     def _tick_mode_lock(self) -> None:
         rem = int(max(0.0, self._mw._mode_lock_until - time.monotonic()))
@@ -1731,7 +1737,7 @@ class MainWindow(QMainWindow):
                     elif _any_hand and len(_any_hand.get("xy", [])) > 8:
                         tip = _any_hand["xy"][8]
                         self._sh_cursor_history.append((int(tip[0]), int(tip[1])))
-                        if len(self._sh_cursor_history) > 3:
+                        if len(self._sh_cursor_history) > 4:
                             self._sh_cursor_history.pop(0)
                         avg_x = int(sum(p[0] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
                         avg_y = int(sum(p[1] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
