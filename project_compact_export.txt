@@ -1,6 +1,6 @@
 PROJECT: AI HollowGraphic Like Touch
 ROOT: C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch
-FILES: 40
+FILES: 38
 
 === .gitignore ===
 # Byte-compiled / optimized / DLL files
@@ -220,6 +220,7 @@ Designed for USB portability: one main Python file driving an integrated package
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 # Keep OpenCV backend probing quiet in production startup logs.
 os.environ.setdefault("OPENCV_LOG_LEVEL", "SILENT")
@@ -231,12 +232,18 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("GLOG_minloglevel", "3")
 os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
 
+from PySide6.QtGui import QIcon  # type: ignore
 from PySide6.QtWidgets import QApplication  # type: ignore
 from src import MainWindow  # type: ignore
 
 
 def main() -> None:
-    app = QApplication.instance() or QApplication([])
+    existing = QApplication.instance()
+    app = existing if isinstance(existing, QApplication) else QApplication([])
+    icon_path = Path(__file__).resolve().parent / "assets" / "icons" / "holographic_touch.svg"
+    app_icon = QIcon(str(icon_path))
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
     w = MainWindow()
     w.show()
     app.exec()
@@ -244,6 +251,38 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+=== assets/icons/holographic_touch.svg ===
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1220"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#2DD4BF"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#bg)"/>
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="none" stroke="#1F2937" stroke-width="4"/>
+
+  <circle cx="128" cy="128" r="74" fill="none" stroke="url(#ring)" stroke-width="12"/>
+  <circle cx="128" cy="128" r="50" fill="none" stroke="#22D3EE" stroke-opacity="0.45" stroke-width="5"/>
+  <circle cx="128" cy="128" r="20" fill="url(#core)"/>
+
+  <path d="M128 44 L128 16" stroke="#34D399" stroke-width="8" stroke-linecap="round"/>
+  <path d="M128 240 L128 212" stroke="#34D399" stroke-width="8" stroke-linecap="round"/>
+  <path d="M44 128 L16 128" stroke="#22D3EE" stroke-width="8" stroke-linecap="round"/>
+  <path d="M240 128 L212 128" stroke="#22D3EE" stroke-width="8" stroke-linecap="round"/>
+
+  <circle cx="128" cy="128" r="96" fill="none" stroke="#22D3EE" stroke-opacity="0.18" stroke-width="3"/>
+</svg>
 
 === get_hand_model.py ===
 """Download the hand landmark ONNX model from PINTO0309's model zoo.
@@ -586,7 +625,7 @@ VERIFICATION — after writing all 6 files, confirm:
 === project_compact_export.txt ===
 PROJECT: AI HollowGraphic Like Touch
 ROOT: C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch
-FILES: 40
+FILES: 38
 
 === .gitignore ===
 # Byte-compiled / optimized / DLL files
@@ -806,6 +845,7 @@ Designed for USB portability: one main Python file driving an integrated package
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 # Keep OpenCV backend probing quiet in production startup logs.
 os.environ.setdefault("OPENCV_LOG_LEVEL", "SILENT")
@@ -817,12 +857,18 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("GLOG_minloglevel", "3")
 os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
 
+from PySide6.QtGui import QIcon  # type: ignore
 from PySide6.QtWidgets import QApplication  # type: ignore
 from src import MainWindow  # type: ignore
 
 
 def main() -> None:
-    app = QApplication.instance() or QApplication([])
+    existing = QApplication.instance()
+    app = existing if isinstance(existing, QApplication) else QApplication([])
+    icon_path = Path(__file__).resolve().parent / "assets" / "icons" / "holographic_touch.svg"
+    app_icon = QIcon(str(icon_path))
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
     w = MainWindow()
     w.show()
     app.exec()
@@ -830,6 +876,38 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+=== assets/icons/holographic_touch.svg ===
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1220"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#2DD4BF"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#bg)"/>
+  <rect x="12" y="12" width="232" height="232" rx="52" fill="none" stroke="#1F2937" stroke-width="4"/>
+
+  <circle cx="128" cy="128" r="74" fill="none" stroke="url(#ring)" stroke-width="12"/>
+  <circle cx="128" cy="128" r="50" fill="none" stroke="#22D3EE" stroke-opacity="0.45" stroke-width="5"/>
+  <circle cx="128" cy="128" r="20" fill="url(#core)"/>
+
+  <path d="M128 44 L128 16" stroke="#34D399" stroke-width="8" stroke-linecap="round"/>
+  <path d="M128 240 L128 212" stroke="#34D399" stroke-width="8" stroke-linecap="round"/>
+  <path d="M44 128 L16 128" stroke="#22D3EE" stroke-width="8" stroke-linecap="round"/>
+  <path d="M240 128 L212 128" stroke="#22D3EE" stroke-width="8" stroke-linecap="round"/>
+
+  <circle cx="128" cy="128" r="96" fill="none" stroke="#22D3EE" stroke-opacity="0.18" stroke-width="3"/>
+</svg>
 
 === get_hand_model.py ===
 """Download the hand landmark ONNX model from PINTO0309's model zoo.
@@ -1196,7 +1274,7 @@ This build is optimized for:
 - gestures (Left hand): media volume up/down and next/previous track only
 
 === requirements.txt ===
-mediapipe>=0.10.33
+mediapipe==0.10.21
 opencv-contrib-python>=4.10.0.84
 numpy>=1.26.0
 numba>=0.59.0
@@ -1270,7 +1348,8 @@ if "%REQ_HASH%"=="%OLD_HASH%" (
 )
 
 echo Launching Windows Hover...
-python app.py
+set "HT_SILENCE_NATIVE_STDERR=1"
+python app.py 2>nul
 if errorlevel 1 goto :error
 
 exit /b 0
@@ -1785,6 +1864,7 @@ class CursorMapper:
         self._alpha_max = 0.72
         self._inner_ratio = CURSOR_INNER_RATIO
         self._max_inner_margin_ratio = 0.35
+        self._outer_slack_ratio = 0.04
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
         self._margin_x_ratio = self._inner_margin_ratio
         self._margin_y_ratio = self._inner_margin_ratio
@@ -1859,8 +1939,8 @@ class CursorMapper:
             t = (v - 1.0) / 9.0
             self._alpha_min_face = 0.18 + t * 0.07
             self._alpha_max_face = 0.60 + t * 0.10
-            self._alpha_min_hand = 0.12 + t * 0.07
-            self._alpha_max_hand = 0.45 + t * 0.10
+            self._alpha_min_hand = 0.20 + t * 0.10
+            self._alpha_max_hand = 0.68 + t * 0.18
             self._alpha_min = self._alpha_min_face
             self._alpha_max = self._alpha_max_face
 
@@ -1912,10 +1992,22 @@ class CursorMapper:
         raw_nx = clamp(float(cam_x) / float(max(1, self.cam_w - 1)), 0.0, 1.0)
         raw_ny = clamp(float(cam_y) / float(max(1, self.cam_h - 1)), 0.0, 1.0)
 
-        nx = map_range(raw_nx, self._margin_x_ratio,
-                       self._margin_x_ratio + self._inner_x_ratio, 0.0, 1.0)
-        ny = map_range(raw_ny, self._margin_y_ratio,
-                       self._margin_y_ratio + self._inner_y_ratio, 0.0, 1.0)
+        # Keep control box visible as the primary guide, but allow a small
+        # outside spill zone so corners/sides are reachable without strain.
+        nx = map_range(
+            raw_nx,
+            self._margin_x_ratio - self._outer_slack_ratio,
+            self._margin_x_ratio + self._inner_x_ratio + self._outer_slack_ratio,
+            0.0,
+            1.0,
+        )
+        ny = map_range(
+            raw_ny,
+            self._margin_y_ratio - self._outer_slack_ratio,
+            self._margin_y_ratio + self._inner_y_ratio + self._outer_slack_ratio,
+            0.0,
+            1.0,
+        )
         nx = clamp(nx, 0.0, 1.0)
         ny = clamp(ny, 0.0, 1.0)
 
@@ -1965,10 +2057,10 @@ class CursorMapper:
         margin_px = 15
         if (raw_x <= self._screen_x + margin_px) or (raw_x >= self._screen_x + self.scr_w - margin_px) or \
            (raw_y <= self._screen_y + margin_px) or (raw_y >= self._screen_y + self.scr_h - margin_px):
-            alpha *= 0.25
+            alpha *= 0.75
 
         scr_diag = math.sqrt(float(self.scr_w ** 2 + self.scr_h ** 2))
-        max_jump = scr_diag * 0.08
+        max_jump = scr_diag * 0.14
         jump_dx = raw_x - self._flt_x
         jump_dy = raw_y - self._flt_y
         jump_dist = math.sqrt(jump_dx * jump_dx + jump_dy * jump_dy)
@@ -1993,234 +2085,6 @@ class CursorMapper:
         self._prev_flt_y = self._flt_y
 
         return int(pred_x), int(pred_y)
-
-=== src/eye_tracker.py ===
-"""Iris-based cursor tracker using MediaPipe Face Mesh (experimental).
-
-Uses refine_landmarks=True to access iris landmarks 468/473.
-GAIN amplifies tiny eye movements so user doesn't need to move their whole head.
-"""
-from __future__ import annotations
-
-import cv2
-
-try:
-    import mediapipe as mp
-    _OK = hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh")
-except Exception:
-    mp = None
-    _OK = False
-
-
-class EyeTracker:
-    LEFT_IRIS = 468
-    RIGHT_IRIS = 473
-
-    def __init__(self, gain: float = 1.8) -> None:
-        self._mesh = None
-        self._eye_x = -1.0
-        self._eye_y = -1.0
-        self._init = False
-        self.available = False
-        self._last_results = None
-        self._gain = max(1.0, min(3.0, gain))
-
-        if not _OK or mp is None:
-            return
-        try:
-            self._mesh = mp.solutions.face_mesh.FaceMesh( # type: ignore
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.4,
-            )
-            self.available = True
-            print("[EYE] Iris tracker ready (experimental)")
-        except Exception:
-            pass
-
-    def detect(self, frame_bgr) -> tuple[int, int] | None:
-        if not self.available or self._mesh is None:
-            return None
-        try:
-            h, w = frame_bgr.shape[:2]
-            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            res = self._mesh.process(rgb)
-            self._last_results = res
-
-            if not res.multi_face_landmarks:
-                self._init = False
-                return None
-
-            face = res.multi_face_landmarks[0]
-            l_iris = face.landmark[self.LEFT_IRIS]
-            r_iris = face.landmark[self.RIGHT_IRIS]
-
-            # Average both irises for stability
-            rx = ((l_iris.x + r_iris.x) / 2.0) * w
-            ry = ((l_iris.y + r_iris.y) / 2.0) * h
-
-            # Apply gain: amplify movement from center
-            cx, cy = w / 2.0, h / 2.0
-            rx = cx + (rx - cx) * self._gain
-            ry = cy + (ry - cy) * self._gain
-
-            if not self._init:
-                self._eye_x, self._eye_y = rx, ry
-                self._init = True
-            else:
-                # 1.2px deadzone kills webcam micro-jitter
-                if abs(rx - self._eye_x) >= 1.2:
-                    self._eye_x = rx
-                if abs(ry - self._eye_y) >= 1.2:
-                    self._eye_y = ry
-
-            return int(self._eye_x), int(self._eye_y)
-        except Exception:
-            return None
-
-    def draw(self, frame_rgb) -> None:
-        if not self.available or self._last_results is None:
-            return
-        try:
-            res = self._last_results
-            if not res.multi_face_landmarks:
-                return
-            face = res.multi_face_landmarks[0]
-            h, w = frame_rgb.shape[:2]
-            for iris_idx in (self.LEFT_IRIS, self.RIGHT_IRIS):
-                pt = face.landmark[iris_idx]
-                cv2.circle(frame_rgb, (int(pt.x * w), int(pt.y * h)), 4, (0, 255, 255), -1)
-        except Exception:
-            pass
-
-    def close(self) -> None:
-        if self._mesh is not None:
-            try:
-                self._mesh.close()
-            except Exception:
-                pass
-
-=== src/face_tracker.py ===
-"""Nose-tip cursor tracker using MediaPipe Face Mesh.
-
-Nose tip (landmark 1) is the most stable facial point for cursor
-control — large target, fine motor control, zero arm fatigue.
-"""
-from __future__ import annotations
-
-import cv2
-
-try:
-    import mediapipe as mp  # type: ignore
-    _OK = hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh")
-except Exception:
-    mp = None  # type: ignore
-    _OK = False
-
-
-class FaceTracker:
-    NOSE_TIP = 1  # Face Mesh landmark index
-
-    def __init__(self) -> None:
-        self._mesh = None
-        self._nose_x = -1.0
-        self._nose_y = -1.0
-        self._init = False
-        self._alpha = 0.50   # EMA — raise for faster response, lower for smoother
-        self.available = False
-        self._last_results = None  # FIX: cache results so draw() can use them
-
-        if not _OK or mp is None:
-            print("[FACE] MediaPipe face_mesh unavailable — head tracking disabled")
-            return
-        try:
-            self._mesh = mp.solutions.face_mesh.FaceMesh(  # type: ignore
-                max_num_faces=1,
-                refine_landmarks=False,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.4,
-            )
-            self.available = True
-            print("[FACE] Face Mesh ready — nose tip cursor active")
-        except Exception as e:
-            print(f"[FACE] Face Mesh init failed: {e}")
-
-    def detect(self, frame_bgr) -> tuple[int, int] | None:
-        """Return smoothed (cam_x, cam_y) of nose tip, or None."""
-        if not self.available or self._mesh is None:
-            return None
-        try:
-            h, w = frame_bgr.shape[:2]
-            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            res = self._mesh.process(rgb)
-            self._last_results = res  # FIX: cache so draw() can render the skeleton
-
-            if not res.multi_face_landmarks:
-                self._init = False
-                return None
-            lm = res.multi_face_landmarks[0].landmark[self.NOSE_TIP]
-            rx, ry = lm.x * w, lm.y * h
-            if not self._init:
-                self._nose_x, self._nose_y = rx, ry
-                self._init = True
-            else:
-                # FIX: reduced deadzone from 1.5 → 0.5px so micro-movements register
-                # CursorMapper handles all smoothing — we just need raw movement here
-                dx = rx - self._nose_x
-                dy = ry - self._nose_y
-                if abs(dx) >= 0.5:
-                    self._nose_x = rx
-                if abs(dy) >= 0.5:
-                    self._nose_y = ry
-            return int(self._nose_x), int(self._nose_y)
-        except Exception:
-            return None
-
-    def draw(self, frame_rgb) -> None:
-        """FIX: Draw face mesh skeleton + nose tip dot on the given RGB frame.
-        Call this from _render() right after the control region rectangle is drawn.
-        """
-        if not self.available or self._mesh is None:
-            return
-        if not _OK or mp is None:
-            return
-        if self._last_results is None:
-            return
-        try:
-            res = self._last_results
-            if not res.multi_face_landmarks:
-                return
-
-            mp_drawing = mp.solutions.drawing_utils  # type: ignore
-            mp_face_mesh = mp.solutions.face_mesh  # type: ignore
-
-            # Subtle grey lines so the skeleton is visible but not blinding
-            spec = mp_drawing.DrawingSpec(color=(120, 120, 120), thickness=1, circle_radius=1)
-
-            for face_landmarks in res.multi_face_landmarks:
-                mp_drawing.draw_landmarks(
-                    image=frame_rgb,
-                    landmark_list=face_landmarks,
-                    connections=mp_face_mesh.FACEMESH_TESSELATION,
-                    landmark_drawing_spec=None,
-                    connection_drawing_spec=spec,
-                )
-                # Bright cyan dot on the exact nose tip that drives the cursor
-                nose = face_landmarks.landmark[self.NOSE_TIP]
-                nx = int(nose.x * frame_rgb.shape[1])
-                ny = int(nose.y * frame_rgb.shape[0])
-                cv2.circle(frame_rgb, (nx, ny), 7, (0, 255, 255), -1)
-                cv2.circle(frame_rgb, (nx, ny), 9, (0, 180, 180), 2)  # outer ring
-        except Exception:
-            pass
-
-    def close(self) -> None:
-        try:
-            if self._mesh is not None:
-                self._mesh.close()
-        except Exception:
-            pass
 
 === src/fast_math.py ===
 """JIT-compiled math kernels for the holographic touch hot path.
@@ -2451,6 +2315,8 @@ class GestureDetector:
         self._right_pinch_active = False
         self._left_pinch_since: float | None = None
         self._right_pinch_start_t: float | None = None
+        self._left_click_emitted_this_hold = False
+        self._right_click_emitted_this_hold = False
 
         self._scroll_prev_y: float | None = None
         self._scroll_velocity_ema = 0.0
@@ -2476,7 +2342,13 @@ class GestureDetector:
         self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
         self._scroll_step_limit = 8
         self._scroll_gain = 1.0
-        self._right_click_hold_s = max(0.25, float(GESTURE_RIGHT_CLICK_HOLD_S))
+        self._right_click_hold_s = max(0.14, float(GESTURE_RIGHT_CLICK_HOLD_S))
+        self._right_click_hold_s = min(self._right_click_hold_s, 0.18)
+
+        # EMA-smoothed pinch ratios reduce false click flicker while keeping response quick.
+        self._li_ema: float | None = None
+        self._ri_ema: float | None = None
+        self._pm_ema: float | None = None
 
         self._per_action_cooldown = {
             GestureType.LEFT_CLICK: 0.25,
@@ -2549,15 +2421,19 @@ class GestureDetector:
         if self._scroll_direction == 0:
             self._scroll_direction = direction
         elif direction != self._scroll_direction:
+            # Ignore weak opposite spikes to avoid pause/freeze while scrolling steadily.
+            if abs(v) < (deadband * 2.2):
+                return 0
             now = time.monotonic()
             if now - self._scroll_last_switch_time < self._scroll_dir_switch_cooldown_s:
-                self._scroll_accumulator = 0.0
+                # Keep momentum; do not hard-reset accumulator on blocked flips.
+                self._scroll_accumulator *= 0.35
                 return 0
             self._scroll_direction = direction
             self._scroll_last_switch_time = now
-            self._scroll_velocity_ema = 0.0
-            self._scroll_accumulator = 0.0
-            return 0
+            # Dampen but preserve continuity when direction really changes.
+            self._scroll_velocity_ema *= 0.5
+            self._scroll_accumulator *= 0.5
 
         return int(steps * max(1, self._scroll_gain))
 
@@ -2568,35 +2444,49 @@ class GestureDetector:
         self._scroll_accumulator = 0.0
 
     # =====================================================================
-    # DUAL-HAND MODE (default) — left hand = cursor, right hand = actions
+    # DUAL-HAND MODE (default) — right hand = cursor, left hand = actions
     # =====================================================================
-    def detect_dual(self, hands_dict: dict, is_grace: bool = False) -> GestureResult:
+    def detect_dual(
+        self,
+        hands_dict: dict,
+        is_grace: bool = False,
+        cursor_label: str = "Right",
+    ) -> GestureResult:
         """Process gestures from dual-hand input.
 
-        LEFT hand: cursor tracking (handled in main_window, not here)
-        RIGHT hand: click/scroll/drag gestures
+        By default RIGHT hand: cursor tracking, LEFT hand: click/scroll/drag.
+        When cursor_label="Left", roles are swapped.
 
-        If only LEFT hand visible: return MOVE (cursor follows left index)
-        If only RIGHT hand visible: process gestures, cursor uses right index
+        If only cursor hand visible: return MOVE (cursor follows cursor hand)
+        If only action hand visible: no cursor hand, keep MOVE (no action gestures)
         If neither: PAUSE
         """
         now = time.monotonic()
-        right_hand = hands_dict.get("Right")
-        left_hand = hands_dict.get("Left")
+        cursor_label_norm = "Left" if str(cursor_label) == "Left" else "Right"
+        action_label = "Right" if cursor_label_norm == "Left" else "Left"
+
+        cursor_hand = hands_dict.get(cursor_label_norm)
+        action_hand = hands_dict.get(action_label)
 
         # No hands at all
-        if not right_hand and not left_hand:
+        if not cursor_hand and not action_hand:
             self._reset_all(now)
             return self._make_result(GestureType.PAUSE, 0)
 
-        # Only left hand (cursor hand) — just MOVE, no actions
-        if not right_hand and left_hand:
+        # Cursor hand missing: stay in MOVE and suppress actions to avoid accidental clicks.
+        if not cursor_hand:
             self._state = GestureType.MOVE
             self._dragging = False
             return self._make_result(GestureType.MOVE, 0)
 
-        # Right hand is present — process gestures
-        return self._process_action_hand(right_hand, now, is_grace)
+        # Cursor hand present but action hand absent: just MOVE.
+        if action_hand is None:
+            self._state = GestureType.MOVE
+            self._dragging = False
+            return self._make_result(GestureType.MOVE, 0)
+
+        # Process gestures from left action hand.
+        return self._process_action_hand(action_hand, now, is_grace)
 
     # =====================================================================
     # SINGLE-HAND MODE (legacy compat) — one hand does cursor + actions
@@ -2632,7 +2522,20 @@ class GestureDetector:
         except (IndexError, TypeError):
             return self._make_result(GestureType.PAUSE, 0)
 
-        li, ri, pm = self._pinch_ratios(xy, self._hand_scale)
+        li_raw, ri_raw, pm_raw = self._pinch_ratios(xy, self._hand_scale)
+        pinch_alpha = 0.42 if confidence < 0.6 else 0.55
+        if self._li_ema is None:
+            self._li_ema = li_raw
+            self._ri_ema = ri_raw
+            self._pm_ema = pm_raw
+        else:
+            self._li_ema = ema_step(self._li_ema, li_raw, pinch_alpha)
+            self._ri_ema = ema_step(self._ri_ema, ri_raw, pinch_alpha)
+            self._pm_ema = ema_step(self._pm_ema, pm_raw, pinch_alpha)
+
+        li = float(self._li_ema)
+        ri = float(self._ri_ema)
+        pm = float(self._pm_ema)
         enter = float(self._pinch_enter)
         exit_ = float(self._pinch_exit)
 
@@ -2642,27 +2545,59 @@ class GestureDetector:
             if li > exit_:
                 self._left_pinch_active = False
                 self._left_click_release_time = now
-        elif li <= enter:
+                self._left_click_emitted_this_hold = False
+        elif li <= (enter * 0.94):
             self._left_pinch_active = True
+            self._left_click_emitted_this_hold = False
 
         # --- Right pinch (thumb+middle) = right-click ---
         # Requires: index finger clearly open (li > exit_),
         # middle+thumb close, held for _right_click_hold_s
-        right_enter = enter * 0.50
+        right_enter = enter * 0.88
         if self._right_pinch_active:
             if ri > exit_:
                 self._right_pinch_active = False
                 self._right_pinch_start_t = None
-        elif ri <= right_enter and li > exit_ and pm > 0.20:
+                self._right_click_emitted_this_hold = False
+        elif (
+            not self._left_pinch_active
+            and ri <= right_enter
+            and li > (enter * 0.90)
+            and pm > 0.14
+        ):
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
             elif now - self._right_pinch_start_t >= self._right_click_hold_s:
                 self._right_pinch_active = True
+                self._right_click_emitted_this_hold = False
         else:
             self._right_pinch_start_t = None
 
-        # --- Peace sign (index+middle spread) = scroll ---
-        peace_pose = (pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_)
+        # --- Scroll pose: index+middle raised together, vertically oriented ---
+        idx_tip = xy[8]; idx_pip = xy[6]
+        mid_tip = xy[12]; mid_pip = xy[10]
+        wrist = xy[0]
+        idx_tip_dist = pinch_dist_2d(float(idx_tip[0]), float(idx_tip[1]), float(wrist[0]), float(wrist[1]))
+        idx_pip_dist = pinch_dist_2d(float(idx_pip[0]), float(idx_pip[1]), float(wrist[0]), float(wrist[1]))
+        mid_tip_dist = pinch_dist_2d(float(mid_tip[0]), float(mid_tip[1]), float(wrist[0]), float(wrist[1]))
+        mid_pip_dist = pinch_dist_2d(float(mid_pip[0]), float(mid_pip[1]), float(wrist[0]), float(wrist[1]))
+        extend_margin = max(4.0, self._hand_scale * 0.05)
+        fingers_extended = (
+            idx_tip_dist > (idx_pip_dist + extend_margin)
+            and mid_tip_dist > (mid_pip_dist + extend_margin)
+        )
+        fingers_together = pm <= 0.50
+        aligned_vertical = (
+            abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.22)
+            and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.26)
+        )
+        scroll_pose = (
+            fingers_extended
+            and fingers_together
+            and aligned_vertical
+            and li > exit_
+            and ri > exit_
+        )
 
         # --- Track pinch duration for drag ---
         if self._left_pinch_active:
@@ -2682,7 +2617,7 @@ class GestureDetector:
                 raw_state = GestureType.LEFT_CLICK
         elif self._right_pinch_active:
             raw_state = GestureType.RIGHT_CLICK
-        elif peace_pose:
+        elif scroll_pose:
             raw_state = GestureType.SCROLL
 
         # --- Stability filter ---
@@ -2706,7 +2641,7 @@ class GestureDetector:
 
         # --- Emit actions ---
         if stable_state == GestureType.LEFT_CLICK:
-            if self._check_action_cooldown(GestureType.LEFT_CLICK, now):
+            if (not self._left_click_emitted_this_hold) and self._check_action_cooldown(GestureType.LEFT_CLICK, now):
                 # Double-click detection
                 if (self._left_click_release_time > 0.0
                     and 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s
@@ -2714,20 +2649,23 @@ class GestureDetector:
                     self._state = GestureType.DOUBLE_CLICK
                     self._record_action(GestureType.DOUBLE_CLICK, now)
                     self._record_action(GestureType.LEFT_CLICK, now)
+                    self._left_click_emitted_this_hold = True
                     self._dragging = False
                     return self._make_result(GestureType.DOUBLE_CLICK, 0)
 
                 self._state = GestureType.LEFT_CLICK
                 self._record_action(GestureType.LEFT_CLICK, now)
+                self._left_click_emitted_this_hold = True
                 self._dragging = False
                 return self._make_result(GestureType.LEFT_CLICK, 0)
             self._state = GestureType.MOVE
             return self._make_result(GestureType.MOVE, 0)
 
         if stable_state == GestureType.RIGHT_CLICK:
-            if self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
+            if (not self._right_click_emitted_this_hold) and self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
                 self._state = GestureType.RIGHT_CLICK
                 self._record_action(GestureType.RIGHT_CLICK, now)
+                self._right_click_emitted_this_hold = True
                 self._dragging = False
                 return self._make_result(GestureType.RIGHT_CLICK, 0)
             self._state = GestureType.MOVE
@@ -2757,6 +2695,11 @@ class GestureDetector:
         self._left_pinch_active = False
         self._right_pinch_active = False
         self._left_pinch_since = None
+        self._left_click_emitted_this_hold = False
+        self._right_click_emitted_this_hold = False
+        self._li_ema = None
+        self._ri_ema = None
+        self._pm_ema = None
         self._right_pinch_start_t = None
         self._clear_scroll()
 
@@ -2764,17 +2707,27 @@ class GestureDetector:
 from __future__ import annotations
 
 import os
+import sys
 from collections import deque
 
 import cv2
+
+os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("MEDIAPIPE_DISABLE_GPU", "1")
+
+try:
+    from absl import logging as _absl_logging  # type: ignore
+    _absl_logging.set_verbosity(_absl_logging.ERROR)
+    _absl_logging.set_stderrthreshold("error")
+except Exception:
+    pass
 
 try:
     import mediapipe as mp
 except Exception:
     mp = None
-
-os.environ.setdefault("GLOG_minloglevel", "2")
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 from .utils import _ensure_mediapipe_solutions
 
@@ -2798,17 +2751,54 @@ class HandTracker:
         self._draw_utils = mp.solutions.drawing_utils
         self._draw_styles = mp.solutions.drawing_styles
 
-        self._hands = self._mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            model_complexity=0,
-            min_detection_confidence=0.50,
-            min_tracking_confidence=0.30,
-        )
+        self._hands = self._create_hands_model()
+        self._prev_xy_by_label: dict[str, list[tuple[int, int]]] = {}
 
         self._frames_no_hand = 0
         self._grace_frames = 3
+        self._edge_grace_frames = 7
+        self._edge_ratio = 0.08
+        self._last_valid_near_edge = False
         self._last_valid_result: tuple[dict, list] | None = None
+
+    def _create_hands_model(self):
+        """Build Hands model with temporary native stderr suppression to prevent startup spam."""
+        stderr_fd = None
+        saved_stderr_fd = None
+        devnull = None
+        try:
+            stderr_fd = sys.stderr.fileno()
+            saved_stderr_fd = os.dup(stderr_fd)
+            devnull = open(os.devnull, "w", encoding="utf-8", errors="ignore")
+            os.dup2(devnull.fileno(), stderr_fd)
+        except Exception:
+            stderr_fd = None
+            saved_stderr_fd = None
+
+        try:
+            return self._mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=2,
+                model_complexity=1,
+                min_detection_confidence=0.55,
+                min_tracking_confidence=0.45,
+            )
+        finally:
+            try:
+                if stderr_fd is not None and saved_stderr_fd is not None:
+                    os.dup2(saved_stderr_fd, stderr_fd)
+            except Exception:
+                pass
+            try:
+                if saved_stderr_fd is not None:
+                    os.close(saved_stderr_fd)
+            except Exception:
+                pass
+            try:
+                if devnull is not None:
+                    devnull.close()
+            except Exception:
+                pass
 
     def set_processing_size(self, size: tuple[int, int] | None) -> None:
         if size is None:
@@ -2837,6 +2827,9 @@ class HandTracker:
         if result.multi_hand_landmarks and result.multi_handedness:
             sx = float(src_w) / max(1, dw)
             sy = float(src_h) / max(1, dh)
+            edge_margin_x = dw * self._edge_ratio
+            edge_margin_y = dh * self._edge_ratio
+            detected_near_edge = False
 
             for idx, hand in enumerate(result.multi_hand_landmarks):
                 if idx >= len(result.multi_handedness):
@@ -2852,6 +2845,26 @@ class HandTracker:
                       for lm in hand.landmark]
                 z = [float(lm.z) for lm in hand.landmark]
 
+                prev_xy = self._prev_xy_by_label.get(label)
+                if prev_xy is not None and len(prev_xy) == len(xy):
+                    # Adaptive EMA: stronger smoothing to reduce shake while preserving fingertip response.
+                    blend = 0.48 if conf >= 0.78 else (0.42 if conf >= 0.60 else 0.36)
+                    smoothed_xy: list[tuple[int, int]] = []
+                    for i, (cx, cy) in enumerate(xy):
+                        px, py = prev_xy[i]
+                        sx_i = int(px + (cx - px) * blend)
+                        sy_i = int(py + (cy - py) * blend)
+                        smoothed_xy.append((sx_i, sy_i))
+                    xy = smoothed_xy
+
+                # Keep rendered skeleton consistent with smoothed points.
+                try:
+                    for i, (sx_i, sy_i) in enumerate(xy):
+                        hand.landmark[i].x = max(0.0, min(1.0, float(sx_i) / max(1.0, float(src_w))))
+                        hand.landmark[i].y = max(0.0, min(1.0, float(sy_i) / max(1.0, float(src_h))))
+                except Exception:
+                    pass
+
                 # If we already have this label, keep the higher-confidence one
                 if label in hands_dict:
                     if conf <= hands_dict[label]["confidence"]:
@@ -2864,7 +2877,20 @@ class HandTracker:
                     "confidence": conf,
                     "frame_size": (dw, dh),
                 }
+                self._prev_xy_by_label[label] = list(xy)
                 protos.append((hand, label))
+
+                # Track whether a hand is near camera borders where detections can flap.
+                near_edge = any(
+                    lm.x * dw <= edge_margin_x
+                    or lm.x * dw >= (dw - edge_margin_x)
+                    or lm.y * dh <= edge_margin_y
+                    or lm.y * dh >= (dh - edge_margin_y)
+                    for lm in hand.landmark
+                )
+                detected_near_edge = detected_near_edge or near_edge
+
+            self._last_valid_near_edge = detected_near_edge
 
         if hands_dict:
             self._frames_no_hand = 0
@@ -2872,11 +2898,14 @@ class HandTracker:
             return hands_dict, protos, False
         else:
             self._frames_no_hand += 1
-            if (self._frames_no_hand < self._grace_frames
+            grace_frames = self._edge_grace_frames if self._last_valid_near_edge else self._grace_frames
+            if (self._frames_no_hand < grace_frames
                     and self._last_valid_result is not None):
                 cached_dict, cached_protos = self._last_valid_result
                 return cached_dict, cached_protos, True
+            self._last_valid_near_edge = False
             self._last_valid_result = None
+            self._prev_xy_by_label.clear()
             return {}, [], False
 
     def draw(self, frame_rgb, hand_protos, label: str = "Right") -> None:
@@ -2922,13 +2951,14 @@ import ctypes
 import platform
 import threading
 import time
+from pathlib import Path
 from typing import Any, cast
 
 import cv2  # type: ignore
 
 import qtawesome as qta  # type: ignore
-from PySide6.QtCore import QMetaObject, QSize, Signal, Slot, Qt, QTimer  # type: ignore
-from PySide6.QtGui import QAction, QImage, QPixmap  # type: ignore
+from PySide6.QtCore import QEvent, QMetaObject, QSize, Signal, Slot, Qt, QTimer  # type: ignore
+from PySide6.QtGui import QAction, QIcon, QImage, QPixmap  # type: ignore
 from PySide6.QtWidgets import (  # type: ignore
     QApplication,
     QCheckBox,
@@ -2941,12 +2971,12 @@ from PySide6.QtWidgets import (  # type: ignore
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
     QSystemTrayIcon,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -2954,8 +2984,6 @@ from PySide6.QtWidgets import (  # type: ignore
 from .camera_thread import CameraDevice, CameraThread  # type: ignore
 from .constants import _OVERLAY_LABELS  # type: ignore
 from .cursor_mapper import CursorMapper  # type: ignore
-from .eye_tracker import EyeTracker  # type: ignore
-from .face_tracker import FaceTracker  # type: ignore
 from .gesture_detector import GestureDetector  # type: ignore
 from .hand_tracker import HandTracker  # type: ignore
 from .models import GestureResult, GestureType  # type: ignore
@@ -3004,21 +3032,23 @@ class StatusOverlay(QWidget):
         super().__init__(None)  # type: ignore
         self._icons = icons
         self.setWindowTitle("Windows Hover Status")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setWindowFlags(
             Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setFixedSize(280, 130)
+        self.setFixedSize(320, 150)
         self._drag_pos = None
+        self._was_dragged = False
         self._last_badge_gesture: GestureType = GestureType.NONE
 
         root = QFrame(self)
         root.setObjectName("overlayRoot")
-        root.setGeometry(0, 0, 280, 130)
+        root.setGeometry(0, 0, 320, 150)
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(10)
 
         top = QHBoxLayout()
         self._dot = QLabel("●")
@@ -3060,27 +3090,33 @@ class StatusOverlay(QWidget):
         self.setStyleSheet(
             """
             * { font-family: "Segoe UI Variable Display", "Segoe UI", "Inter", sans-serif; }
-            #overlayRoot { background: rgba(9, 9, 11, 0.95); border: 1px solid rgba(34, 211, 238, 0.1); border-radius: 16px; backdrop-filter: blur(20px); }
+            #overlayRoot {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 rgba(8, 12, 20, 188), stop:1 rgba(10, 16, 28, 172));
+                border: 1px solid rgba(34, 211, 238, 0.30);
+                border-radius: 18px;
+            }
             QLabel { color: #F1F5F9; font-size: 13px; font-weight: 600; }
-            #overlayTitle { font-size: 15px; font-weight: 800; letter-spacing: 0.5px; }
+            #overlayTitle { font-size: 16px; font-weight: 900; letter-spacing: 0.7px; }
             #muted { color: #8B97B0; }
-            #statusOnline { color: #00F0FF; font-size: 18px; }
+            #statusOnline { color: #22D3EE; font-size: 18px; }
             #badge {
-                border-radius: 10px; padding: 6px 14px; font-weight: 700;
-                background: rgba(15, 18, 25, 0.8); color: #E2E8F0; 
+                border-radius: 11px; padding: 7px 14px; font-weight: 800;
+                background: rgba(15, 18, 25, 0.78); color: #E2E8F0;
                 text-transform: uppercase; letter-spacing: 1.5px;
-                border: 1px solid rgba(39, 39, 42, 0.4);
+                border: 1px solid rgba(34, 211, 238, 0.20);
                 font-size: 12px;
             }
             QPushButton {
                 border: 0; border-radius: 12px; color: #021820;
-                padding: 8px 12px; font-weight: 700; background: #00F0FF;
+                padding: 8px 12px; font-weight: 800;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #22D3EE, stop:1 #67E8F9);
             }
-            QPushButton:hover { background: #00F0FF; border: 1px solid #00F0FF; }
-            #ghostButton { background: #27272A; color: #F1F5F9; }
-            #ghostButton:hover { background: #18181B; }
+            QPushButton:hover { border: 1px solid rgba(103, 232, 249, 0.85); }
+            #ghostButton { background: rgba(39, 39, 42, 0.9); color: #F1F5F9; }
+            #ghostButton:hover { background: rgba(24, 24, 27, 0.96); }
             #redButton { background: #F87171; color: #1A0505; }
-            #redButton:hover { background: #F87171; border: 1px solid #F87171; }
+            #redButton:hover { border: 1px solid rgba(252, 165, 165, 0.95); }
             """
         )
 
@@ -3104,10 +3140,14 @@ class StatusOverlay(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         if self._drag_pos and event.buttons() == Qt.MouseButton.LeftButton:
+            self._was_dragged = True
             self.move(event.globalPosition().toPoint() - self._drag_pos)
 
     def mouseReleaseEvent(self, event) -> None:
         self._drag_pos = None
+
+    def was_dragged(self) -> bool:
+        return self._was_dragged
 
 
 class SettingsDialog(QDialog):
@@ -3116,17 +3156,17 @@ class SettingsDialog(QDialog):
         self._mw = parent
         self.setWindowTitle("Settings")
         self.setModal(True)
-        self.resize(560, 520)
+        self.resize(640, 700)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 14)
-        root.setSpacing(12)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(14)
 
         title_row = QHBoxLayout()
         title_icon = QLabel()
-        title_icon.setFixedSize(24, 24)
+        title_icon.setFixedSize(26, 26)
         title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_icon.setPixmap(self._mw.icons["settings"].pixmap(QSize(18, 18)))
+        title_icon.setPixmap(self._mw.icons["settings"].pixmap(QSize(20, 20)))
         title = QLabel("Settings")
         title.setObjectName("title")
         title_row.addWidget(title_icon)
@@ -3134,12 +3174,21 @@ class SettingsDialog(QDialog):
         title_row.addStretch(1)
         root.addLayout(title_row)
 
-        tabs = QTabWidget()
-        root.addWidget(tabs, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        root.addWidget(scroll, 1)
 
-        camera_tab = QWidget()
-        camera_layout = QVBoxLayout(camera_tab)
-        camera_layout.setContentsMargins(10, 10, 10, 10)
+        content = QWidget()
+        body = QVBoxLayout(content)
+        body.setContentsMargins(8, 8, 8, 8)
+        body.setSpacing(10)
+        scroll.setWidget(content)
+
+        camera_box = QFrame()
+        camera_box.setObjectName("sectionBox")
+        camera_layout = QVBoxLayout(camera_box)
+        camera_layout.setContentsMargins(14, 14, 14, 14)
         camera_layout.setSpacing(10)
 
         cam_label = QLabel("Camera")
@@ -3155,6 +3204,10 @@ class SettingsDialog(QDialog):
         self.auto_start_chk.setChecked(bool(settings.get("auto_start_camera", False)))
         self.minimize_to_tray_chk = QCheckBox("Minimize to tray on close")
         self.minimize_to_tray_chk.setChecked(bool(settings.get("minimize_to_tray", False)))
+        self.mouse_start_chk = QCheckBox("Enable mouse on startup")
+        self.mouse_start_chk.setChecked(bool(settings.get("mouse_on_startup", False)))
+        self.maximized_chk = QCheckBox("Launch app maximized")
+        self.maximized_chk.setChecked(bool(settings.get("start_maximized", True)))
         self.mirror_chk = QCheckBox("Mirror camera feed")
         self.mirror_chk.setChecked(bool(settings.get("mirror_camera", True)))
         self.region_chk = QCheckBox("Show control region box")
@@ -3164,13 +3217,17 @@ class SettingsDialog(QDialog):
         camera_layout.addWidget(self.camera_combo)
         camera_layout.addWidget(self.auto_start_chk)
         camera_layout.addWidget(self.minimize_to_tray_chk)
+        camera_layout.addWidget(self.mouse_start_chk)
+        camera_layout.addWidget(self.maximized_chk)
         camera_layout.addWidget(self.mirror_chk)
         camera_layout.addWidget(self.region_chk)
-        camera_layout.addStretch(1)
+        body.addWidget(camera_box)
+        body.addSpacing(20)
 
-        cursor_tab = QWidget()
-        cursor_layout = QVBoxLayout(cursor_tab)
-        cursor_layout.setContentsMargins(10, 10, 10, 10)
+        cursor_box = QFrame()
+        cursor_box.setObjectName("sectionBox")
+        cursor_layout = QVBoxLayout(cursor_box)
+        cursor_layout.setContentsMargins(14, 14, 14, 14)
         cursor_layout.setSpacing(10)
 
         cursor_title = QLabel("Cursor")
@@ -3191,11 +3248,13 @@ class SettingsDialog(QDialog):
         cursor_layout.addWidget(self.smooth_slider)
         cursor_layout.addWidget(self.margin_lbl)
         cursor_layout.addWidget(self.margin_slider)
-        cursor_layout.addStretch(1)
+        body.addWidget(cursor_box)
+        body.addSpacing(20)
 
-        gesture_tab = QWidget()
-        gesture_layout = QVBoxLayout(gesture_tab)
-        gesture_layout.setContentsMargins(10, 10, 10, 10)
+        gesture_box = QFrame()
+        gesture_box.setObjectName("sectionBox")
+        gesture_layout = QVBoxLayout(gesture_box)
+        gesture_layout.setContentsMargins(14, 14, 14, 14)
         gesture_layout.setSpacing(10)
 
         gesture_title = QLabel("Gestures")
@@ -3215,6 +3274,8 @@ class SettingsDialog(QDialog):
         self.hold_slider.setRange(50, 500)
         self.hold_slider.setValue(int(_as_float(settings.get("confirm_hold_s", 0.06), self._mw.gestures._confirm_hold_s) * 1000))
         self.hold_lbl.setText(f"Hold Time: {self._mw.gestures._confirm_hold_s:.2f}s")
+        self.swap_dual_roles_chk = QCheckBox("Swap dual-hand roles (Left cursor, Right gestures)")
+        self.swap_dual_roles_chk.setChecked(not bool(settings.get("dual_right_cursor", True)))
         gesture_layout.addWidget(gesture_title)
         gesture_layout.addWidget(self.scroll_lbl)
         gesture_layout.addWidget(self.scroll_slider)
@@ -3222,77 +3283,53 @@ class SettingsDialog(QDialog):
         gesture_layout.addWidget(self.pinch_slider)
         gesture_layout.addWidget(self.hold_lbl)
         gesture_layout.addWidget(self.hold_slider)
-        cursor_mode_label = QLabel("Cursor Control Mode")
-        cursor_mode_label.setObjectName("section")
-        self.cursor_mode_combo = QComboBox()
-        self.cursor_mode_combo.addItem("Dual Hand (Left=Cursor, Right=Actions)", "dual_hand")
-        self.cursor_mode_combo.addItem("Single Hand (same hand)", "single_hand")
-        self.cursor_mode_combo.addItem("Eye Tracking (experimental)", "eye_tracking")
-        current_mode = str(settings.get("cursor_mode", "dual_hand"))
-        idx = self.cursor_mode_combo.findData(current_mode)
-        if idx >= 0:
-            self.cursor_mode_combo.setCurrentIndex(idx)
-        gesture_layout.addWidget(cursor_mode_label)
-        gesture_layout.addWidget(self.cursor_mode_combo)
-        self.mode_lock_lbl = QLabel("")
-        self.mode_lock_lbl.setObjectName("muted")
-        self.mode_lock_lbl.setWordWrap(True)
-        gesture_layout.addWidget(self.mode_lock_lbl)
-        gesture_layout.addStretch(1)
+        gesture_layout.addWidget(self.swap_dual_roles_chk)
+        eye_coming = QLabel("Eye Tracking: Coming Soon")
+        eye_coming.setObjectName("muted")
+        gesture_layout.addWidget(eye_coming)
+        body.addWidget(gesture_box)
+        body.addSpacing(20)
 
-        perf_tab = QWidget()
-        perf_layout = QVBoxLayout(perf_tab)
-        perf_layout.setContentsMargins(10, 10, 10, 10)
+        perf_box = QFrame()
+        perf_box.setObjectName("sectionBox")
+        perf_layout = QVBoxLayout(perf_box)
+        perf_layout.setContentsMargins(14, 14, 14, 14)
         perf_layout.setSpacing(10)
 
-        perf_title = QLabel("Performance / Debug")
+        perf_title = QLabel("Debug")
         perf_title.setObjectName("section")
-        self.performance_chk = QCheckBox("Performance mode (320x240 processing)")
-        self.performance_chk.setChecked(bool(settings.get("performance_mode", False)))
-        self.debug_chk = QCheckBox("Show debug skeleton")
-        self.debug_chk.setChecked(bool(settings.get("debug_overlay", False)))
+        self.debug_chk = QCheckBox("Show hand skeleton")
+        self.debug_chk.setChecked(bool(settings.get("debug_overlay", True)))
 
         perf_layout.addWidget(perf_title)
-        perf_layout.addWidget(self.performance_chk)
         perf_layout.addWidget(self.debug_chk)
-        perf_layout.addStretch(1)
-
-        tabs.addTab(camera_tab, "Camera")
-        tabs.addTab(cursor_tab, "Cursor")
-        tabs.addTab(gesture_tab, "Gestures")
-        tabs.addTab(perf_tab, "Performance")
+        body.addWidget(perf_box)
+        body.addStretch(1)
 
         footer = QHBoxLayout()
-        about_btn = QPushButton("About")
+        about_btn = QPushButton("README")
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.setObjectName("warnButton")
         apply_btn = QPushButton("Apply")
+        apply_btn.setObjectName("primaryButton")
         close_btn = QPushButton("Close")
         close_btn.setObjectName("ghostButton")
         footer.addWidget(about_btn)
+        footer.addWidget(reset_btn)
         footer.addStretch(1)
         footer.addWidget(apply_btn)
         footer.addWidget(close_btn)
         root.addLayout(footer)
 
-        self.camera_combo.activated.connect(self._on_camera_changed)
-        self.auto_start_chk.stateChanged.connect(self._on_auto_start_changed)
-        self.minimize_to_tray_chk.stateChanged.connect(self._on_minimize_to_tray_changed)
-        self.mirror_chk.stateChanged.connect(self._on_mirror_changed)
-        self.region_chk.stateChanged.connect(self._on_region_changed)
         self.smooth_slider.valueChanged.connect(self._on_smooth_changed)
         self.margin_slider.valueChanged.connect(self._on_margin_changed)
         self.scroll_slider.valueChanged.connect(self._on_scroll_changed)
         self.pinch_slider.valueChanged.connect(self._on_pinch_changed)
         self.hold_slider.valueChanged.connect(self._on_hold_changed)
-        self.cursor_mode_combo.currentIndexChanged.connect(self._on_cursor_mode_changed)
-        self.performance_chk.stateChanged.connect(self._on_performance_toggled)
-        self.debug_chk.stateChanged.connect(self._on_debug_changed)
         about_btn.clicked.connect(self._show_about)
-        apply_btn.clicked.connect(self._apply_performance)
-        close_btn.clicked.connect(self.accept)
-
-        self._mode_lock_timer = QTimer(self)
-        self._mode_lock_timer.timeout.connect(self._tick_mode_lock)
-        self._tick_mode_lock()
+        reset_btn.clicked.connect(self._reset_to_defaults)
+        apply_btn.clicked.connect(self._apply_changes)
+        close_btn.clicked.connect(self.reject)
 
         self.setStyleSheet(
             """
@@ -3301,16 +3338,22 @@ class SettingsDialog(QDialog):
             }
             QDialog { background: #18181B; color: #F1F5F9; border: 1px solid #27272A; border-radius: 16px; }
             QLabel { color: #F1F5F9; font-size: 13px; font-weight: 500; }
-            #title { font-size: 20px; font-weight: 800; color: #F1F5F9; letter-spacing: 1px;}
-            #section { font-size: 13px; color: #8B97B0; font-weight: 800; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 1px;}
-            
-            QTabWidget::pane { border: none; border-top: 1px solid #27272A; margin-top: -1px; }
-            QTabBar::tab {
-                background: transparent; color: #8B97B0; padding: 12px 20px;
-                border: none; font-weight: 700; font-size: 14px;
+            #title { font-size: 22px; font-weight: 900; color: #F1F5F9; letter-spacing: 0.8px; }
+            #section { font-size: 15px; color: #8B97B0; font-weight: 800; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 1.2px; }
+            #sectionBox {
+                background: rgba(15, 18, 25, 0.45);
+                border: 1px solid rgba(39, 39, 42, 0.45);
+                border-radius: 12px;
             }
-            QTabBar::tab:selected { color: #00F0FF; border-bottom: 2px solid #00F0FF; }
-            QTabBar::tab:hover { color: #F1F5F9; }
+            #muted {
+                color: #94A3B8;
+                font-size: 12px;
+            }
+            QScrollArea { background: transparent; border: none; }
+            QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
+            QScrollBar::handle:vertical { background: #3F3F46; border-radius: 4px; min-height: 24px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
             
             QComboBox {
                 background: #18181B; border: 1px solid #27272A; border-radius: 8px; padding: 10px; color: #F1F5F9; font-weight: 600;
@@ -3332,12 +3375,22 @@ class SettingsDialog(QDialog):
             
             QPushButton {
                 border: none; border-radius: 12px; padding: 10px 20px;
-                color: #021820; font-weight: 700; font-size: 13px; 
+                color: #E2E8F0; font-weight: 700; font-size: 13px; 
+                background: #27272A;
+            }
+            QPushButton:hover { background: #3F3F46; }
+            #primaryButton {
+                color: #021820;
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0891B2, stop:1 #22D3EE);
             }
-            QPushButton:hover { 
+            #primaryButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #22D3EE, stop:1 #67E8F9);
             }
+            #warnButton {
+                color: #1A0505;
+                background: #F59E0B;
+            }
+            #warnButton:hover { background: #FBBF24; }
             #ghostButton { background: transparent; color: #8B97B0; }
             #ghostButton:hover { background: rgba(30, 37, 53, 0.5); color: #F1F5F9; }
             
@@ -3357,127 +3410,121 @@ class SettingsDialog(QDialog):
             """
         )
 
-    def _on_camera_changed(self, idx: int) -> None:
-        camera_index = self.camera_combo.itemData(idx)
-        if camera_index is None:
-            return
-        self._mw._on_camera_selected(camera_index)
-
-    def _on_auto_start_changed(self, state: int) -> None:
-        settings.set("auto_start_camera", bool(state))
-
-    def _on_minimize_to_tray_changed(self, state: int) -> None:
-        settings.set("minimize_to_tray", bool(state))
-
-    def _on_mirror_changed(self, state: int) -> None:
-        value = bool(state)
-        self._mw._mirror_camera = value
-        settings.set("mirror_camera", value)
-
-    def _on_region_changed(self, state: int) -> None:
-        value = bool(state)
-        self._mw._show_control_region = value
-        settings.set("show_control_region", value)
+        self._on_smooth_changed(self.smooth_slider.value())
+        self._on_margin_changed(self.margin_slider.value())
+        self._on_scroll_changed(self.scroll_slider.value())
+        self._on_pinch_changed(self.pinch_slider.value())
+        self._on_hold_changed(self.hold_slider.value())
 
     def _on_smooth_changed(self, value: int) -> None:
         smooth = value / 10.0
-        self._mw.mapper.set_smoothening(smooth)
         self.smooth_lbl.setText(f"Smoothening: {smooth:.1f}")
-        settings.set("smoothening", smooth)
 
     def _on_margin_changed(self, value: int) -> None:
-        self._mw._set_control_margin(int(value))
-        self.margin_slider.setValue(self._mw.mapper.frame_r)
-        self.margin_lbl.setText(f"Head/Hand Range: {self._mw.mapper.frame_r}")
+        max_margin = max(40, self._mw.mapper.max_effective_margin_px())
+        clamped = max(40, min(int(value), max_margin))
+        if self.margin_slider.value() != clamped:
+            self.margin_slider.setValue(clamped)
+            return
+        self.margin_lbl.setText(f"Head/Hand Range: {clamped}")
 
     def _on_scroll_changed(self, value: int) -> None:
         mult = value / 10.0
-        self._mw._scroll_multiplier = mult
         self.scroll_lbl.setText(f"Scroll speed: {mult:.1f}x")
-        settings.set("scroll_multiplier", mult)
 
     def _on_pinch_changed(self, value: int) -> None:
         pinch = value / 100.0
-        self._mw.gestures._pinch_enter = pinch
-        self._mw.gestures._pinch_exit = max(pinch + 0.05, self._mw.gestures._pinch_exit)
         self.pinch_lbl.setText(f"Pinch sensitivity: {pinch:.2f}")
-        settings.set("pinch_sensitivity", pinch)
-        settings.set("pinch_exit_sensitivity", self._mw.gestures._pinch_exit)
 
     def _on_hold_changed(self, value: int) -> None:
         hold_s = value / 1000.0
-        self._mw.gestures._confirm_hold_s = hold_s
         self.hold_lbl.setText(f"Hold Time: {hold_s:.2f}s")
-        settings.set("confirm_hold_s", hold_s)
 
-    def _on_cursor_mode_changed(self, idx: int) -> None:
-        mode = self.cursor_mode_combo.itemData(idx)
-        if mode:
-            self._mw._mode_lock_until = time.monotonic() + 300.0
-            settings.set("cursor_mode", str(mode))
+    def _collect_settings(self) -> dict[str, object]:
+        cam_data = self.camera_combo.currentData()
+        if cam_data is None:
+            cam_data = _as_int(settings.get("camera_index", 0), 0)
+        pinch_enter = self.pinch_slider.value() / 100.0
+        return {
+            "camera_index": int(cam_data),
+            "auto_start_camera": bool(self.auto_start_chk.isChecked()),
+            "minimize_to_tray": bool(self.minimize_to_tray_chk.isChecked()),
+            "mouse_on_startup": bool(self.mouse_start_chk.isChecked()),
+            "start_maximized": bool(self.maximized_chk.isChecked()),
+            "mirror_camera": bool(self.mirror_chk.isChecked()),
+            "show_control_region": bool(self.region_chk.isChecked()),
+            "smoothening": self.smooth_slider.value() / 10.0,
+            "frame_r": int(self.margin_slider.value()),
+            "scroll_multiplier": self.scroll_slider.value() / 10.0,
+            "pinch_sensitivity": pinch_enter,
+            "pinch_exit_sensitivity": pinch_enter + 0.08,
+            "confirm_hold_s": self.hold_slider.value() / 1000.0,
+            "dual_right_cursor": not bool(self.swap_dual_roles_chk.isChecked()),
+            "debug_overlay": bool(self.debug_chk.isChecked()),
+        }
 
-            self._mw._cursor_mode = str(mode)
-            self._mw._hand_only_mode = (str(mode) != "eye_tracking")
-            self._mw.mapper._hand_only_mode = self._mw._hand_only_mode
-            self._mw._sh_cursor_history.clear()
-            self._mw.mapper.reset()
-            self._mw._update_guide_rows()
+    def _reset_to_defaults(self) -> None:
+        d = settings.DEFAULTS
+        cam_idx = self.camera_combo.findData(_as_int(d.get("camera_index", 0), 0))
+        if cam_idx >= 0:
+            self.camera_combo.setCurrentIndex(cam_idx)
+        elif self.camera_combo.count() > 0:
+            self.camera_combo.setCurrentIndex(0)
 
-            self._tick_mode_lock()
-            if not self._mode_lock_timer.isActive():
-                self._mode_lock_timer.start(1000)
+        self.auto_start_chk.setChecked(bool(d.get("auto_start_camera", False)))
+        self.minimize_to_tray_chk.setChecked(bool(d.get("minimize_to_tray", False)))
+        self.mouse_start_chk.setChecked(bool(d.get("mouse_on_startup", False)))
+        self.maximized_chk.setChecked(bool(d.get("start_maximized", True)))
+        self.mirror_chk.setChecked(bool(d.get("mirror_camera", True)))
+        self.region_chk.setChecked(bool(d.get("show_control_region", True)))
+        self.smooth_slider.setValue(int(_as_float(d.get("smoothening", 4.8), 4.8) * 10))
+        self.margin_slider.setValue(int(_as_int(d.get("frame_r", 60), 60)))
+        self.scroll_slider.setValue(int(_as_float(d.get("scroll_multiplier", 1.0), 1.0) * 10))
+        self.pinch_slider.setValue(int(_as_float(d.get("pinch_sensitivity", 0.22), 0.22) * 100))
+        self.hold_slider.setValue(int(_as_float(d.get("confirm_hold_s", 0.03), 0.03) * 1000))
+        self.swap_dual_roles_chk.setChecked(not bool(d.get("dual_right_cursor", True)))
+        self.debug_chk.setChecked(bool(d.get("debug_overlay", True)))
 
-    def _tick_mode_lock(self) -> None:
-        rem = int(max(0.0, self._mw._mode_lock_until - time.monotonic()))
-        if rem <= 0:
-            self.cursor_mode_combo.setEnabled(True)
-            self.mode_lock_lbl.setText("")
-            if self._mode_lock_timer.isActive():
-                self._mode_lock_timer.stop()
-            return
-
-        if rem > 270:
-            self.cursor_mode_combo.setEnabled(False)
-            self.mode_lock_lbl.setText(
-                f"Mode locked for {rem}s. Override available in {rem - 270}s")
-        else:
-            self.cursor_mode_combo.setEnabled(True)
-            self.mode_lock_lbl.setText(f"Mode lock active: {rem}s remaining (override enabled)")
-
-    def _on_performance_toggled(self, state: int) -> None:
-        value = bool(state)
-        settings.set("performance_mode", value)
-        if self._mw.running:
-            QMessageBox.information(self, "Restart Required", "Camera will be recreated on Apply.")
-
-    def _on_debug_changed(self, state: int) -> None:
-        value = bool(state)
-        self._mw.debug = value
-        settings.set("debug_overlay", value)
-
-    def _apply_performance(self) -> None:
-        self._mw._apply_performance_mode(bool(self.performance_chk.isChecked()))
+    def _apply_changes(self) -> None:
+        self._mw.apply_settings(self._collect_settings())
+        self.accept()
 
     def _show_about(self) -> None:
-        QMessageBox.information(
-            self,
-            "About Holographic Touch",
-            "Holographic Touch v2.0\n\n"
-            "Hybrid Mode (default): Move head to aim  ·  Pinch to click\n"
-            "Hand-Only Mode: Index finger aims  ·  Pinch to click\n\n"
-            "Gestures: Left Click  ·  Right Click  ·  Double Click  ·  Drag  ·  Scroll\n"
-            "Toggle Hand-Only in Settings → Gestures tab\n"
-            "Hotkey: Ctrl+Shift+H to toggle mouse control",
-        )
+        readme_path = Path(__file__).resolve().parents[1] / "README.txt"
+        try:
+            text = readme_path.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            QMessageBox.warning(self, "README", f"Could not load README.txt\n\n{exc}")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("README")
+        dlg.resize(760, 560)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(14, 12, 14, 12)
+        head = QLabel("Project README")
+        head.setObjectName("title")
+        body = QPlainTextEdit()
+        body.setReadOnly(True)
+        body.setPlainText(text)
+        close_btn = QPushButton("Close")
+        close_btn.setObjectName("primaryButton")
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(head)
+        lay.addWidget(body, 1)
+        lay.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignRight)
+        dlg.exec()
 
 
 class MainWindow(QMainWindow):
     _camera_start_result = Signal(bool)
+    _cursor_mode_request = Signal(str)
     _CURSOR_GESTURES = frozenset({
         GestureType.MOVE, GestureType.LEFT_CLICK,
         GestureType.DOUBLE_CLICK, GestureType.RIGHT_CLICK,
         GestureType.DRAG, GestureType.SCROLL,
     })
+    _MODE_SWITCH_DELAY_S = 2.5
 
     def __init__(self) -> None:
         super().__init__()
@@ -3497,6 +3544,9 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Holographic Touch")
         self.setMinimumSize(960, 640)
+        self._app_icon = QIcon(str(Path(__file__).resolve().parents[1] / "assets" / "icons" / "holographic_touch.svg"))
+        if not self._app_icon.isNull():
+            self.setWindowIcon(self._app_icon)
 
         self.camera = CameraThread(640, 480)
         self.camera.camera_index = _as_int(settings.get("camera_index", 0), 0)
@@ -3508,21 +3558,8 @@ class MainWindow(QMainWindow):
             self.tracker = None
             self._mediapipe_error = str(exc)
 
-        # Face tracker for nose-tip cursor (hybrid mode)
-        try:
-            self.face_tracker: FaceTracker | None = FaceTracker()
-        except Exception:
-            self.face_tracker = None
-
-        # Eye tracker (experimental — enabled in settings)
-        self.eye_tracker: EyeTracker | None = None
-        self._cursor_mode: str = str(settings.get("cursor_mode", "dual_hand"))
-        if self._cursor_mode == "eye_tracking":
-            try:
-                gain = float(settings.get("eye_tracking_gain", 1.8))
-                self.eye_tracker = EyeTracker(gain=gain)
-            except Exception:
-                self.eye_tracker = None
+        saved_mode = str(settings.get("cursor_mode", "dual_hand"))
+        self._cursor_mode: str = saved_mode if saved_mode in {"dual_hand", "single_hand"} else "dual_hand"
 
         self.gestures = GestureDetector()
         self.mapper = CursorMapper(640, 480)
@@ -3547,9 +3584,9 @@ class MainWindow(QMainWindow):
             "media_prev": qta.icon("fa6s.backward", color="#8B97B0"),
         }
 
-        self._hand_only_mode: bool = self._cursor_mode != "eye_tracking"
+        self._hand_only_mode: bool = True
         self.mapper.set_camera_size(640, 480)
-        self.mapper.set_frame_margin(_as_int(settings.get("frame_r", 90), 90))
+        self.mapper.set_frame_margin(_as_int(settings.get("frame_r", 60), 60))
         self.mapper.set_smoothening(_as_float(settings.get("smoothening", 4.8), 4.8))
         self.mapper._hand_only_mode = self._hand_only_mode
         self.mapper.set_prediction_strength(
@@ -3560,12 +3597,15 @@ class MainWindow(QMainWindow):
         self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.08, _as_float(settings.get("pinch_exit_sensitivity", 0.45), 0.45))
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
         self._scroll_multiplier: float = _as_float(settings.get("scroll_multiplier", 1.0), 1.0)
+        self._dual_right_cursor: bool = _as_bool(settings.get("dual_right_cursor", True), True)
         self.debug = _as_bool(settings.get("debug_overlay", False), False)
         self._mirror_camera: bool = _as_bool(settings.get("mirror_camera", True), True)
         self._show_control_region: bool = _as_bool(settings.get("show_control_region", True), True)
 
         self.fps = 0.0
         self._fps_prev = time.monotonic()
+        self._fps_ui_last_ts = 0.0
+        self._fps_ui_value = 0.0
         self.running = False
         self.proc_thread: threading.Thread | None = None
         self.mouse_enabled = False
@@ -3596,21 +3636,20 @@ class MainWindow(QMainWindow):
         self._cursor_frozen = False
         self._frozen_sx: int = -1
         self._frozen_sy: int = -1
-        self._nose_pos: tuple[int, int] | None = None  # latest nose tip coords
-        self._scroll_nose_y: float | None = None        # nose Y anchor for scroll
-        self._face_lost_frames: int = 0
+        self._1hand_start: float | None = None
+        self._2hand_start: float | None = None
         self._freeze_on: set = {
             GestureType.LEFT_CLICK,
             GestureType.RIGHT_CLICK,
             GestureType.DOUBLE_CLICK,
         }
-        self._mode_lock_until: float = 0.0
         self._sh_cursor_history: list = []
         self._drag_progress: float = 0.0
         self._start_worker: threading.Thread | None = None
 
         self._build_ui()
         self._camera_start_result.connect(self._on_camera_start_done)
+        self._cursor_mode_request.connect(self.set_cursor_mode)
         self._setup_tray()
         self._start_hotkey_listener()
 
@@ -3618,9 +3657,13 @@ class MainWindow(QMainWindow):
         wy = _as_int(settings.get("window_y", -1), -1)
         ww = _as_int(settings.get("window_w", 1280), 1280)
         wh = _as_int(settings.get("window_h", 820), 820)
-        if wx >= 0 and wy >= 0:
-            self.move(wx, wy)
-        self.resize(ww, wh)
+        if _as_bool(settings.get("start_maximized", True), True):
+            self.resize(max(ww, 1280), max(wh, 820))
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+        else:
+            if wx >= 0 and wy >= 0:
+                self.move(wx, wy)
+            self.resize(ww, wh)
 
         self.cam_status.setText("Detecting cameras...")
         QTimer.singleShot(150, lambda: self._refresh_camera_cache(force=True))
@@ -3633,6 +3676,8 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._render)
         self.timer.start(20)
+        if _as_bool(settings.get("mouse_on_startup", False), False):
+            QTimer.singleShot(450, self._enable_mouse_on_startup)
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -3712,9 +3757,8 @@ class MainWindow(QMainWindow):
         self.mode_badge_lbl.setWordWrap(False)
 
         _mode_labels = {
-            "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
+            "dual_hand": f"Mode: Dual Hand ({'R=Cursor L=Actions' if self._dual_right_cursor else 'L=Cursor R=Actions'})",
             "single_hand": "Mode: Single Hand",
-            "eye_tracking": "Mode: Eye Tracking (experimental)",
         }
         self.mode_lbl = QLabel(_mode_labels.get(self._cursor_mode, "Mode: Dual Hand"))
         self.mode_lbl.setObjectName("secondary")
@@ -3766,13 +3810,15 @@ class MainWindow(QMainWindow):
         self._guide_action_col = 2
         self._guide_row_widgets: list[tuple] = []
 
+        cursor_hand = "Right" if self._dual_right_cursor else "Left"
+        action_hand = "Left" if self._dual_right_cursor else "Right"
         guide_rows_dual = [
-            ("move",        "Move cursor",   "Left hand index finger"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
+            ("move",        "Move cursor",   f"{cursor_hand} hand index finger"),
+            ("left_click",  "Left click",    f"{action_hand}: Thumb+Index pinch"),
+            ("double_click","Double click",  f"{action_hand}: Quick double pinch"),
+            ("drag",        "Drag",          f"{action_hand}: Hold pinch"),
+            ("right_click", "Right click",   f"{action_hand}: Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        f"{action_hand}: Peace sign up/down"),
         ]
         guide_rows_single = [
             ("move",        "Move cursor",   "Index finger up"),
@@ -3782,19 +3828,8 @@ class MainWindow(QMainWindow):
             ("right_click", "Right click",   "Thumb+Middle pinch"),
             ("scroll",      "Scroll",        "Peace sign up/down"),
         ]
-        guide_rows_eye = [
-            ("move",        "Move cursor",   "Look around (iris tracking)"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
-        ]
-
         if self._cursor_mode == "dual_hand":
             _rows = guide_rows_dual
-        elif self._cursor_mode == "eye_tracking":
-            _rows = guide_rows_eye
         else:
             _rows = guide_rows_single
         for i, (icon_key, action_desc, gesture_desc) in enumerate(_rows, start=1):
@@ -3956,21 +3991,25 @@ class MainWindow(QMainWindow):
             * {
                 font-family: "Segoe UI Variable Display", "Segoe UI", "Inter", sans-serif;
             }
-            QMainWindow { background: #09090B; color: #F1F5F9; }
+            QMainWindow {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #07090F, stop:1 #0B1220);
+                color: #F1F5F9;
+            }
             
             #headerCard {
-                background: rgba(15, 18, 25, 0.6);
-                border: 1px solid rgba(39, 39, 42, 0.5);
+                background: rgba(15, 18, 25, 0.72);
+                border: 1px solid rgba(34, 211, 238, 0.16);
                 border-radius: 14px;
             }
             #floatingDock {
-                background: rgba(15, 18, 25, 0.9);
-                border: 1px solid rgba(34, 211, 238, 0.12);
+                background: rgba(15, 18, 25, 0.94);
+                border: 1px solid rgba(34, 211, 238, 0.20);
                 border-radius: 26px;
             }
             #sideCard {
-                background: rgba(15, 18, 25, 0.4);
-                border: 1px solid rgba(39, 39, 42, 0.3);
+                background: rgba(15, 18, 25, 0.56);
+                border: 1px solid rgba(34, 211, 238, 0.10);
                 border-radius: 12px;
                 padding: 12px;
             }
@@ -3999,7 +4038,7 @@ class MainWindow(QMainWindow):
             #preview {
                 background: #0F1117; 
                 border-radius: 14px; 
-                border: 1px solid #1E1E24;
+                border: 1px solid rgba(34, 211, 238, 0.14);
                 color: #27272A; 
                 font-size: 16px;
                 font-weight: 700;
@@ -4017,7 +4056,7 @@ class MainWindow(QMainWindow):
             }
             
             #primaryText { color: #E2E8F0; font-size: 13px; font-weight: 600;}
-            #secondary { color: #94A3B8; font-size: 13px; font-weight: 500;}
+            #secondary { color: #D7E3F7; font-size: 13px; font-weight: 600;}
             #muted { color: #475569; font-size: 13px; font-weight: 500;}
             
             #badge {
@@ -4118,7 +4157,10 @@ class MainWindow(QMainWindow):
 
     def _setup_tray(self) -> None:
         tray = QSystemTrayIcon(self)
-        tray.setIcon(self.icons["enable_mouse"])
+        if not getattr(self, "_app_icon", QIcon()).isNull():
+            tray.setIcon(self._app_icon)
+        else:
+            tray.setIcon(self.icons["enable_mouse"])
         tray.setToolTip("Holographic Touch")
 
         tray_menu = QMenu()
@@ -4212,6 +4254,65 @@ class MainWindow(QMainWindow):
             self.cam_status.setText("Camera switch failed")
             self.preview.setText(detail)
 
+    def apply_settings(self, data: dict[str, object]) -> None:
+        index = _as_int(data.get("camera_index", self.camera.camera_index), self.camera.camera_index)
+        if index != self.camera.camera_index:
+            self._on_camera_selected(index)
+        else:
+            settings.set("camera_index", index)
+
+        auto_start = _as_bool(data.get("auto_start_camera", settings.get("auto_start_camera", False)), False)
+        minimize_to_tray = _as_bool(data.get("minimize_to_tray", settings.get("minimize_to_tray", False)), False)
+        mouse_on_startup = _as_bool(data.get("mouse_on_startup", settings.get("mouse_on_startup", False)), False)
+        start_maximized = _as_bool(data.get("start_maximized", settings.get("start_maximized", True)), True)
+        mirror = _as_bool(data.get("mirror_camera", self._mirror_camera), self._mirror_camera)
+        show_region = _as_bool(data.get("show_control_region", self._show_control_region), self._show_control_region)
+        smooth = _as_float(data.get("smoothening", self.mapper.smoothening), self.mapper.smoothening)
+        margin = _as_int(data.get("frame_r", self.mapper.frame_r), self.mapper.frame_r)
+        scroll_mult = _as_float(data.get("scroll_multiplier", self._scroll_multiplier), self._scroll_multiplier)
+        pinch_enter = _as_float(data.get("pinch_sensitivity", self.gestures._pinch_enter), self.gestures._pinch_enter)
+        pinch_exit = _as_float(data.get("pinch_exit_sensitivity", max(pinch_enter + 0.08, self.gestures._pinch_exit)), max(pinch_enter + 0.08, self.gestures._pinch_exit))
+        hold_s = _as_float(data.get("confirm_hold_s", self.gestures._confirm_hold_s), self.gestures._confirm_hold_s)
+        dual_right_cursor = _as_bool(data.get("dual_right_cursor", self._dual_right_cursor), self._dual_right_cursor)
+        debug = _as_bool(data.get("debug_overlay", self.debug), self.debug)
+
+        self._mirror_camera = mirror
+        self._show_control_region = show_region
+        self.mapper.set_smoothening(smooth)
+        self._set_control_margin(margin)
+        self._scroll_multiplier = scroll_mult
+        self.gestures._pinch_enter = pinch_enter
+        self.gestures._pinch_exit = max(pinch_enter + 0.08, pinch_exit)
+        self.gestures._confirm_hold_s = hold_s
+        self._dual_right_cursor = dual_right_cursor
+        self.debug = debug
+
+        settings.set("auto_start_camera", auto_start)
+        settings.set("minimize_to_tray", minimize_to_tray)
+        settings.set("mouse_on_startup", mouse_on_startup)
+        settings.set("start_maximized", start_maximized)
+        settings.set("mirror_camera", mirror)
+        settings.set("show_control_region", show_region)
+        settings.set("smoothening", smooth)
+        settings.set("scroll_multiplier", scroll_mult)
+        settings.set("pinch_sensitivity", pinch_enter)
+        settings.set("pinch_exit_sensitivity", self.gestures._pinch_exit)
+        settings.set("confirm_hold_s", hold_s)
+        settings.set("dual_right_cursor", dual_right_cursor)
+        settings.set("debug_overlay", debug)
+        self._update_guide_rows()
+        self._sync_margin_controls()
+
+        if start_maximized:
+            self.showMaximized()
+        elif self.isMaximized():
+            self.showNormal()
+
+    @Slot()
+    def _enable_mouse_on_startup(self) -> None:
+        if not self.mouse_enabled:
+            self.toggle_mouse()
+
     def _launch_keyboard(self) -> None:
         now = time.monotonic()
         if now < self._kbd_lock_until:
@@ -4232,15 +4333,62 @@ class MainWindow(QMainWindow):
             self._region_slider.setValue(clamped)
         settings.set("frame_r", self.mapper.frame_r)
 
+    def _dual_cursor_point(self, hand_data: dict | None) -> tuple[int, int] | None:
+        if hand_data is None:
+            return None
+        xy = hand_data.get("xy", [])
+        if not xy or len(xy) < 10:
+            return None
+
+        wrist = xy[0]
+        mcp9 = xy[9]
+        hand_scale = max(
+            12.0,
+            ((float(wrist[0]) - float(mcp9[0])) ** 2 + (float(wrist[1]) - float(mcp9[1])) ** 2) ** 0.5,
+        )
+        extend_margin = max(5.0, hand_scale * 0.06)
+
+        for tip_idx, pip_idx in ((8, 6), (12, 10), (16, 14), (20, 18)):
+            if len(xy) <= tip_idx or len(xy) <= pip_idx:
+                continue
+            tip = xy[tip_idx]
+            pip = xy[pip_idx]
+            tip_dist = ((float(tip[0]) - float(wrist[0])) ** 2 + (float(tip[1]) - float(wrist[1])) ** 2) ** 0.5
+            pip_dist = ((float(pip[0]) - float(wrist[0])) ** 2 + (float(pip[1]) - float(wrist[1])) ** 2) ** 0.5
+            if tip_dist > (pip_dist + extend_margin):
+                return int(tip[0]), int(tip[1])
+
+        # Closed palm fallback keeps movement active without forcing an extended finger.
+        return int(mcp9[0]), int(mcp9[1])
+
+    @Slot(str)
+    def set_cursor_mode(self, mode: str) -> None:
+        mode_norm = str(mode)
+        if mode_norm not in {"single_hand", "dual_hand"}:
+            mode_norm = "dual_hand"
+
+        if mode_norm == self._cursor_mode:
+            return
+
+        self._cursor_mode = mode_norm
+        self._hand_only_mode = True
+        self.mapper._hand_only_mode = self._hand_only_mode
+        self._sh_cursor_history.clear()
+        self.mapper.reset()
+
+        self._update_guide_rows()
+
     def _update_guide_rows(self) -> None:
         """Rebuild the protocol guide to reflect current mode."""
+        cursor_hand = "Right" if self._dual_right_cursor else "Left"
+        action_hand = "Left" if self._dual_right_cursor else "Right"
         guide_rows_dual = [
-            ("move",        "Move cursor",   "Left hand index finger"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
+            ("move",        "Move cursor",   f"{cursor_hand} hand index finger"),
+            ("left_click",  "Left click",    f"{action_hand}: Thumb+Index pinch"),
+            ("double_click","Double click",  f"{action_hand}: Quick double pinch"),
+            ("drag",        "Drag",          f"{action_hand}: Hold pinch"),
+            ("right_click", "Right click",   f"{action_hand}: Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        f"{action_hand}: Peace sign up/down"),
         ]
         guide_rows_single = [
             ("move",        "Move cursor",   "Index finger up"),
@@ -4250,19 +4398,8 @@ class MainWindow(QMainWindow):
             ("right_click", "Right click",   "Thumb+Middle pinch"),
             ("scroll",      "Scroll",        "Peace sign up/down"),
         ]
-        guide_rows_eye = [
-            ("move",        "Move cursor",   "Look around (iris tracking)"),
-            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
-            ("double_click","Double click",  "Right: Quick double pinch"),
-            ("drag",        "Drag",          "Right: Hold pinch"),
-            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
-            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
-        ]
-
         if self._cursor_mode == "dual_hand":
             rows = guide_rows_dual
-        elif self._cursor_mode == "eye_tracking":
-            rows = guide_rows_eye
         else:
             rows = guide_rows_single
 
@@ -4274,9 +4411,8 @@ class MainWindow(QMainWindow):
                 dl.setText(action_desc)
 
         _mode_labels = {
-            "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
+            "dual_hand": f"Mode: Dual Hand ({'R=Cursor L=Actions' if self._dual_right_cursor else 'L=Cursor R=Actions'})",
             "single_hand": "Mode: Single Hand",
-            "eye_tracking": "Mode: Eye Tracking (experimental)",
         }
         if hasattr(self, "mode_lbl"):
             self.mode_lbl.setText(
@@ -4293,22 +4429,6 @@ class MainWindow(QMainWindow):
             self._region_slider.setValue(self.mapper.frame_r)
         self._region_label.setText(f"Head/Hand Range: {self.mapper.frame_r}")
 
-    def _apply_performance_mode(self, enabled: bool) -> None:
-        settings.set("performance_mode", bool(enabled))
-        try:
-            old = self.tracker
-            self.tracker = HandTracker()
-            if enabled:
-                self.tracker.set_processing_size((320, 240))
-            else:
-                self.tracker.set_processing_size(None)
-            if old is not None:
-                old.close()
-        except Exception as exc:
-            self._mediapipe_error = str(exc)
-            self.cam_status.setText("MediaPipe Error")
-            self.preview.setText(self._mediapipe_error)
-
     def start_camera(self) -> None:
         if self.running:
             return
@@ -4318,17 +4438,16 @@ class MainWindow(QMainWindow):
             self.preview.setText(self._mediapipe_error)
             return
 
-        if self.tracker is not None:
-            self.tracker.close()
-        try:
-            self.tracker = HandTracker()
-        except Exception as exc:
-            self.tracker = None
-            self._mediapipe_error = str(exc)
-            self.cam_status.setText("MediaPipe Error")
-            self.preview.setText(self._mediapipe_error)
-            self.start_btn.setEnabled(False)
-            return
+        if self.tracker is None:
+            try:
+                self.tracker = HandTracker()
+            except Exception as exc:
+                self.tracker = None
+                self._mediapipe_error = str(exc)
+                self.cam_status.setText("MediaPipe Error")
+                self.preview.setText(self._mediapipe_error)
+                self.start_btn.setEnabled(False)
+                return
 
         self.gestures = GestureDetector()
         self.gestures._confirm_hold_s = _as_float(settings.get("confirm_hold_s", 0.06), 0.06)
@@ -4338,12 +4457,8 @@ class MainWindow(QMainWindow):
         self.gestures.reset_cooldowns()
         self._drag_active = False
 
-        if _as_bool(settings.get("performance_mode", False), False):
-            if self.tracker is not None:
-                self.tracker.set_processing_size((320, 240))
-        else:
-            if self.tracker is not None:
-                self.tracker.set_processing_size(None)
+        if self.tracker is not None:
+            self.tracker.set_processing_size(None)
 
         cameras = self._refresh_camera_cache(force=True)
         if not cameras:
@@ -4451,46 +4566,67 @@ class MainWindow(QMainWindow):
         if self.mouse_enabled:
             self.mouse_btn.setText("Disable Mouse")
             self.mouse_lbl.setText("Mouse: ON")
-
-            if self._overlay is None:
-                self._overlay = StatusOverlay(self.icons)
-                self._overlay.open_btn.clicked.connect(self._show_main_window)  # type: ignore
-                self._overlay.disable_btn.clicked.connect(self._disable_mouse_from_overlay)  # type: ignore
-                try:
-                    screen = QApplication.primaryScreen()
-                    if screen:
-                        sg = screen.availableGeometry()
-                        self._overlay.move(  # type: ignore
-                            max(10, sg.right() - self._overlay.width() - 20),  # type: ignore
-                            sg.top() + 20,
-                        )
-                    else:
-                        self._overlay.move(20, 20)  # type: ignore
-                except Exception:
-                    self._overlay.move(20, 20)  # type: ignore
-
-                ox = _as_int(settings.get("overlay_x", -1), -1)
-                oy = _as_int(settings.get("overlay_y", -1), -1)
-                if ox >= 0 and oy >= 0:
-                    self._overlay.move(ox, oy)  # type: ignore
-
-                self._overlay.show()  # type: ignore
-
             self.showMinimized()
+            self._sync_overlay_visibility()
         else:
             self.mouse_btn.setText("Enable Mouse")
             self.mouse_lbl.setText("Mouse: OFF")
-            if self._overlay is not None:
-                settings.set("overlay_x", self._overlay.x())  # type: ignore
-                settings.set("overlay_y", self._overlay.y())  # type: ignore
-                self._overlay.close()  # type: ignore
-                self._overlay = None
+            self._hide_overlay()
             self.showNormal()
             self.raise_()
 
     def _show_main_window(self) -> None:
         self.showNormal()
         self.raise_()
+        self._sync_overlay_visibility()
+
+    def _ensure_overlay(self) -> None:
+        if self._overlay is not None:
+            return
+
+        self._overlay = StatusOverlay(self.icons)
+        self._overlay.open_btn.clicked.connect(self._show_main_window)  # type: ignore
+        self._overlay.disable_btn.clicked.connect(self._disable_mouse_from_overlay)  # type: ignore
+        try:
+            screen = QApplication.primaryScreen()
+            if screen:
+                sg = screen.availableGeometry()
+                self._overlay.move(  # type: ignore
+                    max(10, sg.right() - self._overlay.width() - 20),  # type: ignore
+                    sg.top() + 20,
+                )
+            else:
+                self._overlay.move(20, 20)  # type: ignore
+        except Exception:
+            self._overlay.move(20, 20)  # type: ignore
+
+        ox = _as_int(settings.get("overlay_x", -1), -1)
+        oy = _as_int(settings.get("overlay_y", -1), -1)
+        use_custom_overlay_pos = _as_bool(settings.get("overlay_custom_pos", False), False)
+        if use_custom_overlay_pos and ox >= 0 and oy >= 0:
+            self._overlay.move(ox, oy)  # type: ignore
+
+    def _hide_overlay(self) -> None:
+        if self._overlay is not None:
+            if self._overlay.was_dragged():
+                settings.set("overlay_x", self._overlay.x())  # type: ignore
+                settings.set("overlay_y", self._overlay.y())  # type: ignore
+                settings.set("overlay_custom_pos", True)
+            self._overlay.close()  # type: ignore
+            self._overlay = None
+
+    def _sync_overlay_visibility(self) -> None:
+        if self.mouse_enabled and self.isMinimized():
+            self._ensure_overlay()
+            if self._overlay is not None:
+                self._overlay.show()  # type: ignore
+        else:
+            self._hide_overlay()
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._sync_overlay_visibility()
 
     def _end_drag_now(self) -> None:
         if self.mouse.is_dragging:
@@ -4544,23 +4680,7 @@ class MainWindow(QMainWindow):
                 h, w = frame.shape[:2]
                 self.mapper.set_camera_size(w, h)
 
-                # ── FACE / EYE TRACKER ─────────────────────────────
-                face_pos: tuple[int, int] | None = None
-                eye_pos: tuple[int, int] | None = None
-
-                if self._cursor_mode == "eye_tracking" and self.eye_tracker is not None:
-                    eye_pos = self.eye_tracker.detect(frame)
-                elif self.face_tracker is not None and self.face_tracker.available:
-                    face_pos = self.face_tracker.detect(frame)
-
-                self._nose_pos = face_pos
-                if face_pos is None and eye_pos is None:
-                    self._face_lost_frames += 1
-                    if self._face_lost_frames > 3:
-                        self._scroll_nose_y = None
-                else:
-                    self._face_lost_frames = 0
-                _face_tracked = (face_pos is not None) or (eye_pos is not None)
+                _face_tracked = False
 
                 # ── HAND TRACKER ───────────────────────────────────
                 tracker = self.tracker
@@ -4569,6 +4689,27 @@ class MainWindow(QMainWindow):
 
                 hands_dict, hand_protos, is_grace = tracker.detect(
                     frame, is_mirrored=self._mirror_camera)
+                _face_tracked = bool(hands_dict)
+
+                hand_count = len(hands_dict)
+                now_switch = time.monotonic()
+                if hand_count == 1:
+                    if self._1hand_start is None:
+                        self._1hand_start = now_switch
+                    self._2hand_start = None
+                    if now_switch - self._1hand_start > self._MODE_SWITCH_DELAY_S and self._cursor_mode != "single_hand":
+                        settings.set("cursor_mode", "single_hand")
+                        self._cursor_mode_request.emit("single_hand")
+                elif hand_count >= 2:
+                    if self._2hand_start is None:
+                        self._2hand_start = now_switch
+                    self._1hand_start = None
+                    if now_switch - self._2hand_start > self._MODE_SWITCH_DELAY_S and self._cursor_mode != "dual_hand":
+                        settings.set("cursor_mode", "dual_hand")
+                        self._cursor_mode_request.emit("dual_hand")
+                else:
+                    self._1hand_start = None
+                    self._2hand_start = None
 
                 rgb_cached = getattr(tracker, '_last_rgb_frame', None)
 
@@ -4588,9 +4729,10 @@ class MainWindow(QMainWindow):
 
                 # ── GESTURE DETECTION ──────────────────────────────
                 if self._cursor_mode == "dual_hand":
-                    result = self.gestures.detect_dual(hands_dict, is_grace)
+                    cursor_label = "Right" if self._dual_right_cursor else "Left"
+                    result = self.gestures.detect_dual(hands_dict, is_grace, cursor_label=cursor_label)
                 else:
-                    # Single-hand or eye-tracking: use right hand for gestures
+                    # Single-hand mode: one hand does cursor + actions
                     action_hand = hands_dict.get("Right") or hands_dict.get("Left")
                     result = self.gestures.detect(action_hand, is_grace)
 
@@ -4604,11 +4746,11 @@ class MainWindow(QMainWindow):
                 _action_hand = hands_dict.get("Right") or hands_dict.get("Left")
                 if _action_hand:
                     _conf = float(_action_hand.get("confidence", 0))
-                    if _conf < 0.55 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+                    if _conf < 0.45 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
-                    elif _conf < 0.65 and gesture == GestureType.RIGHT_CLICK:
+                    elif _conf < 0.50 and gesture == GestureType.RIGHT_CLICK:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
@@ -4617,34 +4759,20 @@ class MainWindow(QMainWindow):
                 _has_cursor = False
                 sx, sy = self._frozen_sx, self._frozen_sy
 
-                if self._cursor_mode == "eye_tracking":
-                    # Eye tracking mode: eyes drive cursor
-                    if eye_pos is not None:
-                        sx, sy = self.mapper.map_point(eye_pos[0], eye_pos[1])
-                        _has_cursor = True
-                    elif face_pos is not None:
-                        sx, sy = self.mapper.map_point(face_pos[0], face_pos[1])
-                        _has_cursor = True
-                    else:
-                        _has_cursor = self._frozen_sx >= 0
-
-                elif self._cursor_mode == "dual_hand":
-                    # Dual-hand: LEFT hand index finger = cursor
-                    left_hand = hands_dict.get("Left")
+                if self._cursor_mode == "dual_hand":
+                    # Dual-hand: cursor hand is configurable (default right).
+                    cursor_hand_label = "Right" if self._dual_right_cursor else "Left"
+                    cursor_hand = hands_dict.get(cursor_hand_label)
                     if gesture in self._freeze_on:
                         # Freeze cursor during clicks
                         _has_cursor = self._frozen_sx >= 0
-                    elif left_hand and len(left_hand.get("xy", [])) > 8:
-                        tip = left_hand["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-                        _has_cursor = True
-                    elif hands_dict.get("Right") and len(hands_dict["Right"].get("xy", [])) > 8:
-                        # Fallback: if only right hand, use right index for cursor
-                        tip = hands_dict["Right"]["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-                        _has_cursor = True
                     else:
-                        _has_cursor = self._frozen_sx >= 0
+                        cursor_point = self._dual_cursor_point(cursor_hand)
+                        if cursor_point is not None:
+                            sx, sy = self.mapper.map_point(cursor_point[0], cursor_point[1])
+                            _has_cursor = True
+                        else:
+                            _has_cursor = self._frozen_sx >= 0
 
                 else:
                     # Single-hand legacy: index finger = cursor
@@ -4766,7 +4894,11 @@ class MainWindow(QMainWindow):
             hand_proto = self._hand_proto
             hand_data = self._hand_data
 
-        self.fps_lbl.setText(f"FPS {self.fps:.0f}")
+        now_ui = time.monotonic()
+        if now_ui - self._fps_ui_last_ts >= 1.0:
+            self._fps_ui_last_ts = now_ui
+            self._fps_ui_value = self.fps
+            self.fps_lbl.setText(f"FPS {self._fps_ui_value:.0f}")
         if self.running and self._camera_error_text:
             self.cam_status.setText(self._camera_error_text)
         # In cursor-driven modes, MOVE maps to mode-specific status labels.
@@ -4774,8 +4906,6 @@ class MainWindow(QMainWindow):
         if gesture == GestureType.MOVE:
             if self._cursor_mode == "dual_hand":
                 _badge_text = "DUAL HAND"
-            elif self._cursor_mode == "eye_tracking":
-                _badge_text = "IRIS TRACK" if self._face_tracked else "ACQUIRING"
             else:
                 _badge_text = "TRACKING" if self._face_tracked else "ACQUIRING"
         self.gesture_lbl.setText(_badge_text)
@@ -4802,9 +4932,12 @@ class MainWindow(QMainWindow):
         _mode_color = "#22D3EE" if self._cursor_mode == "dual_hand" else "#A78BFA"
         _mode_icon = "⬡" if self._cursor_mode == "dual_hand" else "◈"
         _mode_text_map = {
-            "dual_hand": f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions",
+            "dual_hand": (
+                f"{_mode_icon} DUAL HAND  R=Cursor  L=Actions"
+                if self._dual_right_cursor
+                else f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions"
+            ),
             "single_hand": f"{_mode_icon} SINGLE HAND  Any hand = cursor+actions",
-            "eye_tracking": "◉ EYE TRACKING  experimental",
         }
         if hasattr(self, "mode_lbl"):
             self.mode_lbl.setText(_mode_text_map.get(self._cursor_mode, ""))
@@ -4814,7 +4947,6 @@ class MainWindow(QMainWindow):
             _pill = {
                 "dual_hand": ("DUAL", "#22D3EE"),
                 "single_hand": ("SINGLE", "#A78BFA"),
-                "eye_tracking": ("EYE", "#FBBF24"),
             }
             _txt, _col = _pill.get(self._cursor_mode, ("MODE", "#64748B"))
             self.mode_badge_lbl.setText(_txt)
@@ -4824,11 +4956,7 @@ class MainWindow(QMainWindow):
                 f"text-align: center; color: {_col}; background: {_col}33; border: 1px solid {_col}66;"
             )
 
-        if self._cursor_mode == "eye_tracking":
-            self.hand_lbl.setText(
-                f"Eyes: {'Tracking' if _face_on else 'Lost'}  |  "
-                f"Hand: {'Detected' if hand_proto else 'None'}")
-        elif self._cursor_mode == "dual_hand":
+        if self._cursor_mode == "dual_hand":
             # Show both hands status
             _left_ok = False
             _right_ok = False
@@ -4840,10 +4968,14 @@ class MainWindow(QMainWindow):
                         _right_ok = True
             self.hand_lbl.setText(
                 f"L: {'●' if _left_ok else '○'}  R: {'●' if _right_ok else '○'}")
+            self.hand_lbl.setStyleSheet("color: #D7E3F7; font-weight: 700;")
         else:
-            self.hand_lbl.setText(
-                "Hand: Detected" if hand_proto is not None else "Hand: Not Detected"
-            )
+            if hand_proto is not None:
+                self.hand_lbl.setText("Single Mode: Hand Detected")
+                self.hand_lbl.setStyleSheet("color: #6EE7B7; font-weight: 800;")
+            else:
+                self.hand_lbl.setText("Single Mode: Hand Not Detected")
+                self.hand_lbl.setStyleSheet("color: #FCA5A5; font-weight: 800;")
         if hand_data and "confidence" in hand_data:
             conf = hand_data["confidence"]
             self.confidence_lbl.setText(f"Confidence: {conf * 100:.0f}%")
@@ -4865,7 +4997,7 @@ class MainWindow(QMainWindow):
 
         if self._overlay is not None:
             try:
-                self._overlay.update_status(gesture, self.fps, hand_proto is not None)  # type: ignore
+                self._overlay.update_status(gesture, self._fps_ui_value, hand_proto is not None)  # type: ignore
             except Exception:
                 pass
 
@@ -4906,14 +5038,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # FIX: Draw face skeleton + nose cursor dot so it's visible on screen
-        if not self._hand_only_mode and self.face_tracker is not None:
-            self.face_tracker.draw(rgb)
-
-        if self._cursor_mode == "eye_tracking" and self.eye_tracker is not None:
-            self.eye_tracker.draw(rgb)
-
-        if hand_proto is not None and tracker is not None:
+        if self.debug and hand_proto is not None and tracker is not None:
             # hand_proto is now a list of (proto, label) tuples
             if isinstance(hand_proto, list):
                 tracker.draw(rgb, hand_proto)
@@ -4970,16 +5095,9 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         try:
-            if self.face_tracker is not None:
-                self.face_tracker.close()
+            self.mouse.stop()
         except Exception:
             pass
-        try:
-            if self.eye_tracker is not None:
-                self.eye_tracker.close()
-        except Exception:
-            pass
-        self.mouse.stop()
         QApplication.instance().quit()  # type: ignore
 
     def closeEvent(self, event) -> None:
@@ -5005,16 +5123,6 @@ class MainWindow(QMainWindow):
         try:
             if self.tracker is not None:
                 self.tracker.close()  # type: ignore
-        except Exception:
-            pass
-        try:
-            if self.face_tracker is not None:
-                self.face_tracker.close()
-        except Exception:
-            pass
-        try:
-            if self.eye_tracker is not None:
-                self.eye_tracker.close()
         except Exception:
             pass
         try:
@@ -5555,23 +5663,25 @@ from pathlib import Path
 class SettingsStore:
     DEFAULTS = {
         "camera_index": 0,
-        "frame_r": 40,
+        "frame_r": 60,
         "smoothening": 4.8,
-        "debug_overlay": False,
+        "debug_overlay": True,
         "scroll_multiplier": 1.0,
         "pinch_sensitivity": 0.22,
         "pinch_exit_sensitivity": 0.38,
         "confirm_hold_s": 0.03,
         "auto_start_camera": False,
+        "mouse_on_startup": False,
+        "start_maximized": True,
         "minimize_to_tray": False,
         "show_control_region": True,
         "mirror_camera": True,
-        "performance_mode": False,
         "cursor_mode": "dual_hand",
-        "eye_tracking_gain": 1.8,
+        "dual_right_cursor": True,
         "hand_only_mode": True,
         "overlay_x": -1,
         "overlay_y": -1,
+        "overlay_custom_pos": False,
         "window_x": -1,
         "window_y": -1,
         "window_w": 1280,
@@ -5776,71 +5886,6 @@ for test_file in test_dir.glob("test_*.py"):
 
 print("[SUCCESS] All test files fixed")
 
-=== tests/MANUAL_TEST_CHECKLIST.md ===
-# Holographic Touch — Manual Test Checklist
-
-Run through each item. All must pass before release.
-
-## Startup
-- [ ] App launches without errors
-- [ ] Camera detects and starts
-- [ ] No console spam (only startup messages)
-- [ ] FPS counter shows 20+ FPS
-
-## Dual-Hand Mode (default)
-- [ ] Show LEFT hand: cursor follows left index finger smoothly
-- [ ] Show RIGHT hand: cursor follows right index (fallback)
-- [ ] Show BOTH hands: cursor follows LEFT, gestures use RIGHT
-- [ ] Move left hand across camera view: cursor reaches all screen edges
-- [ ] Cursor is smooth — no jitter, no pausing, no teleporting
-
-## Left Click (Right hand: thumb+index pinch)
-- [ ] Pinch right thumb+index: single left click fires
-- [ ] Release and pinch again: another click (no spam)
-- [ ] Click registers on UI elements (try clicking buttons, links)
-
-## Double Click
-- [ ] Quick pinch-release-pinch within 0.45s: double click fires
-- [ ] Slow pinch-release-pinch (>0.5s): two single clicks, not double
-
-## Right Click
-- [ ] Right hand: pinch thumb+middle while index is extended
-- [ ] Must hold 0.18s before triggering (no accidental fires)
-- [ ] Context menu appears at cursor position
-
-## Scroll
-- [ ] Right hand: peace sign (index+middle extended)
-- [ ] Move hand UP: page scrolls UP
-- [ ] Move hand DOWN: page scrolls DOWN  
-- [ ] Scroll is smooth — no jerking
-- [ ] Stop hand: scroll stops
-
-## Drag
-- [ ] Right hand: hold thumb+index pinch for 0.45s
-- [ ] Drag activates — move left hand to drag
-- [ ] Release pinch: drag ends cleanly
-- [ ] No stuck drags
-
-## Eye Tracking (experimental)
-- [ ] Change to eye tracking mode in Settings → Gestures
-- [ ] Restart camera
-- [ ] Cursor follows eye/head movement
-- [ ] Right hand gestures still work for clicks/scroll
-
-## UI
-- [ ] Badge shows "DUAL HAND" in dual mode, "IRIS TRACK" in eye mode
-- [ ] Hand status shows L: ● R: ● when both hands visible
-- [ ] Settings dialog opens and closes without crash
-- [ ] Cursor mode dropdown works in settings
-- [ ] Window resizes without layout breaking
-- [ ] All text readable, no clipping
-
-## Stability
-- [ ] Wave hand in/out of view: no crashes, no ghost clicks
-- [ ] Cover camera: app handles gracefully
-- [ ] Run for 5 minutes: no memory leak, no FPS degradation
-- [ ] Enable Mouse → Minimize → Overlay appears → works
-
 === tests/run_tests.py ===
 #!/usr/bin/env python3
 """
@@ -5848,9 +5893,19 @@ Comprehensive test runner - executes all tests and reports results.
 Designed to run fast from command line after every change.
 """
 import sys
+import os
 import time
 import traceback
 from pathlib import Path
+
+
+_DEVNULL_HANDLE = None
+if os.environ.get("HT_SILENCE_NATIVE_STDERR", "1") == "1":
+    try:
+        _DEVNULL_HANDLE = open(os.devnull, "w", encoding="utf-8", errors="ignore")
+        os.dup2(_DEVNULL_HANDLE.fileno(), 2)
+    except Exception:
+        _DEVNULL_HANDLE = None
 
 
 # Add workspace to path
