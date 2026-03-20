@@ -20,6 +20,7 @@ class SettingsStore:
         "mirror_camera": True,
         "performance_mode": False,
         "cursor_mode": "dual_hand",
+        "force_eye_tracking": False,
         "eye_tracking_gain": 1.8,
         "hand_only_mode": True,
         "overlay_x": -1,

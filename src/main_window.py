@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (  # type: ignore
     QSizePolicy,
     QSlider,
     QSystemTrayIcon,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -38,7 +37,6 @@ from .camera_thread import CameraDevice, CameraThread  # type: ignore
 from .constants import _OVERLAY_LABELS  # type: ignore
 from .cursor_mapper import CursorMapper  # type: ignore
 from .eye_tracker import EyeTracker  # type: ignore
-from .face_tracker import FaceTracker  # type: ignore
 from .gesture_detector import GestureDetector  # type: ignore
 from .hand_tracker import HandTracker  # type: ignore
 from .models import GestureResult, GestureType  # type: ignore
@@ -199,17 +197,17 @@ class SettingsDialog(QDialog):
         self._mw = parent
         self.setWindowTitle("Settings")
         self.setModal(True)
-        self.resize(560, 520)
+        self.resize(640, 700)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 14)
-        root.setSpacing(12)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(14)
 
         title_row = QHBoxLayout()
         title_icon = QLabel()
-        title_icon.setFixedSize(24, 24)
+        title_icon.setFixedSize(26, 26)
         title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_icon.setPixmap(self._mw.icons["settings"].pixmap(QSize(18, 18)))
+        title_icon.setPixmap(self._mw.icons["settings"].pixmap(QSize(20, 20)))
         title = QLabel("Settings")
         title.setObjectName("title")
         title_row.addWidget(title_icon)
@@ -217,12 +215,21 @@ class SettingsDialog(QDialog):
         title_row.addStretch(1)
         root.addLayout(title_row)
 
-        tabs = QTabWidget()
-        root.addWidget(tabs, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        root.addWidget(scroll, 1)
 
-        camera_tab = QWidget()
-        camera_layout = QVBoxLayout(camera_tab)
-        camera_layout.setContentsMargins(10, 10, 10, 10)
+        content = QWidget()
+        body = QVBoxLayout(content)
+        body.setContentsMargins(8, 8, 8, 8)
+        body.setSpacing(10)
+        scroll.setWidget(content)
+
+        camera_box = QFrame()
+        camera_box.setObjectName("sectionBox")
+        camera_layout = QVBoxLayout(camera_box)
+        camera_layout.setContentsMargins(14, 14, 14, 14)
         camera_layout.setSpacing(10)
 
         cam_label = QLabel("Camera")
@@ -249,11 +256,13 @@ class SettingsDialog(QDialog):
         camera_layout.addWidget(self.minimize_to_tray_chk)
         camera_layout.addWidget(self.mirror_chk)
         camera_layout.addWidget(self.region_chk)
-        camera_layout.addStretch(1)
+        body.addWidget(camera_box)
+        body.addSpacing(20)
 
-        cursor_tab = QWidget()
-        cursor_layout = QVBoxLayout(cursor_tab)
-        cursor_layout.setContentsMargins(10, 10, 10, 10)
+        cursor_box = QFrame()
+        cursor_box.setObjectName("sectionBox")
+        cursor_layout = QVBoxLayout(cursor_box)
+        cursor_layout.setContentsMargins(14, 14, 14, 14)
         cursor_layout.setSpacing(10)
 
         cursor_title = QLabel("Cursor")
@@ -274,11 +283,13 @@ class SettingsDialog(QDialog):
         cursor_layout.addWidget(self.smooth_slider)
         cursor_layout.addWidget(self.margin_lbl)
         cursor_layout.addWidget(self.margin_slider)
-        cursor_layout.addStretch(1)
+        body.addWidget(cursor_box)
+        body.addSpacing(20)
 
-        gesture_tab = QWidget()
-        gesture_layout = QVBoxLayout(gesture_tab)
-        gesture_layout.setContentsMargins(10, 10, 10, 10)
+        gesture_box = QFrame()
+        gesture_box.setObjectName("sectionBox")
+        gesture_layout = QVBoxLayout(gesture_box)
+        gesture_layout.setContentsMargins(14, 14, 14, 14)
         gesture_layout.setSpacing(10)
 
         gesture_title = QLabel("Gestures")
@@ -305,27 +316,19 @@ class SettingsDialog(QDialog):
         gesture_layout.addWidget(self.pinch_slider)
         gesture_layout.addWidget(self.hold_lbl)
         gesture_layout.addWidget(self.hold_slider)
-        cursor_mode_label = QLabel("Cursor Control Mode")
+        cursor_mode_label = QLabel("Tracking Mode")
         cursor_mode_label.setObjectName("section")
-        self.cursor_mode_combo = QComboBox()
-        self.cursor_mode_combo.addItem("Dual Hand (Left=Cursor, Right=Actions)", "dual_hand")
-        self.cursor_mode_combo.addItem("Single Hand (same hand)", "single_hand")
-        self.cursor_mode_combo.addItem("Eye Tracking (experimental)", "eye_tracking")
-        current_mode = str(settings.get("cursor_mode", "dual_hand"))
-        idx = self.cursor_mode_combo.findData(current_mode)
-        if idx >= 0:
-            self.cursor_mode_combo.setCurrentIndex(idx)
+        self.eye_chk = QCheckBox("Enable Eye Tracking (Overrides Auto-Hand Mode)")
+        self.eye_chk.setChecked(bool(settings.get("force_eye_tracking", False)))
         gesture_layout.addWidget(cursor_mode_label)
-        gesture_layout.addWidget(self.cursor_mode_combo)
-        self.mode_lock_lbl = QLabel("")
-        self.mode_lock_lbl.setObjectName("muted")
-        self.mode_lock_lbl.setWordWrap(True)
-        gesture_layout.addWidget(self.mode_lock_lbl)
-        gesture_layout.addStretch(1)
+        gesture_layout.addWidget(self.eye_chk)
+        body.addWidget(gesture_box)
+        body.addSpacing(20)
 
-        perf_tab = QWidget()
-        perf_layout = QVBoxLayout(perf_tab)
-        perf_layout.setContentsMargins(10, 10, 10, 10)
+        perf_box = QFrame()
+        perf_box.setObjectName("sectionBox")
+        perf_layout = QVBoxLayout(perf_box)
+        perf_layout.setContentsMargins(14, 14, 14, 14)
         perf_layout.setSpacing(10)
 
         perf_title = QLabel("Performance / Debug")
@@ -338,12 +341,8 @@ class SettingsDialog(QDialog):
         perf_layout.addWidget(perf_title)
         perf_layout.addWidget(self.performance_chk)
         perf_layout.addWidget(self.debug_chk)
-        perf_layout.addStretch(1)
-
-        tabs.addTab(camera_tab, "Camera")
-        tabs.addTab(cursor_tab, "Cursor")
-        tabs.addTab(gesture_tab, "Gestures")
-        tabs.addTab(perf_tab, "Performance")
+        body.addWidget(perf_box)
+        body.addStretch(1)
 
         footer = QHBoxLayout()
         about_btn = QPushButton("About")
@@ -366,16 +365,12 @@ class SettingsDialog(QDialog):
         self.scroll_slider.valueChanged.connect(self._on_scroll_changed)
         self.pinch_slider.valueChanged.connect(self._on_pinch_changed)
         self.hold_slider.valueChanged.connect(self._on_hold_changed)
-        self.cursor_mode_combo.currentIndexChanged.connect(self._on_cursor_mode_changed)
+        self.eye_chk.stateChanged.connect(self._on_eye_tracking_changed)
         self.performance_chk.stateChanged.connect(self._on_performance_toggled)
         self.debug_chk.stateChanged.connect(self._on_debug_changed)
         about_btn.clicked.connect(self._show_about)
         apply_btn.clicked.connect(self._apply_performance)
         close_btn.clicked.connect(self.accept)
-
-        self._mode_lock_timer = QTimer(self)
-        self._mode_lock_timer.timeout.connect(self._tick_mode_lock)
-        self._tick_mode_lock()
 
         self.setStyleSheet(
             """
@@ -384,16 +379,18 @@ class SettingsDialog(QDialog):
             }
             QDialog { background: #18181B; color: #F1F5F9; border: 1px solid #27272A; border-radius: 16px; }
             QLabel { color: #F1F5F9; font-size: 13px; font-weight: 500; }
-            #title { font-size: 20px; font-weight: 800; color: #F1F5F9; letter-spacing: 1px;}
-            #section { font-size: 13px; color: #8B97B0; font-weight: 800; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 1px;}
-            
-            QTabWidget::pane { border: none; border-top: 1px solid #27272A; margin-top: -1px; }
-            QTabBar::tab {
-                background: transparent; color: #8B97B0; padding: 12px 20px;
-                border: none; font-weight: 700; font-size: 14px;
+            #title { font-size: 22px; font-weight: 900; color: #F1F5F9; letter-spacing: 0.8px; }
+            #section { font-size: 15px; color: #8B97B0; font-weight: 800; text-transform: uppercase; margin-bottom: 6px; letter-spacing: 1.2px; }
+            #sectionBox {
+                background: rgba(15, 18, 25, 0.45);
+                border: 1px solid rgba(39, 39, 42, 0.45);
+                border-radius: 12px;
             }
-            QTabBar::tab:selected { color: #00F0FF; border-bottom: 2px solid #00F0FF; }
-            QTabBar::tab:hover { color: #F1F5F9; }
+            QScrollArea { background: transparent; border: none; }
+            QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
+            QScrollBar::handle:vertical { background: #3F3F46; border-radius: 4px; min-height: 24px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
             
             QComboBox {
                 background: #18181B; border: 1px solid #27272A; border-radius: 8px; padding: 10px; color: #F1F5F9; font-weight: 600;
@@ -493,39 +490,15 @@ class SettingsDialog(QDialog):
         self.hold_lbl.setText(f"Hold Time: {hold_s:.2f}s")
         settings.set("confirm_hold_s", hold_s)
 
-    def _on_cursor_mode_changed(self, idx: int) -> None:
-        mode = self.cursor_mode_combo.itemData(idx)
-        if mode:
-            self._mw._mode_lock_until = time.monotonic() + 300.0
-            settings.set("cursor_mode", str(mode))
-
-            self._mw._cursor_mode = str(mode)
-            self._mw._hand_only_mode = (str(mode) != "eye_tracking")
-            self._mw.mapper._hand_only_mode = self._mw._hand_only_mode
-            self._mw._sh_cursor_history.clear()
-            self._mw.mapper.reset()
-            self._mw._update_guide_rows()
-
-            self._tick_mode_lock()
-            if not self._mode_lock_timer.isActive():
-                self._mode_lock_timer.start(1000)
-
-    def _tick_mode_lock(self) -> None:
-        rem = int(max(0.0, self._mw._mode_lock_until - time.monotonic()))
-        if rem <= 0:
-            self.cursor_mode_combo.setEnabled(True)
-            self.mode_lock_lbl.setText("")
-            if self._mode_lock_timer.isActive():
-                self._mode_lock_timer.stop()
-            return
-
-        if rem > 270:
-            self.cursor_mode_combo.setEnabled(False)
-            self.mode_lock_lbl.setText(
-                f"Mode locked for {rem}s. Override available in {rem - 270}s")
+    def _on_eye_tracking_changed(self, state: int) -> None:
+        enabled = bool(state)
+        settings.set("force_eye_tracking", enabled)
+        if enabled:
+            settings.set("cursor_mode", "eye_tracking")
+            self._mw.set_cursor_mode("eye_tracking")
         else:
-            self.cursor_mode_combo.setEnabled(True)
-            self.mode_lock_lbl.setText(f"Mode lock active: {rem}s remaining (override enabled)")
+            settings.set("cursor_mode", "dual_hand")
+            self._mw.set_cursor_mode("dual_hand")
 
     def _on_performance_toggled(self, state: int) -> None:
         value = bool(state)
@@ -556,6 +529,7 @@ class SettingsDialog(QDialog):
 
 class MainWindow(QMainWindow):
     _camera_start_result = Signal(bool)
+    _cursor_mode_request = Signal(str)
     _CURSOR_GESTURES = frozenset({
         GestureType.MOVE, GestureType.LEFT_CLICK,
         GestureType.DOUBLE_CLICK, GestureType.RIGHT_CLICK,
@@ -591,15 +565,9 @@ class MainWindow(QMainWindow):
             self.tracker = None
             self._mediapipe_error = str(exc)
 
-        # Face tracker for nose-tip cursor (hybrid mode)
-        try:
-            self.face_tracker: FaceTracker | None = FaceTracker()
-        except Exception:
-            self.face_tracker = None
-
-        # Eye tracker (experimental — enabled in settings)
+        force_eye = _as_bool(settings.get("force_eye_tracking", False), False)
         self.eye_tracker: EyeTracker | None = None
-        self._cursor_mode: str = str(settings.get("cursor_mode", "dual_hand"))
+        self._cursor_mode: str = "eye_tracking" if force_eye else "dual_hand"
         if self._cursor_mode == "eye_tracking":
             try:
                 gain = float(settings.get("eye_tracking_gain", 1.8))
@@ -679,21 +647,20 @@ class MainWindow(QMainWindow):
         self._cursor_frozen = False
         self._frozen_sx: int = -1
         self._frozen_sy: int = -1
-        self._nose_pos: tuple[int, int] | None = None  # latest nose tip coords
-        self._scroll_nose_y: float | None = None        # nose Y anchor for scroll
-        self._face_lost_frames: int = 0
+        self._1hand_start: float | None = None
+        self._2hand_start: float | None = None
         self._freeze_on: set = {
             GestureType.LEFT_CLICK,
             GestureType.RIGHT_CLICK,
             GestureType.DOUBLE_CLICK,
         }
-        self._mode_lock_until: float = 0.0
         self._sh_cursor_history: list = []
         self._drag_progress: float = 0.0
         self._start_worker: threading.Thread | None = None
 
         self._build_ui()
         self._camera_start_result.connect(self._on_camera_start_done)
+        self._cursor_mode_request.connect(self.set_cursor_mode)
         self._setup_tray()
         self._start_hotkey_listener()
 
@@ -1315,6 +1282,30 @@ class MainWindow(QMainWindow):
             self._region_slider.setValue(clamped)
         settings.set("frame_r", self.mapper.frame_r)
 
+    @Slot(str)
+    def set_cursor_mode(self, mode: str) -> None:
+        mode_norm = str(mode)
+        if mode_norm not in {"single_hand", "dual_hand", "eye_tracking"}:
+            mode_norm = "dual_hand"
+
+        if mode_norm == self._cursor_mode:
+            return
+
+        self._cursor_mode = mode_norm
+        self._hand_only_mode = (mode_norm != "eye_tracking")
+        self.mapper._hand_only_mode = self._hand_only_mode
+        self._sh_cursor_history.clear()
+        self.mapper.reset()
+
+        if mode_norm == "eye_tracking" and self.eye_tracker is None:
+            try:
+                gain = float(settings.get("eye_tracking_gain", 1.8))
+                self.eye_tracker = EyeTracker(gain=gain)
+            except Exception:
+                self.eye_tracker = None
+
+        self._update_guide_rows()
+
     def _update_guide_rows(self) -> None:
         """Rebuild the protocol guide to reflect current mode."""
         guide_rows_dual = [
@@ -1627,23 +1618,12 @@ class MainWindow(QMainWindow):
                 h, w = frame.shape[:2]
                 self.mapper.set_camera_size(w, h)
 
-                # ── FACE / EYE TRACKER ─────────────────────────────
-                face_pos: tuple[int, int] | None = None
+                # ── EYE TRACKER ───────────────────────────────────
                 eye_pos: tuple[int, int] | None = None
 
                 if self._cursor_mode == "eye_tracking" and self.eye_tracker is not None:
                     eye_pos = self.eye_tracker.detect(frame)
-                elif self.face_tracker is not None and self.face_tracker.available:
-                    face_pos = self.face_tracker.detect(frame)
-
-                self._nose_pos = face_pos
-                if face_pos is None and eye_pos is None:
-                    self._face_lost_frames += 1
-                    if self._face_lost_frames > 3:
-                        self._scroll_nose_y = None
-                else:
-                    self._face_lost_frames = 0
-                _face_tracked = (face_pos is not None) or (eye_pos is not None)
+                _face_tracked = eye_pos is not None
 
                 # ── HAND TRACKER ───────────────────────────────────
                 tracker = self.tracker
@@ -1652,6 +1632,27 @@ class MainWindow(QMainWindow):
 
                 hands_dict, hand_protos, is_grace = tracker.detect(
                     frame, is_mirrored=self._mirror_camera)
+
+                hand_count = len(hands_dict)
+                if not _as_bool(settings.get("force_eye_tracking", False), False):
+                    now_switch = time.monotonic()
+                    if hand_count == 1:
+                        if self._1hand_start is None:
+                            self._1hand_start = now_switch
+                        self._2hand_start = None
+                        if now_switch - self._1hand_start > 3.0 and self._cursor_mode != "single_hand":
+                            settings.set("cursor_mode", "single_hand")
+                            self._cursor_mode_request.emit("single_hand")
+                    elif hand_count >= 2:
+                        if self._2hand_start is None:
+                            self._2hand_start = now_switch
+                        self._1hand_start = None
+                        if now_switch - self._2hand_start > 3.0 and self._cursor_mode != "dual_hand":
+                            settings.set("cursor_mode", "dual_hand")
+                            self._cursor_mode_request.emit("dual_hand")
+                    else:
+                        self._1hand_start = None
+                        self._2hand_start = None
 
                 rgb_cached = getattr(tracker, '_last_rgb_frame', None)
 
@@ -1704,9 +1705,6 @@ class MainWindow(QMainWindow):
                     # Eye tracking mode: eyes drive cursor
                     if eye_pos is not None:
                         sx, sy = self.mapper.map_point(eye_pos[0], eye_pos[1])
-                        _has_cursor = True
-                    elif face_pos is not None:
-                        sx, sy = self.mapper.map_point(face_pos[0], face_pos[1])
                         _has_cursor = True
                     else:
                         _has_cursor = self._frozen_sx >= 0
@@ -1989,10 +1987,6 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # FIX: Draw face skeleton + nose cursor dot so it's visible on screen
-        if not self._hand_only_mode and self.face_tracker is not None:
-            self.face_tracker.draw(rgb)
-
         if self._cursor_mode == "eye_tracking" and self.eye_tracker is not None:
             self.eye_tracker.draw(rgb)
 
@@ -2053,11 +2047,6 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         try:
-            if self.face_tracker is not None:
-                self.face_tracker.close()
-        except Exception:
-            pass
-        try:
             if self.eye_tracker is not None:
                 self.eye_tracker.close()
         except Exception:
@@ -2088,11 +2077,6 @@ class MainWindow(QMainWindow):
         try:
             if self.tracker is not None:
                 self.tracker.close()  # type: ignore
-        except Exception:
-            pass
-        try:
-            if self.face_tracker is not None:
-                self.face_tracker.close()
         except Exception:
             pass
         try:
