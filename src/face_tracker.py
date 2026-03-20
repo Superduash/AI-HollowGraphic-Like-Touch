@@ -30,7 +30,7 @@ class FaceTracker:
             print("[FACE] MediaPipe face_mesh unavailable — head tracking disabled")
             return
         try:
-            self._mesh = mp.solutions.face_mesh.FaceMesh(
+            self._mesh = mp.solutions.face_mesh.FaceMesh( # type: ignore
                 max_num_faces=1,
                 refine_landmarks=False,
                 min_detection_confidence=0.5,
