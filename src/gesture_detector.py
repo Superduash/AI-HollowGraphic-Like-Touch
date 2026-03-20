@@ -34,6 +34,8 @@ class GestureDetector:
         self._right_pinch_active = False
         self._left_pinch_since: float | None = None
         self._right_pinch_start_t: float | None = None
+        self._left_click_emitted_this_hold = False
+        self._right_click_emitted_this_hold = False
 
         self._scroll_prev_y: float | None = None
         self._scroll_velocity_ema = 0.0
@@ -262,8 +264,10 @@ class GestureDetector:
             if li > exit_:
                 self._left_pinch_active = False
                 self._left_click_release_time = now
+                self._left_click_emitted_this_hold = False
         elif li <= (enter * 0.94):
             self._left_pinch_active = True
+            self._left_click_emitted_this_hold = False
 
         # --- Right pinch (thumb+middle) = right-click ---
         # Requires: index finger clearly open (li > exit_),
@@ -273,16 +277,18 @@ class GestureDetector:
             if ri > exit_:
                 self._right_pinch_active = False
                 self._right_pinch_start_t = None
+                self._right_click_emitted_this_hold = False
         elif (
             not self._left_pinch_active
             and ri <= right_enter
-            and li > (enter * 0.95)
+            and li > (enter * 0.90)
             and pm > 0.14
         ):
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
             elif now - self._right_pinch_start_t >= self._right_click_hold_s:
                 self._right_pinch_active = True
+                self._right_click_emitted_this_hold = False
         else:
             self._right_pinch_start_t = None
 
@@ -354,7 +360,7 @@ class GestureDetector:
 
         # --- Emit actions ---
         if stable_state == GestureType.LEFT_CLICK:
-            if self._check_action_cooldown(GestureType.LEFT_CLICK, now):
+            if (not self._left_click_emitted_this_hold) and self._check_action_cooldown(GestureType.LEFT_CLICK, now):
                 # Double-click detection
                 if (self._left_click_release_time > 0.0
                     and 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s
@@ -362,20 +368,23 @@ class GestureDetector:
                     self._state = GestureType.DOUBLE_CLICK
                     self._record_action(GestureType.DOUBLE_CLICK, now)
                     self._record_action(GestureType.LEFT_CLICK, now)
+                    self._left_click_emitted_this_hold = True
                     self._dragging = False
                     return self._make_result(GestureType.DOUBLE_CLICK, 0)
 
                 self._state = GestureType.LEFT_CLICK
                 self._record_action(GestureType.LEFT_CLICK, now)
+                self._left_click_emitted_this_hold = True
                 self._dragging = False
                 return self._make_result(GestureType.LEFT_CLICK, 0)
             self._state = GestureType.MOVE
             return self._make_result(GestureType.MOVE, 0)
 
         if stable_state == GestureType.RIGHT_CLICK:
-            if self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
+            if (not self._right_click_emitted_this_hold) and self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
                 self._state = GestureType.RIGHT_CLICK
                 self._record_action(GestureType.RIGHT_CLICK, now)
+                self._right_click_emitted_this_hold = True
                 self._dragging = False
                 return self._make_result(GestureType.RIGHT_CLICK, 0)
             self._state = GestureType.MOVE
@@ -405,6 +414,8 @@ class GestureDetector:
         self._left_pinch_active = False
         self._right_pinch_active = False
         self._left_pinch_since = None
+        self._left_click_emitted_this_hold = False
+        self._right_click_emitted_this_hold = False
         self._li_ema = None
         self._ri_ema = None
         self._pm_ema = None
