@@ -59,6 +59,15 @@ class CursorMapper:
         self._inner_x_ratio = self._inner_ratio
         self._inner_y_ratio = self._inner_ratio
         self._hand_scale_px = 32.0
+        import threading as _th
+        self._mapper_lock = _th.Lock()
+        # Face tracking: slower EMA for stable nose movements
+        self._alpha_min_face: float = 0.18
+        self._alpha_max_face: float = 0.60
+        # Hand-only: faster EMA for fingertip responsiveness
+        self._alpha_min_hand: float = 0.28
+        self._alpha_max_hand: float = 0.75
+        self._hand_only_mode: bool = False
 
     @staticmethod
     def _virtual_screen_bounds() -> tuple[int, int, int, int]:
@@ -113,28 +122,35 @@ class CursorMapper:
 
     def set_smoothening(self, value: float) -> None:
         v = max(1.0, min(10.0, float(value)))
-        self.smoothening = v
-        t = (v - 1.0) / 9.0
-        self._alpha_min = 0.18 + t * 0.12
-        self._alpha_max = 0.55 + t * 0.20
+        with self._mapper_lock:
+            self.smoothening = v
+            t = (v - 1.0) / 9.0
+            # Scale within the tuned range — never go below the tuned min
+            self._alpha_min_face = 0.18 + t * 0.07
+            self._alpha_max_face = 0.60 + t * 0.10
+            self._alpha_min_hand = 0.28 + t * 0.07
+            self._alpha_max_hand = 0.75 + t * 0.10
+            self._alpha_min = self._alpha_min_face
+            self._alpha_max = self._alpha_max_face
 
     def set_prediction_strength(self, v: float) -> None:
         """0.0 = no prediction (pure follow), 1.0 = full velocity lookahead."""
         self._pred_strength = max(0.0, min(1.0, float(v)))
 
     def set_frame_margin(self, margin_px: int) -> None:
-        self.frame_r = max(0, min(int(margin_px), self.max_effective_margin_px()))
-        if self.cam_w <= 1 or self.cam_h <= 1:
-            return
-        self._margin_x_ratio = max(0.0, min(self._max_inner_margin_ratio,
-                                            self.frame_r / float(self.cam_w)))
-        self._margin_y_ratio = max(0.0, min(self._max_inner_margin_ratio,
-                                            self.frame_r / float(self.cam_h)))
-        self._inner_x_ratio = max(0.20, 1.0 - 2.0 * self._margin_x_ratio)
-        self._inner_y_ratio = max(0.20, 1.0 - 2.0 * self._margin_y_ratio)
-        # keep legacy vars in sync for compatibility
-        self._inner_margin_ratio = self._margin_y_ratio
-        self._inner_ratio = self._inner_y_ratio
+        with self._mapper_lock:
+            self.frame_r = max(0, min(int(margin_px), self.max_effective_margin_px()))
+            if self.cam_w <= 1 or self.cam_h <= 1:
+                return
+            self._margin_x_ratio = max(0.0, min(self._max_inner_margin_ratio,
+                                                self.frame_r / float(self.cam_w)))
+            self._margin_y_ratio = max(0.0, min(self._max_inner_margin_ratio,
+                                                self.frame_r / float(self.cam_h)))
+            self._inner_x_ratio = max(0.20, 1.0 - 2.0 * self._margin_x_ratio)
+            self._inner_y_ratio = max(0.20, 1.0 - 2.0 * self._margin_y_ratio)
+            # keep legacy vars in sync for compatibility
+            self._inner_margin_ratio = self._margin_y_ratio
+            self._inner_ratio = self._inner_y_ratio
 
     def max_effective_margin_px(self) -> int:
         px = float(min(self.cam_w, self.cam_h))
@@ -210,7 +226,12 @@ class CursorMapper:
 
         screen_norm = max(60.0, math.sqrt(float(self.scr_w * self.scr_w + self.scr_h * self.scr_h)) * CURSOR_SPEED_NORM_RATIO)
         v_norm = min(1.0, speed / screen_norm)
-        alpha = self._alpha_min + v_norm * (self._alpha_max - self._alpha_min)
+        with self._mapper_lock:
+            if self._hand_only_mode:
+                amin, amax = self._alpha_min_hand, self._alpha_max_hand
+            else:
+                amin, amax = self._alpha_min_face, self._alpha_max_face
+        alpha = amin + v_norm * (amax - amin)
 
         # Clamp max single-frame jump to 15% of screen diagonal to
         # absorb landmark teleport caused by blur/fast motion.

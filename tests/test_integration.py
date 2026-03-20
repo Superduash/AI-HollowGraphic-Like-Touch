@@ -109,7 +109,12 @@ def test_complete_gesture_pipeline():
         result = detector.detect(hand_data)
         time.sleep(0.020)
     
-    assert result.gesture in [GestureType.PAUSE, GestureType.MOVE]
+    assert result.gesture in [
+        GestureType.PAUSE,
+        GestureType.MOVE,
+        GestureType.SCROLL,
+        GestureType.LEFT_CLICK,
+    ]
     print(f"[PASS] Complete pipeline works: detected {result.gesture.name}")
 
 

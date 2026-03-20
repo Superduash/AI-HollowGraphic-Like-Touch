@@ -58,13 +58,13 @@ class FaceTracker:
                 self._nose_x, self._nose_y = rx, ry
                 self._init = True
             else:
+                # 1.5px deadzone only — CursorMapper handles all smoothing
                 dx = rx - self._nose_x
                 dy = ry - self._nose_y
-                if abs(dx) < 1.5: dx = 0.0
-                if abs(dy) < 1.5: dy = 0.0
-                a = self._alpha
-                self._nose_x += a * dx
-                self._nose_y += a * dy
+                if abs(dx) >= 1.5:
+                    self._nose_x = rx
+                if abs(dy) >= 1.5:
+                    self._nose_y = ry
             return int(self._nose_x), int(self._nose_y)
         except Exception:
             return None

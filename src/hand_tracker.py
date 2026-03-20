@@ -16,7 +16,7 @@ except Exception:
     def detect_onnx(frame_bgr):
         return None, 0.0
 
-from .tuning import HAND_LABEL_MAJORITY_RATIO, HAND_LOCK_CONFIDENCE_THRESHOLD, HAND_LOCKED_DROP_THRESHOLD  # type: ignore
+from .tuning import HAND_LOCK_CONFIDENCE_THRESHOLD, HAND_LOCKED_DROP_THRESHOLD  # type: ignore
 from .utils import _ensure_mediapipe_solutions  # type: ignore
 
 os.environ.setdefault("GLOG_minloglevel", "2")
@@ -62,7 +62,7 @@ class HandTracker:
     def __init__(self) -> None:
         self._process_size: tuple[int, int] | None = None
         self._last_rgb_frame = None
-        self._label_history: deque[str] = deque(maxlen=3)
+        self._label_history: deque[str] = deque(maxlen=5)
         self._stable_label = "Right"
         self._last_w: int = 640
         self._last_h: int = 480
@@ -180,7 +180,7 @@ class HandTracker:
         self._last_h = h
         detect_h, detect_w = detect_frame.shape[:2]
         frame_rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
-        self._last_rgb_frame = frame_rgb   # Cache for zero-copy display in _render()
+        self._last_rgb_frame = frame_rgb  # cached for zero-copy in _render
         result = self._hands.process(frame_rgb)
 
         if not result.multi_hand_landmarks or not result.multi_handedness:
@@ -197,17 +197,7 @@ class HandTracker:
 
         self._frames_no_hand = 0
 
-        # With max_num_hands=2, prefer the Right hand for cursor control.
-        # Pick the hand whose resolved label is "Right" when available,
-        # else fall back to the first detected hand.
         chosen_idx = 0
-        if len(result.multi_hand_landmarks) > 1:
-            for i, hedness in enumerate(result.multi_handedness):
-                raw = hedness.classification[0].label
-                mapped = self._map_label(raw, is_mirrored=is_mirrored)
-                if mapped == "Right":
-                    chosen_idx = i
-                    break
 
         hand = result.multi_hand_landmarks[chosen_idx]
         raw_label = result.multi_handedness[chosen_idx].classification[0].label

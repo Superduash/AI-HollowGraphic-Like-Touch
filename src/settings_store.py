@@ -9,22 +9,17 @@ class SettingsStore:
         "camera_index": 0,
         "frame_r": 90,
         "smoothening": 4.8,
-        "cursor_prediction": 0.45,
         "debug_overlay": False,
         "scroll_multiplier": 1.0,
-        # FIX 4: Tighten pinch thresholds — was 0.30/0.45, requires deliberate pinch
-        "pinch_sensitivity": 0.22,  # was 0.30 — avoid accidental proximity triggers
-        "pinch_exit_sensitivity": 0.38,  # was 0.45 — cleaner release hysteresis
-        "confirm_hold_s": 0.05,  # was 0.06 — slightly faster gesture confirmation
-        "z_tap_enabled": False,
+        "pinch_sensitivity": 0.22,
+        "pinch_exit_sensitivity": 0.38,
+        "confirm_hold_s": 0.03,
         "auto_start_camera": False,
         "minimize_to_tray": False,
         "show_control_region": True,
         "mirror_camera": True,
         "performance_mode": False,
         "hand_only_mode": False,
-        "bilateral_gestures": True,
-        "hand_model_quality": 1,
         "overlay_x": -1,
         "overlay_y": -1,
         "window_x": -1,

@@ -77,6 +77,8 @@ class MouseController:
                 self._SendInput = self._user32.SendInput
                 self._SendInput.argtypes = [ctypes.c_uint, ctypes.POINTER(_INPUT), ctypes.c_int]
                 self._SendInput.restype = ctypes.c_uint
+                self._scr_w: int = int(ctypes.windll.user32.GetSystemMetrics(0)) or 1920
+                self._scr_h: int = int(ctypes.windll.user32.GetSystemMetrics(1)) or 1080
                 self._MOUSEEVENTF_MOVE = 0x0001
                 self._MOUSEEVENTF_ABSOLUTE = 0x8000
             except Exception:
@@ -156,10 +158,8 @@ class MouseController:
     def _set_cursor_pos(self, x: int, y: int) -> None:
         if self._platform == "Windows" and self._user32 is not None:
             try:
-                scr_w = self._user32.GetSystemMetrics(0) or 1920
-                scr_h = self._user32.GetSystemMetrics(1) or 1080
-                ax = int(x * 65535 // scr_w)
-                ay = int(y * 65535 // scr_h)
+                ax = int(x * 65535 // self._scr_w)
+                ay = int(y * 65535 // self._scr_h)
                 inp = self._INPUT(
                     type=0,
                     mi=self._MOUSEINPUT(
