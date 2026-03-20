@@ -4,23 +4,16 @@ import math
 import time
 
 try:
-    from .fast_math import pinch_dist_3d, pinch_dist_2d, ema_step
+    from .fast_math import pinch_dist_2d, ema_step
 except Exception:
-    def pinch_dist_3d(x1, y1, z1, x2, y2, z2):
-        dx = x1 - x2
-        dy = y1 - y2
-        dz = z1 - z2
-        return math.sqrt(dx * dx + dy * dy + dz * dz)
-
     def pinch_dist_2d(x1, y1, x2, y2):
-        dx = x1 - x2
-        dy = y1 - y2
+        dx = x1 - x2; dy = y1 - y2
         return math.sqrt(dx * dx + dy * dy)
-
     def ema_step(prev, target, alpha):
         return prev + alpha * (target - prev)
-from .models import FingerStates, GestureResult, GestureType  # type: ignore
-from .tuning import (  # type: ignore
+
+from .models import GestureResult, GestureType
+from .tuning import (
     GESTURE_ACTION_COOLDOWN_S,
     GESTURE_CONFIRM_HOLD_S,
     GESTURE_DOUBLE_CLICK_WINDOW_S,
@@ -37,7 +30,6 @@ class GestureDetector:
         self._stable_start_t = 0.0
 
         self._dragging = False
-        self._drag_active = False
         self._left_pinch_active = False
         self._right_pinch_active = False
         self._left_pinch_since: float | None = None
@@ -48,10 +40,9 @@ class GestureDetector:
         self._scroll_direction = 0
         self._scroll_accumulator = 0.0
         self._scroll_last_switch_time = 0.0
-        self._left_media_anchor_y: float | None = None
 
         self._action_cooldown_s = float(GESTURE_ACTION_COOLDOWN_S)
-        self._drag_activate_s = 2.0
+        self._drag_activate_s = float(GESTURE_DRAG_ACTIVATE_S)
 
         self._pinch_enter = 0.22
         self._pinch_exit = 0.36
@@ -65,14 +56,13 @@ class GestureDetector:
         self._scroll_step_factor = 0.08
         self._scroll_deadband_factor = 0.06
         self._double_click_window_s = float(GESTURE_DOUBLE_CLICK_WINDOW_S)
-        self._last_move_time: float = 0.0
         self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
         self._scroll_step_limit = 8
-        self._scroll_gain = 1.0          # FIX: was missing — caused AttributeError crash
-        self._right_click_hold_s = max(0.50, float(GESTURE_RIGHT_CLICK_HOLD_S))  # FIX: 0.50s hold reduces accidental right clicks
+        self._scroll_gain = 1.0
+        self._right_click_hold_s = max(0.15, float(GESTURE_RIGHT_CLICK_HOLD_S))
 
         self._per_action_cooldown = {
-            GestureType.LEFT_CLICK: 0.25,  # FIX 7: was 0.30 — faster click recovery for rapid clicks
+            GestureType.LEFT_CLICK: 0.25,
             GestureType.RIGHT_CLICK: 0.50,
             GestureType.DOUBLE_CLICK: 0.50,
             GestureType.SCROLL: 0.0,
@@ -81,148 +71,156 @@ class GestureDetector:
         }
         self._last_action_time: dict[GestureType, float] = {}
 
+        # Z-tap (kept for settings compat, disabled by default)
+        self._z_tap_enabled = False
+
     @property
     def dragging(self) -> bool:
         return self._dragging
 
-    @staticmethod
-    def _distance(a, b) -> float:
-        dx = a[0] - b[0]
-        dy = a[1] - b[1]
-        return math.sqrt(dx * dx + dy * dy)
-
     def reset_cooldowns(self) -> None:
         self._last_action_time.clear()
 
-    def _make_result(self, gesture: GestureType, scroll_delta: int = 0, confidence: float = 1.0) -> GestureResult:
-        result = GestureResult(gesture, scroll_delta)
-        try:
-            setattr(result, "gesture_confidence", max(0.0, min(1.0, float(confidence))))
-        except Exception:
-            pass
-        return result
+    def _make_result(self, gesture: GestureType, scroll_delta: int = 0) -> GestureResult:
+        return GestureResult(gesture, scroll_delta)
 
     def _pinch_ratios(self, xy, hand_scale: float) -> tuple[float, float, float]:
-        """Return (li, ri, pm) normalized distances — no sqrt needed for threshold comparison.
-        Pure 2D. Works at any hand angle."""
         hs = max(1.0, hand_scale)
-        # Using actual distances (not squared) so thresholds stay human-readable
         p4 = xy[4]; p8 = xy[8]; p12 = xy[12]
-        dx = p4[0]-p8[0]; dy = p4[1]-p8[1]
-        li = math.sqrt(dx*dx + dy*dy) / hs
-        dx = p4[0]-p12[0]; dy = p4[1]-p12[1]
-        ri = math.sqrt(dx*dx + dy*dy) / hs
-        dx = p8[0]-p12[0]; dy = p8[1]-p12[1]
-        pm = math.sqrt(dx*dx + dy*dy) / hs
+        li = pinch_dist_2d(float(p4[0]), float(p4[1]), float(p8[0]), float(p8[1])) / hs
+        ri = pinch_dist_2d(float(p4[0]), float(p4[1]), float(p12[0]), float(p12[1])) / hs
+        pm = pinch_dist_2d(float(p8[0]), float(p8[1]), float(p12[0]), float(p12[1])) / hs
         return li, ri, pm
-
-    def _finger_states(self, landmarks_xy) -> "FingerStates":
-        """Legacy stub — kept for compatibility. Not used in hybrid mode."""
-        return FingerStates(thumb=False, index=True,
-                            middle=False, ring=False, pinky=False)
-
-    # REMOVED: finger_count() — use _finger_states() instead (line 128)
 
     def _check_action_cooldown(self, gesture: GestureType, now: float) -> bool:
         cooldown = self._per_action_cooldown.get(gesture, self._action_cooldown_s)
         last = self._last_action_time.get(gesture, 0.0)
-        if now - last < cooldown:
-            return False
-        return True
+        return (now - last) >= cooldown
 
     def _record_action(self, gesture: GestureType, now: float) -> None:
         self._last_action_time[gesture] = now
 
     def _resolve_scroll(self, current_y: float, hand_scale: float) -> int:
-        prev_y = self._scroll_prev_y
-        if prev_y is None:
+        if self._scroll_prev_y is None:
             self._scroll_prev_y = current_y
             self._scroll_velocity_ema = 0.0
             self._scroll_direction = 0
             self._scroll_accumulator = 0.0
             return 0
 
-        dy = float(prev_y) - current_y
+        dy = float(self._scroll_prev_y) - current_y
         self._scroll_prev_y = current_y
 
-        alpha = 0.20
-        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, alpha)
-        velocity = self._scroll_velocity_ema
+        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.25)
+        v = self._scroll_velocity_ema
 
-        hand_scale = max(1.0, hand_scale)
-        deadband = max(1.0, min(hand_scale * 0.5, hand_scale * self._scroll_deadband_factor))
-        if abs(velocity) <= deadband:
+        deadband = max(1.0, hand_scale * self._scroll_deadband_factor)
+        if abs(v) <= deadband:
+            self._scroll_accumulator *= 0.5
             return 0
 
-        direction = 1 if velocity > 0.0 else -1
+        step = max(1.0, hand_scale * self._scroll_step_factor)
+        self._scroll_accumulator += v / step
+
+        steps = int(self._scroll_accumulator)
+        if steps == 0:
+            return 0
+        self._scroll_accumulator -= steps
+        steps = max(-self._scroll_step_limit, min(self._scroll_step_limit, steps))
+
+        direction = 1 if steps > 0 else -1
         if self._scroll_direction == 0:
             self._scroll_direction = direction
-            self._scroll_last_switch_time = time.monotonic()
         elif direction != self._scroll_direction:
             now = time.monotonic()
             if now - self._scroll_last_switch_time < self._scroll_dir_switch_cooldown_s:
+                self._scroll_accumulator = 0.0
                 return 0
             self._scroll_direction = direction
             self._scroll_last_switch_time = now
-
-        self._scroll_accumulator += abs(velocity * self._scroll_step_factor)
-        emit_count = int(self._scroll_accumulator)
-        if emit_count <= 0:
+            self._scroll_velocity_ema = 0.0
+            self._scroll_accumulator = 0.0
             return 0
 
-        self._scroll_accumulator -= emit_count
-        emit_count = max(1, min(self._scroll_step_limit, emit_count))
-        return int(direction * emit_count * max(1, self._scroll_gain))
+        return int(steps * max(1, self._scroll_gain))
 
-    def _clear_transient_motion(self) -> None:
+    def _clear_scroll(self) -> None:
         self._scroll_prev_y = None
         self._scroll_velocity_ema = 0.0
         self._scroll_direction = 0
         self._scroll_accumulator = 0.0
-        self._left_media_anchor_y = None
 
-    def detect(self, hand_data: dict | None, is_grace_frame: bool = False) -> GestureResult:
+    # =====================================================================
+    # DUAL-HAND MODE (default) — left hand = cursor, right hand = actions
+    # =====================================================================
+    def detect_dual(self, hands_dict: dict, is_grace: bool = False) -> GestureResult:
+        """Process gestures from dual-hand input.
+
+        LEFT hand: cursor tracking (handled in main_window, not here)
+        RIGHT hand: click/scroll/drag gestures
+
+        If only LEFT hand visible: return MOVE (cursor follows left index)
+        If only RIGHT hand visible: process gestures, cursor uses right index
+        If neither: PAUSE
+        """
         now = time.monotonic()
+        right_hand = hands_dict.get("Right")
+        left_hand = hands_dict.get("Left")
 
-        if hand_data is None:
-            self._state = GestureType.PAUSE
-            self._candidate = GestureType.PAUSE
-            self._stable_start_t = now
+        # No hands at all
+        if not right_hand and not left_hand:
+            self._reset_all(now)
+            return self._make_result(GestureType.PAUSE, 0)
+
+        # Only left hand (cursor hand) — just MOVE, no actions
+        if not right_hand and left_hand:
+            self._state = GestureType.MOVE
             self._dragging = False
-            self._drag_active = False
-            self._left_pinch_active = False
-            self._right_pinch_active = False
-            self._left_pinch_since = None
-            self._right_pinch_start_t = None
-            self._clear_transient_motion()
-            return self._make_result(GestureType.PAUSE, 0, 0.0)
+            return self._make_result(GestureType.MOVE, 0)
 
+        # Right hand is present — process gestures
+        return self._process_action_hand(right_hand, now, is_grace)
+
+    # =====================================================================
+    # SINGLE-HAND MODE (legacy compat) — one hand does cursor + actions
+    # =====================================================================
+    def detect(self, hand_data: dict | None, is_grace_frame: bool = False) -> GestureResult:
+        """Legacy single-hand detect. Same hand does cursor + gestures."""
+        now = time.monotonic()
+        if hand_data is None:
+            self._reset_all(now)
+            return self._make_result(GestureType.PAUSE, 0)
+
+        return self._process_action_hand(hand_data, now, is_grace_frame)
+
+    # =====================================================================
+    # SHARED ACTION ENGINE — processes one hand for click/scroll/drag
+    # =====================================================================
+    def _process_action_hand(self, hand_data: dict, now: float,
+                              is_grace: bool = False) -> GestureResult:
         xy = hand_data.get("xy")
         if not xy or len(xy) < 21:
-            return self._make_result(GestureType.PAUSE, 0, 0.0)
-        
-        try:
-            wrist = xy[0]
-            middle_mcp = xy[9]
-            scale = pinch_dist_2d(float(wrist[0]), float(wrist[1]),
-                                  float(middle_mcp[0]), float(middle_mcp[1]))
-            self._hand_scale = max(24.0, scale)
-        except (IndexError, TypeError):
-            return self._make_result(GestureType.PAUSE, 0, 0.0)
+            return self._make_result(GestureType.PAUSE, 0)
 
         confidence = float(hand_data.get("confidence", 0.0))
         if confidence < 0.20:
-            return self._make_result(GestureType.PAUSE, 0, 0.0)
+            return self._make_result(GestureType.PAUSE, 0)
 
-        # ── HYBRID DISTANCE ENGINE ──────────────────────────────────────
-        # All gesture detection is pure 2D distance. No Y-axis checks.
-        # Works at every hand angle, camera distance, and lighting level.
+        # Compute hand scale
+        try:
+            wrist = xy[0]; mcp9 = xy[9]
+            self._hand_scale = max(24.0, pinch_dist_2d(
+                float(wrist[0]), float(wrist[1]),
+                float(mcp9[0]), float(mcp9[1])))
+        except (IndexError, TypeError):
+            return self._make_result(GestureType.PAUSE, 0)
+
         li, ri, pm = self._pinch_ratios(xy, self._hand_scale)
+        enter = float(self._pinch_enter)
+        exit_ = float(self._pinch_exit)
 
-        enter = float(self._pinch_enter)   # 0.22
-        exit_ = float(self._pinch_exit)    # 0.36
-
-        # Left pinch (thumb ↔ index) — hysteresis
+        # --- Left pinch (thumb+index) = click/drag ---
+        prev_left = self._left_pinch_active
         if self._left_pinch_active:
             if li > exit_:
                 self._left_pinch_active = False
@@ -230,33 +228,34 @@ class GestureDetector:
         elif li <= enter:
             self._left_pinch_active = True
 
-        # Right pinch (thumb ↔ middle) — only activates when left is open
-        right_enter = enter * 0.50      # FIX: was 0.75 — too sensitive, caused random right clicks
+        # --- Right pinch (thumb+middle) = right-click ---
+        # Requires: index finger clearly open (li > exit_),
+        # middle+thumb close, held for _right_click_hold_s
+        right_enter = enter * 0.50
         if self._right_pinch_active:
             if ri > exit_:
                 self._right_pinch_active = False
-        elif ri <= right_enter and li > exit_ and pm > 0.20:
+                self._right_pinch_start_t = None
+        elif ri <= right_enter and li > exit_ and pm > 0.15:
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
-            if now - self._right_pinch_start_t >= self._right_click_hold_s:
+            elif now - self._right_pinch_start_t >= self._right_click_hold_s:
                 self._right_pinch_active = True
         else:
-            if not (ri <= right_enter and li > exit_ and pm > 0.20):
-                self._right_pinch_start_t = None
+            self._right_pinch_start_t = None
 
-        # Peace sign (index ↔ middle spread) — scroll mode
-        # Upper bound raised to 0.65 to work at any hand distance/spread
+        # --- Peace sign (index+middle spread) = scroll ---
         peace_pose = (pm >= 0.06 and pm <= 0.65 and li > exit_ and ri > exit_)
 
-        # Track left pinch hold duration for drag
+        # --- Track pinch duration for drag ---
         if self._left_pinch_active:
             if self._left_pinch_since is None:
                 self._left_pinch_since = now
         else:
             self._left_pinch_since = None
 
-        # ── ROUTING ─────────────────────────────────────────────────────
-        raw_state = GestureType.PAUSE
+        # --- Route to raw state ---
+        raw_state = GestureType.MOVE
 
         if self._left_pinch_active and self._left_pinch_since is not None:
             held = now - self._left_pinch_since
@@ -268,92 +267,77 @@ class GestureDetector:
             raw_state = GestureType.RIGHT_CLICK
         elif peace_pose:
             raw_state = GestureType.SCROLL
-        else:
-            # Default: MOVE (cursor always controlled by nose in hybrid mode)
-            self._last_move_time = now
-            raw_state = GestureType.MOVE
-        # ────────────────────────────────────────────────────────────────
 
+        # --- Stability filter ---
         if raw_state != self._candidate:
             self._candidate = raw_state
             self._stable_start_t = now
 
         hold_elapsed = max(0.0, now - self._stable_start_t)
-        hold_target = max(0.001, float(self._confirm_hold_s))
-        hold_confidence = max(0.0, min(1.0, hold_elapsed / hold_target))
-
-        if is_grace_frame:
-            self._stable_start_t = now
-            # During grace period, only allow non-action gestures to prevent
-            # ghost clicks from stale data.
-            if self._state in {
+        if is_grace:
+            stable_state = self._state if self._state not in {
                 GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
-                GestureType.DOUBLE_CLICK,
-            }:
-                self._state = GestureType.MOVE
-            stable_state = self._state
-            hold_confidence = 0.0
+                GestureType.DOUBLE_CLICK} else GestureType.MOVE
+        elif hold_elapsed >= self._confirm_hold_s:
+            stable_state = self._candidate
         else:
-            if hold_elapsed >= hold_target:
-                stable_state = self._candidate
-            else:
-                stable_state = self._state
+            stable_state = self._state
 
+        # --- Clear scroll when not scrolling ---
         if stable_state != GestureType.SCROLL and self._state != GestureType.SCROLL:
-            self._clear_transient_motion()
+            self._clear_scroll()
 
-        if stable_state != GestureType.DRAG:
-            self._drag_active = False
-
+        # --- Emit actions ---
         if stable_state == GestureType.LEFT_CLICK:
             if self._check_action_cooldown(GestureType.LEFT_CLICK, now):
-                if self._left_click_release_time > 0.0 and 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s and self._check_action_cooldown(GestureType.DOUBLE_CLICK, now):
-                    self._last_click_time = now
+                # Double-click detection
+                if (self._left_click_release_time > 0.0
+                    and 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s
+                    and self._check_action_cooldown(GestureType.DOUBLE_CLICK, now)):
                     self._state = GestureType.DOUBLE_CLICK
                     self._record_action(GestureType.DOUBLE_CLICK, now)
                     self._record_action(GestureType.LEFT_CLICK, now)
                     self._dragging = False
-                    return self._make_result(GestureType.DOUBLE_CLICK, 0, 1.0)
+                    return self._make_result(GestureType.DOUBLE_CLICK, 0)
 
-                self._last_click_time = now
                 self._state = GestureType.LEFT_CLICK
                 self._record_action(GestureType.LEFT_CLICK, now)
                 self._dragging = False
-                return self._make_result(GestureType.LEFT_CLICK, 0, 1.0)
-
-            self._state = GestureType.PAUSE
-            self._dragging = False
-            return self._make_result(GestureType.PAUSE, 0, hold_confidence)
+                return self._make_result(GestureType.LEFT_CLICK, 0)
+            self._state = GestureType.MOVE
+            return self._make_result(GestureType.MOVE, 0)
 
         if stable_state == GestureType.RIGHT_CLICK:
             if self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
-                self._last_right_click_time = now
                 self._state = GestureType.RIGHT_CLICK
                 self._record_action(GestureType.RIGHT_CLICK, now)
                 self._dragging = False
-                return self._make_result(GestureType.RIGHT_CLICK, 0, 1.0)
-
-            self._state = GestureType.PAUSE
-            self._dragging = False
-            return self._make_result(GestureType.PAUSE, 0, hold_confidence)
+                return self._make_result(GestureType.RIGHT_CLICK, 0)
+            self._state = GestureType.MOVE
+            return self._make_result(GestureType.MOVE, 0)
 
         if stable_state == GestureType.DRAG:
             self._dragging = True
-            self._drag_active = True
             self._state = GestureType.DRAG
-            return self._make_result(GestureType.DRAG, 0, max(hold_confidence, 0.8))
+            return self._make_result(GestureType.DRAG, 0)
 
         if stable_state == GestureType.SCROLL:
-            delta = self._resolve_scroll(current_y=float(xy[8][1]), hand_scale=self._hand_scale)
+            delta = self._resolve_scroll(float(xy[8][1]), self._hand_scale)
             self._state = GestureType.SCROLL
             self._dragging = False
-            return self._make_result(GestureType.SCROLL, delta, max(hold_confidence, 0.8))
+            return self._make_result(GestureType.SCROLL, delta)
 
-        if stable_state == GestureType.MOVE:
-            self._state = GestureType.MOVE
-            self._dragging = False
-            return self._make_result(GestureType.MOVE, 0, max(hold_confidence, 0.5))
-
-        self._state = GestureType.PAUSE
+        self._state = GestureType.MOVE
         self._dragging = False
-        return self._make_result(GestureType.PAUSE, 0, hold_confidence)
+        return self._make_result(GestureType.MOVE, 0)
+
+    def _reset_all(self, now: float) -> None:
+        self._state = GestureType.PAUSE
+        self._candidate = GestureType.PAUSE
+        self._stable_start_t = now
+        self._dragging = False
+        self._left_pinch_active = False
+        self._right_pinch_active = False
+        self._left_pinch_since = None
+        self._right_pinch_start_t = None
+        self._clear_scroll()

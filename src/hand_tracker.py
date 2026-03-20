@@ -1,57 +1,24 @@
 from __future__ import annotations
 
-from collections import deque
 import os
+from collections import deque
 
-import cv2  # type: ignore
+import cv2
 
 try:
-    from .onnx_hand_tracker import init_onnx, detect_onnx, _ONNX_AVAILABLE
+    import mediapipe as mp
 except Exception:
-    _ONNX_AVAILABLE = False
-
-    def init_onnx() -> bool:
-        return False
-
-    def detect_onnx(frame_bgr):
-        return None, 0.0
-
-from .tuning import HAND_LOCK_CONFIDENCE_THRESHOLD, HAND_LOCKED_DROP_THRESHOLD  # type: ignore
-from .utils import _ensure_mediapipe_solutions  # type: ignore
+    mp = None
 
 os.environ.setdefault("GLOG_minloglevel", "2")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
-
-class _OnnxHandProto:
-    """Lightweight stand-in for MediaPipe's hand proto in ONNX mode.
-    Allows tracker.draw() to render landmarks from hand_data['xy']."""
-    def __init__(self, xy: list):
-        self.xy = xy
-        # Fake MediaPipe landmark list interface
-        class _Lm:
-            def __init__(self, x, y, z=0.0):
-                self.x = x; self.y = y; self.z = z
-        self.landmark = [_Lm(*pt) if len(pt) >= 2 else _Lm(pt[0], pt[1]) for pt in xy]
-
-try:
-    import mediapipe as mp  # type: ignore
-except Exception:
-    mp = None  # type: ignore[assignment]
-
-DrawingSpec = None
-if mp is not None:
-    DrawingSpec = mp.solutions.drawing_utils.DrawingSpec  # type: ignore[attr-defined]
+from .utils import _ensure_mediapipe_solutions
 
 
 class HandTracker:
     @staticmethod
     def _map_label(raw_label: str, is_mirrored: bool) -> str:
-        """Map MediaPipe handedness to a stable user-facing label.
-
-        MediaPipe's label is relative to the *image*. If we mirror the frame
-        horizontally, left/right are swapped and we must invert the label.
-        """
         raw = str(raw_label)
         if raw not in ("Left", "Right"):
             return raw
@@ -62,48 +29,23 @@ class HandTracker:
     def __init__(self) -> None:
         self._process_size: tuple[int, int] | None = None
         self._last_rgb_frame = None
-        self._label_history: deque[str] = deque(maxlen=5)
-        self._stable_label = "Right"
-        self._last_w: int = 640
-        self._last_h: int = 480
         _ensure_mediapipe_solutions()
 
-        self._mp_hands = mp.solutions.hands  # type: ignore[attr-defined]
-        self._draw = mp.solutions.drawing_utils  # type: ignore[attr-defined]
-        self._styles = mp.solutions.drawing_styles  # type: ignore[attr-defined]
-
-        _perf = True  # Default to fast model on all platforms
-        try:
-            from .settings_store import settings as _s
-            # "performance_mode" OFF means user explicitly wants high quality model
-            # Default is fast (complexity=0) — user can enable high quality in Settings
-            _fast = not bool(_s.get("high_quality_model", False))
-            _perf = _fast
-        except Exception:
-            pass
+        self._mp_hands = mp.solutions.hands
+        self._draw_utils = mp.solutions.drawing_utils
+        self._draw_styles = mp.solutions.drawing_styles
 
         self._hands = self._mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,
+            max_num_hands=2,
             model_complexity=0,
             min_detection_confidence=0.55,
             min_tracking_confidence=0.35,
         )
 
         self._frames_no_hand = 0
-        self._grace_frames = 2
-        self._last_valid_result: tuple[dict, object] | None = None
-        self._last_valid_hand_data: dict | None = None
-
-        self._hand_lock_frames = 0
-        self._hand_locked = False
-        self._low_conf_drop_frames = 0
-
-        self._use_onnx = init_onnx()
-        if self._use_onnx:
-            print("[HAND] ONNX Runtime backend active (GPU accelerated)")
-        else:
-            print("[HAND] ONNX model not found — using MediaPipe backend")
+        self._grace_frames = 3
+        self._last_valid_result: tuple[dict, list, bool] | None = None
 
     def set_processing_size(self, size: tuple[int, int] | None) -> None:
         if size is None:
@@ -112,141 +54,99 @@ class HandTracker:
         w, h = size
         self._process_size = (max(64, int(w)), max(64, int(h)))
 
-    def _resolve_label(self, label: str) -> str:
-        self._label_history.append(label)
-        history = list(self._label_history)
-        right_count = history.count("Right")
-        left_count = history.count("Left")
-        if right_count > left_count:
-            self._stable_label = "Right"
-        elif left_count > right_count:
-            self._stable_label = "Left"
-        return self._stable_label
-
-    def _passes_confidence_gate(self, confidence: float) -> bool:
-        if self._hand_locked:
-            if confidence < HAND_LOCKED_DROP_THRESHOLD:
-                self._low_conf_drop_frames += 1
-            else:
-                self._low_conf_drop_frames = 0
-
-            if self._low_conf_drop_frames >= 5:
-                self._hand_locked = False
-                self._hand_lock_frames = 0
-                self._low_conf_drop_frames = 0
-                return False
-            return True
-
-        if confidence >= HAND_LOCK_CONFIDENCE_THRESHOLD:
-            self._hand_lock_frames += 1
-            if self._hand_lock_frames >= 3:
-                self._hand_locked = True
-                self._low_conf_drop_frames = 0
-            return True
-
-        self._hand_lock_frames = 0
-        return False
-
     def detect(self, frame_bgr, is_mirrored: bool = False):
-        if self._use_onnx:
-            xy_onnx, conf = detect_onnx(frame_bgr)
-            if xy_onnx is not None:
-                # Build hand_data compatible dict from ONNX output
-                hand_data = {
-                    "xy": xy_onnx,
-                    "label": "Right",          # ONNX lite model is single-hand
-                    "confidence": conf,
-                    "fingers": 5,              # downstream code recalculates this
-                }
-                self._last_valid_hand_data = hand_data
-                self._frames_no_hand = 0
-                return hand_data, _OnnxHandProto(xy_onnx), False  # hand_data, hand_proto_truthy, is_grace
-            else:
-                self._frames_no_hand += 1
-                if self._frames_no_hand < self._grace_frames and self._last_valid_hand_data:
-                    _last_xy = self._last_valid_hand_data.get("xy", []) if self._last_valid_hand_data else []
-                    return self._last_valid_hand_data, _OnnxHandProto(_last_xy) if _last_xy else None, True
-                return None, None, False
-        # ... existing MediaPipe code continues below unchanged ...
-
+        """Returns (hands_dict, hand_protos_list, is_grace_frame)."""
         src_h, src_w = frame_bgr.shape[:2]
 
         detect_frame = frame_bgr
         if self._process_size is not None:
-            detect_frame = cv2.resize(frame_bgr, self._process_size, interpolation=cv2.INTER_LINEAR)
+            detect_frame = cv2.resize(frame_bgr, self._process_size,
+                                       interpolation=cv2.INTER_LINEAR)
 
-        h, w = frame_bgr.shape[:2] if hasattr(frame_bgr, 'shape') else (self._last_h, self._last_w)
-        self._last_w = w
-        self._last_h = h
-        detect_h, detect_w = detect_frame.shape[:2]
-        frame_rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
-        self._last_rgb_frame = frame_rgb  # cached for zero-copy in _render
-        result = self._hands.process(frame_rgb)
+        dh, dw = detect_frame.shape[:2]
+        rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
+        self._last_rgb_frame = rgb
+        result = self._hands.process(rgb)
 
-        if not result.multi_hand_landmarks or not result.multi_handedness:
-            self._frames_no_hand += 1
-            if self._frames_no_hand < self._grace_frames and self._last_valid_result is not None:
-                hand_data, hand_proto = self._last_valid_result
-                return hand_data, hand_proto, True
-            self._label_history.clear()
-            self._hand_lock_frames = 0
-            self._hand_locked = False
-            self._low_conf_drop_frames = 0
-            self._last_valid_result = None
-            return None, None, False
+        hands_dict = {}
+        protos = []
 
-        self._frames_no_hand = 0
+        if result.multi_hand_landmarks and result.multi_handedness:
+            sx = float(src_w) / max(1, dw)
+            sy = float(src_h) / max(1, dh)
 
-        chosen_idx = 0
+            for idx, hand in enumerate(result.multi_hand_landmarks):
+                if idx >= len(result.multi_handedness):
+                    break
+                raw_label = result.multi_handedness[idx].classification[0].label
+                label = self._map_label(raw_label, is_mirrored)
+                conf = float(result.multi_handedness[idx].classification[0].score)
 
-        hand = result.multi_hand_landmarks[chosen_idx]
-        raw_label = result.multi_handedness[chosen_idx].classification[0].label
-        label = self._map_label(raw_label, is_mirrored=is_mirrored)
+                if conf < 0.40:
+                    continue
 
-        label = self._resolve_label(label)
-        confidence = float(result.multi_handedness[chosen_idx].classification[0].score)
+                xy = [(int(lm.x * dw * sx), int(lm.y * dh * sy))
+                      for lm in hand.landmark]
+                z = [float(lm.z) for lm in hand.landmark]
 
-        if not self._passes_confidence_gate(confidence):
-            return None, None, False
+                # If we already have this label, keep the higher-confidence one
+                if label in hands_dict:
+                    if conf <= hands_dict[label]["confidence"]:
+                        continue
 
-        if self._process_size is None:
-            xy = [(max(0, min(src_w - 1, int(lm.x * src_w))), max(0, min(src_h - 1, int(lm.y * src_h)))) for lm in hand.landmark]
+                hands_dict[label] = {
+                    "xy": xy,
+                    "z": z,
+                    "label": label,
+                    "confidence": conf,
+                    "frame_size": (dw, dh),
+                }
+                protos.append((hand, label))
+
+        if hands_dict:
+            self._frames_no_hand = 0
+            self._last_valid_result = (hands_dict, protos, False)
+            return hands_dict, protos, False
         else:
-            sx = float(src_w) / float(max(1, detect_w))
-            sy = float(src_h) / float(max(1, detect_h))
-            xy = [(max(0, min(src_w - 1, int(lm.x * detect_w * sx))), max(0, min(src_h - 1, int(lm.y * detect_h * sy)))) for lm in hand.landmark]
+            self._frames_no_hand += 1
+            if (self._frames_no_hand < self._grace_frames
+                    and self._last_valid_result is not None):
+                cached_dict, cached_protos, _ = self._last_valid_result
+                return cached_dict, cached_protos, True
+            self._last_valid_result = None
+            return {}, [], False
 
-        z = [float(lm.z) for lm in hand.landmark]
-        hand_data = {
-            "xy": xy,
-            "z": z,
-            "label": label,
-            "confidence": confidence,
-            "frame_size": (detect_w, detect_h),
-        }
-
-        self._last_valid_result = (hand_data, hand)
-        return hand_data, hand, False
-
-    def draw(self, frame_rgb, hand_proto, label: str = "Right") -> None:
-        if hand_proto is None:
-            return
-        if not hasattr(hand_proto, "landmark"):
+    def draw(self, frame_rgb, hand_protos, label: str = "Right") -> None:
+        """Draw hand landmarks. Accepts either:
+        - A list of (proto, label) tuples (new dual-hand format)
+        - A single proto object (legacy single-hand format)
+        """
+        if hand_protos is None:
             return
 
-        mp_drawing = mp.solutions.drawing_utils
-        mp_drawing.draw_landmarks(
-            frame_rgb,
-            hand_proto,
-            mp.solutions.hands.HAND_CONNECTIONS,
-            mp_drawing.DrawingSpec(color=(0, 255, 120), thickness=2, circle_radius=4),
-            mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2, circle_radius=2),
-        )
+        # Handle legacy single-proto call: draw(rgb, proto, label_str)
+        if not isinstance(hand_protos, list):
+            pairs = [(hand_protos, label)]
+        else:
+            pairs = hand_protos
+
+        for proto, lbl in pairs:
+            if proto is None:
+                continue
+            color = (0, 255, 120) if lbl == "Right" else (255, 180, 50)
+            try:
+                conn_spec = self._draw_utils.DrawingSpec(
+                    color=color, thickness=2, circle_radius=2)
+                lmk_spec = self._draw_styles.get_default_hand_landmarks_style()
+                self._draw_utils.draw_landmarks(
+                    frame_rgb, proto, self._mp_hands.HAND_CONNECTIONS,
+                    lmk_spec, conn_spec)
+            except Exception:
+                pass
 
     def close(self) -> None:
         try:
             if hasattr(self, "_hands") and self._hands:
                 self._hands.close()
-                del self._hands
         except Exception:
             pass

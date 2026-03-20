@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (  # type: ignore
 from .camera_thread import CameraDevice, CameraThread  # type: ignore
 from .constants import _OVERLAY_LABELS  # type: ignore
 from .cursor_mapper import CursorMapper  # type: ignore
+from .eye_tracker import EyeTracker  # type: ignore
 from .face_tracker import FaceTracker  # type: ignore
 from .gesture_detector import GestureDetector  # type: ignore
 from .hand_tracker import HandTracker  # type: ignore
@@ -304,15 +305,18 @@ class SettingsDialog(QDialog):
         gesture_layout.addWidget(self.pinch_slider)
         gesture_layout.addWidget(self.hold_lbl)
         gesture_layout.addWidget(self.hold_slider)
-        self.hand_only_chk = QCheckBox(
-            "Hand-Only mode  (index = cursor · no face tracking)")
-        self.hand_only_chk.setChecked(
-            bool(settings.get("hand_only_mode", False)))
-        self.hand_only_chk.setToolTip(
-            "Hybrid (default): head/nose moves cursor, pinch to click.\n"
-            "Hand-only: index finger moves cursor, pinch to click.\n"
-            "Restart camera after changing.")
-        gesture_layout.addWidget(self.hand_only_chk)
+        cursor_mode_label = QLabel("Cursor Control Mode")
+        cursor_mode_label.setObjectName("section")
+        self.cursor_mode_combo = QComboBox()
+        self.cursor_mode_combo.addItem("Dual Hand (Left=Cursor, Right=Actions)", "dual_hand")
+        self.cursor_mode_combo.addItem("Single Hand (same hand)", "single_hand")
+        self.cursor_mode_combo.addItem("Eye Tracking (experimental)", "eye_tracking")
+        current_mode = str(settings.get("cursor_mode", "dual_hand"))
+        idx = self.cursor_mode_combo.findData(current_mode)
+        if idx >= 0:
+            self.cursor_mode_combo.setCurrentIndex(idx)
+        gesture_layout.addWidget(cursor_mode_label)
+        gesture_layout.addWidget(self.cursor_mode_combo)
         gesture_layout.addStretch(1)
 
         perf_tab = QWidget()
@@ -358,7 +362,7 @@ class SettingsDialog(QDialog):
         self.scroll_slider.valueChanged.connect(self._on_scroll_changed)
         self.pinch_slider.valueChanged.connect(self._on_pinch_changed)
         self.hold_slider.valueChanged.connect(self._on_hold_changed)
-        self.hand_only_chk.stateChanged.connect(self._on_hand_only_changed)
+        self.cursor_mode_combo.currentIndexChanged.connect(self._on_cursor_mode_changed)
         self.performance_chk.stateChanged.connect(self._on_performance_toggled)
         self.debug_chk.stateChanged.connect(self._on_debug_changed)
         about_btn.clicked.connect(self._show_about)
@@ -481,13 +485,12 @@ class SettingsDialog(QDialog):
         self.hold_lbl.setText(f"Hold Time: {hold_s:.2f}s")
         settings.set("confirm_hold_s", hold_s)
 
-    def _on_hand_only_changed(self, state: int) -> None:
-        value = bool(state)
-        self._mw._hand_only_mode = value
-        self._mw.mapper._hand_only_mode = value
-        settings.set("hand_only_mode", value)
-        # Update guide rows live
-        self._mw._update_guide_rows()
+    def _on_cursor_mode_changed(self, idx: int) -> None:
+        mode = self.cursor_mode_combo.itemData(idx)
+        if mode:
+            settings.set("cursor_mode", str(mode))
+            QMessageBox.information(self, "Restart Required",
+                "Cursor mode change requires restarting the camera.")
 
     def _on_performance_toggled(self, state: int) -> None:
         value = bool(state)
@@ -559,6 +562,16 @@ class MainWindow(QMainWindow):
         except Exception:
             self.face_tracker = None
 
+        # Eye tracker (experimental — enabled in settings)
+        self.eye_tracker: EyeTracker | None = None
+        self._cursor_mode: str = str(settings.get("cursor_mode", "dual_hand"))
+        if self._cursor_mode == "eye_tracking":
+            try:
+                gain = float(settings.get("eye_tracking_gain", 1.8))
+                self.eye_tracker = EyeTracker(gain=gain)
+            except Exception:
+                self.eye_tracker = None
+
         self.gestures = GestureDetector()
         self.mapper = CursorMapper(640, 480)
         self.mouse = MouseController()
@@ -582,8 +595,7 @@ class MainWindow(QMainWindow):
             "media_prev": qta.icon("fa6s.backward", color="#8B97B0"),
         }
 
-        self._hand_only_mode: bool = _as_bool(
-            settings.get("hand_only_mode", False), False)
+        self._hand_only_mode: bool = self._cursor_mode != "eye_tracking"
         self.mapper.set_camera_size(640, 480)
         self.mapper.set_frame_margin(_as_int(settings.get("frame_r", 90), 90))
         self.mapper.set_smoothening(_as_float(settings.get("smoothening", 4.8), 4.8))
@@ -741,8 +753,12 @@ class MainWindow(QMainWindow):
         self.gesture_lbl.setWordWrap(False)
         self.gesture_lbl.setMinimumWidth(140)
 
-        self.mode_lbl = QLabel(
-            "Mode: Hand-Only" if self._hand_only_mode else "Mode: Hybrid (Head+Hand)")
+        _mode_labels = {
+            "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
+            "single_hand": "Mode: Single Hand",
+            "eye_tracking": "Mode: Eye Tracking (experimental)",
+        }
+        self.mode_lbl = QLabel(_mode_labels.get(self._cursor_mode, "Mode: Dual Hand"))
         self.mode_lbl.setObjectName("secondary")
         self.mode_lbl.setWordWrap(True)
         self.hand_lbl = QLabel("Hand: Not Detected")
@@ -787,24 +803,37 @@ class MainWindow(QMainWindow):
         self._guide_action_col = 2
         self._guide_row_widgets: list[tuple] = []
 
-        guide_rows_hybrid = [
-            ("move",       "Move cursor",  "Move head / nose tip"),
-            ("left_click", "Left click",   "Thumb + Index pinch"),
-            ("double_click","Double click","Quick double pinch"),
-            ("drag",       "Drag",         "Hold pinch + move head"),
-            ("right_click","Right click",  "Thumb + Middle pinch"),
-            ("scroll",     "Scroll",       "Peace sign + nod head"),
+        guide_rows_dual = [
+            ("move",        "Move cursor",   "Left hand index finger"),
+            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
+            ("double_click","Double click",  "Right: Quick double pinch"),
+            ("drag",        "Drag",          "Right: Hold pinch"),
+            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
         ]
-        guide_rows_hand_only = [
-            ("move",       "Move cursor",  "Index finger up"),
-            ("left_click", "Left click",   "Thumb + Index pinch"),
-            ("double_click","Double click","Quick double pinch"),
-            ("drag",       "Drag",         "Hold pinch + move hand"),
-            ("right_click","Right click",  "Thumb + Middle pinch"),
-            ("scroll",     "Scroll",       "Peace sign up/down"),
+        guide_rows_single = [
+            ("move",        "Move cursor",   "Index finger up"),
+            ("left_click",  "Left click",    "Thumb+Index pinch"),
+            ("double_click","Double click",  "Quick double pinch"),
+            ("drag",        "Drag",          "Hold pinch"),
+            ("right_click", "Right click",   "Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        "Peace sign up/down"),
+        ]
+        guide_rows_eye = [
+            ("move",        "Move cursor",   "Look around (iris tracking)"),
+            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
+            ("double_click","Double click",  "Right: Quick double pinch"),
+            ("drag",        "Drag",          "Right: Hold pinch"),
+            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
         ]
 
-        _rows = guide_rows_hand_only if self._hand_only_mode else guide_rows_hybrid
+        if self._cursor_mode == "dual_hand":
+            _rows = guide_rows_dual
+        elif self._cursor_mode == "eye_tracking":
+            _rows = guide_rows_eye
+        else:
+            _rows = guide_rows_single
         for i, (icon_key, action_desc, gesture_desc) in enumerate(_rows, start=1):
             il = QLabel()
             il.setFixedSize(24, 24)
@@ -1029,10 +1058,12 @@ class MainWindow(QMainWindow):
             #muted { color: #475569; font-size: 13px; font-weight: 500;}
             
             #badge {
-                border-radius: 10px; padding: 6px 16px; font-weight: 700;
-                background: rgba(15, 18, 25, 0.8); color: #E2E8F0; 
-                max-width: 200px; font-size: 13px; letter-spacing: 1.5px;
+                border-radius: 12px; padding: 6px 18px; font-weight: 700;
+                background: rgba(15, 18, 25, 0.8); color: #E2E8F0;
+                min-width: 100px; max-width: 220px;
+                font-size: 13px; letter-spacing: 1.5px;
                 border: 1px solid rgba(39, 39, 42, 0.4);
+                text-align: center;
             }
             #historyItem { 
                 font-weight: 500; 
@@ -1233,23 +1264,38 @@ class MainWindow(QMainWindow):
 
     def _update_guide_rows(self) -> None:
         """Rebuild the protocol guide to reflect current mode."""
-        guide_rows_hybrid = [
-            ("move",        "Move cursor",   "Move head / nose tip"),
-            ("left_click",  "Left click",    "Thumb + Index pinch"),
-            ("double_click","Double click",  "Quick double pinch"),
-            ("drag",        "Drag",          "Hold pinch + move head"),
-            ("right_click", "Right click",   "Thumb + Middle pinch"),
-            ("scroll",      "Scroll",        "Peace sign + nod head"),
+        guide_rows_dual = [
+            ("move",        "Move cursor",   "Left hand index finger"),
+            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
+            ("double_click","Double click",  "Right: Quick double pinch"),
+            ("drag",        "Drag",          "Right: Hold pinch"),
+            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
         ]
-        guide_rows_hand_only = [
+        guide_rows_single = [
             ("move",        "Move cursor",   "Index finger up"),
-            ("left_click",  "Left click",    "Thumb + Index pinch"),
+            ("left_click",  "Left click",    "Thumb+Index pinch"),
             ("double_click","Double click",  "Quick double pinch"),
-            ("drag",        "Drag",          "Hold pinch + move hand"),
-            ("right_click", "Right click",   "Thumb + Middle pinch"),
+            ("drag",        "Drag",          "Hold pinch"),
+            ("right_click", "Right click",   "Thumb+Middle pinch"),
             ("scroll",      "Scroll",        "Peace sign up/down"),
         ]
-        rows = guide_rows_hand_only if self._hand_only_mode else guide_rows_hybrid
+        guide_rows_eye = [
+            ("move",        "Move cursor",   "Look around (iris tracking)"),
+            ("left_click",  "Left click",    "Right: Thumb+Index pinch"),
+            ("double_click","Double click",  "Right: Quick double pinch"),
+            ("drag",        "Drag",          "Right: Hold pinch"),
+            ("right_click", "Right click",   "Right: Thumb+Middle pinch"),
+            ("scroll",      "Scroll",        "Right: Peace sign up/down"),
+        ]
+
+        if self._cursor_mode == "dual_hand":
+            rows = guide_rows_dual
+        elif self._cursor_mode == "eye_tracking":
+            rows = guide_rows_eye
+        else:
+            rows = guide_rows_single
+
         for idx, (il, tl, dl) in enumerate(self._guide_row_widgets):
             if idx < len(rows):
                 icon_key, action_desc, gesture_desc = rows[idx]
@@ -1257,10 +1303,14 @@ class MainWindow(QMainWindow):
                 tl.setText(gesture_desc)
                 dl.setText(action_desc)
 
+        _mode_labels = {
+            "dual_hand": "Mode: Dual Hand (L=Cursor R=Actions)",
+            "single_hand": "Mode: Single Hand",
+            "eye_tracking": "Mode: Eye Tracking (experimental)",
+        }
         if hasattr(self, "mode_lbl"):
             self.mode_lbl.setText(
-                "Mode: Hand-Only" if self._hand_only_mode
-                else "Mode: Hybrid (Head+Hand)")
+                _mode_labels.get(self._cursor_mode, "Mode: Dual Hand"))
 
     def _sync_margin_controls(self) -> None:
         max_margin = max(40, self.mapper.max_effective_margin_px())
@@ -1508,160 +1558,139 @@ class MainWindow(QMainWindow):
         last_hand_time = time.monotonic()
 
         _boost_runtime_priority()
-        # cv2.setUseOptimized is configured globally; skip per-thread call.
 
-        while self.running:  # type: ignore
+        while self.running:
             if time.monotonic() - last_hand_time > 5.0:
                 time.sleep(0.005)
 
             try:
-                frame = self.camera.latest()  # type: ignore
+                frame = self.camera.latest()
                 if frame is None:
                     continue
 
-                if self._mirror_camera:  # type: ignore
+                if self._mirror_camera:
                     frame = cv2.flip(frame, 1)
 
                 h, w = frame.shape[:2]
-                self.mapper.set_camera_size(w, h)  # type: ignore
+                self.mapper.set_camera_size(w, h)
 
-                # ── FACE TRACKER: nose tip → cursor position ──────────
+                # ── FACE / EYE TRACKER ─────────────────────────────
                 face_pos: tuple[int, int] | None = None
-                if self.face_tracker is not None and self.face_tracker.available:
+                eye_pos: tuple[int, int] | None = None
+
+                if self._cursor_mode == "eye_tracking" and self.eye_tracker is not None:
+                    eye_pos = self.eye_tracker.detect(frame)
+                elif self.face_tracker is not None and self.face_tracker.available:
                     face_pos = self.face_tracker.detect(frame)
+
                 self._nose_pos = face_pos
-                if face_pos is None:
+                if face_pos is None and eye_pos is None:
                     self._face_lost_frames += 1
                     if self._face_lost_frames > 3:
                         self._scroll_nose_y = None
                 else:
                     self._face_lost_frames = 0
-                _face_tracked = face_pos is not None
+                _face_tracked = (face_pos is not None) or (eye_pos is not None)
 
-                # ── HAND TRACKER: landmarks → gesture ─────────────────
-
-                tracker = self.tracker  # type: ignore
+                # ── HAND TRACKER ───────────────────────────────────
+                tracker = self.tracker
                 if tracker is None:
                     continue
 
-                hand_data, hand_proto, is_grace = tracker.detect(frame, is_mirrored=self._mirror_camera)  # type: ignore
-                # Cache the RGB-converted frame that hand_tracker already produced internally,
-                # so _render() doesn't need to reconvert.
-                if hasattr(tracker, '_last_rgb_frame'):
-                    rgb_cached = tracker._last_rgb_frame
-                else:
-                    rgb_cached = None
+                hands_dict, hand_protos, is_grace = tracker.detect(
+                    frame, is_mirrored=self._mirror_camera)
 
-                if hand_proto is not None:
+                rgb_cached = getattr(tracker, '_last_rgb_frame', None)
+
+                if hands_dict:
                     last_hand_time = time.monotonic()
-                    wrist = hand_data["xy"][0]
-                    middle_mcp = hand_data["xy"][9]
-                    scale = ((wrist[0] - middle_mcp[0]) ** 2 + (wrist[1] - middle_mcp[1]) ** 2) ** 0.5
-                    self.mapper.set_hand_scale(scale)  # type: ignore
-                    self._camera_error_text = ""  # type: ignore
+                    # Compute hand scale from whichever hand is available
+                    for _hd in hands_dict.values():
+                        _xy = _hd.get("xy", [])
+                        if len(_xy) >= 10:
+                            _w = _xy[0]; _m = _xy[9]
+                            scale = ((_w[0]-_m[0])**2 + (_w[1]-_m[1])**2)**0.5
+                            self.mapper.set_hand_scale(scale)
+                            break
+                    self._camera_error_text = ""
                 else:
-                    self._camera_error_text = self.camera.last_error  # type: ignore
+                    self._camera_error_text = self.camera.last_error
 
-                result = self.gestures.detect(hand_data, is_grace_frame=is_grace)  # type: ignore
+                # ── GESTURE DETECTION ──────────────────────────────
+                if self._cursor_mode == "dual_hand":
+                    result = self.gestures.detect_dual(hands_dict, is_grace)
+                else:
+                    # Single-hand or eye-tracking: use right hand for gestures
+                    action_hand = hands_dict.get("Right") or hands_dict.get("Left")
+                    result = self.gestures.detect(action_hand, is_grace)
+
                 if result is None:
                     result = GestureResult(GestureType.PAUSE, 0)
-                # Safety: verify confidence before allowing actions
-                if hand_data and hand_data.get("confidence", 0) < 0.55:
-                    if result.gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
-                                         GestureType.DOUBLE_CLICK}:
-                        result = GestureResult(GestureType.MOVE, 0)
-                if self._hand_only_mode and hand_data:
-                    _hc = float(hand_data.get("confidence", 0.0))
-                    if _hc < 0.75 and result.gesture in {
-                        GestureType.LEFT_CLICK,
-                        GestureType.RIGHT_CLICK,
-                        GestureType.DOUBLE_CLICK,
-                        GestureType.DRAG,
-                        GestureType.SCROLL,
-                    }:
-                        result = GestureResult(GestureType.MOVE, 0)
+
                 gesture = result.gesture
                 gesture_changed = gesture != last_action
-                self._last_debug_label = gesture
-                # Debug print disabled for production
 
-                if (
-                    self.mouse_enabled
-                    and gesture == GestureType.KEYBOARD
-                    and gesture_changed
-                    and hand_data
-                    and (not is_grace)
-                ):
-                    self._launch_keyboard()
+                # Confidence gate
+                _action_hand = hands_dict.get("Right") or hands_dict.get("Left")
+                if _action_hand and float(_action_hand.get("confidence", 0)) < 0.55:
+                    if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
+                                   GestureType.DOUBLE_CLICK}:
+                        gesture = GestureType.MOVE
+                        result = GestureResult(GestureType.MOVE, 0)
+                        gesture_changed = gesture != last_action
 
-                if self.mouse_enabled and gesture == GestureType.TASK_VIEW and gesture_changed:
-                    now = time.monotonic()
-                    if now - last_task_view_action >= 1.0:
-                        last_task_view_action = now
-                        self.mouse.open_task_view()
+                # ── CURSOR POSITION ────────────────────────────────
+                _has_cursor = False
+                sx, sy = self._frozen_sx, self._frozen_sy
 
-                if (
-                    self.mouse_enabled
-                    and hand_data
-                    and (not is_grace)
-                    and gesture in {
-                        GestureType.MEDIA_VOL_UP,
-                        GestureType.MEDIA_VOL_DOWN,
-                        GestureType.MEDIA_NEXT,
-                        GestureType.MEDIA_PREV,
-                    }
-                ):
-                    if gesture_changed or gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN):
-                        if gesture in (GestureType.MEDIA_VOL_UP, GestureType.MEDIA_VOL_DOWN) and result.scroll_delta == 0:
-                            pass
-                        else:
-                            self._execute_media(gesture, result.scroll_delta)
+                if self._cursor_mode == "eye_tracking":
+                    # Eye tracking mode: eyes drive cursor
+                    if eye_pos is not None:
+                        sx, sy = self.mapper.map_point(eye_pos[0], eye_pos[1])
+                        _has_cursor = True
+                    elif face_pos is not None:
+                        sx, sy = self.mapper.map_point(face_pos[0], face_pos[1])
+                        _has_cursor = True
+                    else:
+                        _has_cursor = self._frozen_sx >= 0
 
-                # ── CURSOR DISPATCH (Hybrid or Hand-Only) ─────────────
-                _allow_action = not is_grace
-
-                # ── Determine cursor position ──────────────────────────
-                if self._hand_only_mode:
-                    # In hand-only: freeze cursor when clicking so
-                    # index tip motion during pinch doesn't move target.
-                    # Use the last non-click position as the anchor.
+                elif self._cursor_mode == "dual_hand":
+                    # Dual-hand: LEFT hand index finger = cursor
+                    left_hand = hands_dict.get("Left")
                     if gesture in self._freeze_on:
-                        # Already frozen — use last good position
-                        sx = self._frozen_sx if self._frozen_sx >= 0 else 0
-                        sy = self._frozen_sy if self._frozen_sy >= 0 else 0
+                        # Freeze cursor during clicks
                         _has_cursor = self._frozen_sx >= 0
-                        self._cursor_frozen = True
-                    else:
-                        self._cursor_frozen = False
-                        if hand_data and len(hand_data.get("xy", [])) > 8:
-                            _tip = hand_data["xy"][8]
-                            sx, sy = self.mapper.map_point(int(_tip[0]), int(_tip[1]))
-                            _has_cursor = True
-                            self._frozen_sx, self._frozen_sy = sx, sy
-                        else:
-                            sx, sy = self._frozen_sx, self._frozen_sy
-                            _has_cursor = self._frozen_sx >= 0
-                else:
-                    # Hybrid: nose tip drives cursor; fallback to hand LM9
-                    _nose = self._nose_pos
-                    if _nose is not None:
-                        sx, sy = self.mapper.map_point(_nose[0], _nose[1])
+                    elif left_hand and len(left_hand.get("xy", [])) > 8:
+                        tip = left_hand["xy"][8]
+                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
                         _has_cursor = True
-                    elif hand_data and len(hand_data.get("xy", [])) > 9:
-                        _anc = hand_data["xy"][9]
-                        sx, sy = self.mapper.map_point(int(_anc[0]), int(_anc[1]))
+                    elif hands_dict.get("Right") and len(hands_dict["Right"].get("xy", [])) > 8:
+                        # Fallback: if only right hand, use right index for cursor
+                        tip = hands_dict["Right"]["xy"][8]
+                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
                         _has_cursor = True
                     else:
-                        sx, sy = self._frozen_sx, self._frozen_sy
                         _has_cursor = self._frozen_sx >= 0
 
-                # Keep last known good position
+                else:
+                    # Single-hand legacy: index finger = cursor
+                    _any_hand = hands_dict.get("Right") or hands_dict.get("Left")
+                    if gesture in self._freeze_on:
+                        _has_cursor = self._frozen_sx >= 0
+                    elif _any_hand and len(_any_hand.get("xy", [])) > 8:
+                        tip = _any_hand["xy"][8]
+                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
+                        _has_cursor = True
+                    else:
+                        _has_cursor = self._frozen_sx >= 0
+
                 if _has_cursor:
                     self._frozen_sx, self._frozen_sy = sx, sy
 
-                # ── Dispatch actions ───────────────────────────────────
-                _hybrid_idle_move = (not self._hand_only_mode and gesture == GestureType.PAUSE)
-                if self.mouse_enabled and _has_cursor and (gesture in self._CURSOR_GESTURES or _hybrid_idle_move):
+                # ── DISPATCH ACTIONS ───────────────────────────────
+                _allow_action = not is_grace
+
+                if self.mouse_enabled and _has_cursor and gesture in self._CURSOR_GESTURES:
                     if gesture != GestureType.SCROLL:
                         self.mouse.move(sx, sy)
 
@@ -1674,23 +1703,7 @@ class MainWindow(QMainWindow):
                     elif gesture == GestureType.RIGHT_CLICK and gesture_changed and _allow_action:
                         self.mouse.right_click()
                     elif gesture == GestureType.SCROLL and _allow_action:
-                        if self._hand_only_mode:
-                            # Hand-only scroll: use gesture engine delta
-                            self.mouse.scroll(int(
-                                result.scroll_delta * self._scroll_multiplier))
-                        else:
-                            # Hybrid scroll: head nod
-                            _nose = self._nose_pos
-                            if _nose is not None:
-                                if self._scroll_nose_y is None:
-                                    self._scroll_nose_y = float(_nose[1])
-                                else:
-                                    _ndy = self._scroll_nose_y - float(_nose[1])
-                                    _nsteps = int(_ndy * 0.08 * self._scroll_multiplier)
-                                    _nsteps = max(-5, min(5, _nsteps))
-                                    if abs(_nsteps) >= 1:
-                                        self.mouse.scroll(_nsteps)
-                                        self._scroll_nose_y = float(_nose[1])
+                        self.mouse.scroll(int(result.scroll_delta * self._scroll_multiplier))
                     elif gesture == GestureType.DRAG:
                         if not self._drag_active:
                             self.mouse.start_drag()
@@ -1700,16 +1713,15 @@ class MainWindow(QMainWindow):
                         self.mouse.end_drag()
                         self._drag_active = False
                 else:
-                    pass
                     if self.mouse.is_dragging:
                         self.mouse.end_drag()
                         self._drag_active = False
-                # ──────────────────────────────────────────────────────
 
                 if not self.mouse_enabled and self.mouse.is_dragging:
                     self.mouse.end_drag()
                     self._drag_active = False
 
+                # ── UPDATE UI STATE ────────────────────────────────
                 if gesture != last_overlay:
                     overlay = _OVERLAY_LABELS.get(gesture, "")
                     last_overlay = gesture
@@ -1729,31 +1741,33 @@ class MainWindow(QMainWindow):
                     fps_i = 1.0 / dt
                     self.fps = fps_i if self.fps == 0 else 0.9 * self.fps + 0.1 * fps_i
 
+                # Finger count
                 _finger_count = 0
-                if hand_data:
+                _count_hand = hands_dict.get("Right") or hands_dict.get("Left")
+                if _count_hand:
                     try:
-                        _xy = hand_data.get("xy", [])
+                        _xy = _count_hand.get("xy", [])
                         if len(_xy) >= 21:
                             _w = _xy[0]
-                            for _t, _p in zip([4, 8, 12, 16, 20], [2, 6, 10, 14, 18]):
+                            for _t, _p in zip([4,8,12,16,20], [2,6,10,14,18]):
                                 _td = ((_xy[_t][0]-_w[0])**2+(_xy[_t][1]-_w[1])**2)**0.5
                                 _pd = ((_xy[_p][0]-_w[0])**2+(_xy[_p][1]-_w[1])**2)**0.5
                                 if _td > _pd:
                                     _finger_count += 1
                     except Exception:
                         pass
+
                 with self._lock:
                     self._frame = frame
                     self._rgb_frame = rgb_cached
                     self._gesture = gesture
                     self._overlay_text = overlay
-                    self._hand_proto = hand_proto
-                    self._hand_data = hand_data
+                    self._hand_proto = hand_protos  # Now a list of (proto, label)
+                    self._hand_data = _count_hand
                     self._fingers = _finger_count
                     self._face_tracked = _face_tracked
-            except Exception as exc:
-                import logging
-                logging.exception(f"Process loop error: {exc}")
+
+            except Exception:
                 continue
 
     def _render(self) -> None:
@@ -1769,10 +1783,15 @@ class MainWindow(QMainWindow):
         self.fps_lbl.setText(f"FPS {self.fps:.0f}")
         if self.running and self._camera_error_text:
             self.cam_status.setText(self._camera_error_text)
-        # In hybrid mode, MOVE is constant — show tracking status instead
+        # In cursor-driven modes, MOVE maps to mode-specific status labels.
         _badge_text = gesture.value
-        if gesture == GestureType.MOVE and not self._hand_only_mode:
-            _badge_text = "TRACKING" if self._face_tracked else "ACQUIRING"
+        if gesture == GestureType.MOVE:
+            if self._cursor_mode == "dual_hand":
+                _badge_text = "DUAL HAND"
+            elif self._cursor_mode == "eye_tracking":
+                _badge_text = "IRIS TRACK" if self._face_tracked else "ACQUIRING"
+            else:
+                _badge_text = "TRACKING" if self._face_tracked else "ACQUIRING"
         self.gesture_lbl.setText(_badge_text)
         if gesture != self._last_badge_gesture or _badge_text != getattr(self, '_last_badge_text', ''):
             self._last_badge_gesture = gesture
@@ -1793,11 +1812,22 @@ class MainWindow(QMainWindow):
         self.fingers_lbl.setText(f"Fingers: {fingers}")
         with self._lock:
             _face_on = self._face_tracked
-        if not self._hand_only_mode:
-            _face_txt = "Face: Tracking ●" if _face_on else "Face: Lost ○"
+        if self._cursor_mode == "eye_tracking":
             self.hand_lbl.setText(
-                f"{_face_txt}  |  Hand: {'Detected' if hand_proto is not None else 'Not Detected'}"
-            )
+                f"Eyes: {'Tracking' if _face_on else 'Lost'}  |  "
+                f"Hand: {'Detected' if hand_proto else 'None'}")
+        elif self._cursor_mode == "dual_hand":
+            # Show both hands status
+            _left_ok = False
+            _right_ok = False
+            if isinstance(hand_proto, list):
+                for _, lbl in hand_proto:
+                    if lbl == "Left":
+                        _left_ok = True
+                    if lbl == "Right":
+                        _right_ok = True
+            self.hand_lbl.setText(
+                f"L: {'●' if _left_ok else '○'}  R: {'●' if _right_ok else '○'}")
         else:
             self.hand_lbl.setText(
                 "Hand: Detected" if hand_proto is not None else "Hand: Not Detected"
@@ -1848,9 +1878,16 @@ class MainWindow(QMainWindow):
         if not self._hand_only_mode and self.face_tracker is not None:
             self.face_tracker.draw(rgb)
 
+        if self._cursor_mode == "eye_tracking" and self.eye_tracker is not None:
+            self.eye_tracker.draw(rgb)
+
         if hand_proto is not None and tracker is not None:
-            label = hand_data["label"] if hand_data else "Right"
-            tracker.draw(rgb, hand_proto, label)
+            # hand_proto is now a list of (proto, label) tuples
+            if isinstance(hand_proto, list):
+                tracker.draw(rgb, hand_proto)
+            else:
+                label = hand_data["label"] if hand_data else "Right"
+                tracker.draw(rgb, hand_proto, label)
 
         h, w, _ = rgb.shape
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
@@ -1905,6 +1942,11 @@ class MainWindow(QMainWindow):
                 self.face_tracker.close()
         except Exception:
             pass
+        try:
+            if self.eye_tracker is not None:
+                self.eye_tracker.close()
+        except Exception:
+            pass
         self.mouse.stop()
         QApplication.instance().quit()  # type: ignore
 
@@ -1936,6 +1978,11 @@ class MainWindow(QMainWindow):
         try:
             if self.face_tracker is not None:
                 self.face_tracker.close()
+        except Exception:
+            pass
+        try:
+            if self.eye_tracker is not None:
+                self.eye_tracker.close()
         except Exception:
             pass
         try:
