@@ -141,8 +141,8 @@ class HandTracker:
 
                 prev_xy = self._prev_xy_by_label.get(label)
                 if prev_xy is not None and len(prev_xy) == len(xy):
-                    # Adaptive EMA: smooth enough to reduce jitter, but keep realtime hand following.
-                    blend = 0.70 if conf >= 0.75 else (0.62 if conf >= 0.55 else 0.52)
+                    # Adaptive EMA: stronger smoothing to reduce shake while preserving fingertip response.
+                    blend = 0.48 if conf >= 0.78 else (0.42 if conf >= 0.60 else 0.36)
                     smoothed_xy: list[tuple[int, int]] = []
                     for i, (cx, cy) in enumerate(xy):
                         px, py = prev_xy[i]
@@ -150,6 +150,14 @@ class HandTracker:
                         sy_i = int(py + (cy - py) * blend)
                         smoothed_xy.append((sx_i, sy_i))
                     xy = smoothed_xy
+
+                # Keep rendered skeleton consistent with smoothed points.
+                try:
+                    for i, (sx_i, sy_i) in enumerate(xy):
+                        hand.landmark[i].x = max(0.0, min(1.0, float(sx_i) / max(1.0, float(src_w))))
+                        hand.landmark[i].y = max(0.0, min(1.0, float(sy_i) / max(1.0, float(src_h))))
+                except Exception:
+                    pass
 
                 # If we already have this label, keep the higher-confidence one
                 if label in hands_dict:

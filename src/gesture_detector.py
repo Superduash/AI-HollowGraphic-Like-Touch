@@ -59,8 +59,8 @@ class GestureDetector:
         self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
         self._scroll_step_limit = 8
         self._scroll_gain = 1.0
-        self._right_click_hold_s = max(0.25, float(GESTURE_RIGHT_CLICK_HOLD_S))
-        self._right_click_hold_s = min(self._right_click_hold_s, 0.22)
+        self._right_click_hold_s = max(0.14, float(GESTURE_RIGHT_CLICK_HOLD_S))
+        self._right_click_hold_s = min(self._right_click_hold_s, 0.18)
 
         # EMA-smoothed pinch ratios reduce false click flicker while keeping response quick.
         self._li_ema: float | None = None
@@ -268,12 +268,17 @@ class GestureDetector:
         # --- Right pinch (thumb+middle) = right-click ---
         # Requires: index finger clearly open (li > exit_),
         # middle+thumb close, held for _right_click_hold_s
-        right_enter = enter * 0.68
+        right_enter = enter * 0.80
         if self._right_pinch_active:
             if ri > exit_:
                 self._right_pinch_active = False
                 self._right_pinch_start_t = None
-        elif ri <= right_enter and li > (enter * 1.08) and pm > 0.18:
+        elif (
+            not self._left_pinch_active
+            and ri <= right_enter
+            and li > (enter * 0.90)
+            and pm > 0.14
+        ):
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
             elif now - self._right_pinch_start_t >= self._right_click_hold_s:
