@@ -268,7 +268,7 @@ class GestureDetector:
         # --- Right pinch (thumb+middle) = right-click ---
         # Requires: index finger clearly open (li > exit_),
         # middle+thumb close, held for _right_click_hold_s
-        right_enter = enter * 0.80
+        right_enter = enter * 0.88
         if self._right_pinch_active:
             if ri > exit_:
                 self._right_pinch_active = False
@@ -276,7 +276,7 @@ class GestureDetector:
         elif (
             not self._left_pinch_active
             and ri <= right_enter
-            and li > (enter * 0.90)
+            and li > (enter * 0.95)
             and pm > 0.14
         ):
             if self._right_pinch_start_t is None:
@@ -286,8 +286,31 @@ class GestureDetector:
         else:
             self._right_pinch_start_t = None
 
-        # --- Peace sign (index+middle spread) = scroll ---
-        peace_pose = (pm >= 0.08 and pm <= 0.72 and li > exit_ and ri > exit_)
+        # --- Scroll pose: index+middle raised together, vertically oriented ---
+        idx_tip = xy[8]; idx_pip = xy[6]
+        mid_tip = xy[12]; mid_pip = xy[10]
+        wrist = xy[0]
+        idx_tip_dist = pinch_dist_2d(float(idx_tip[0]), float(idx_tip[1]), float(wrist[0]), float(wrist[1]))
+        idx_pip_dist = pinch_dist_2d(float(idx_pip[0]), float(idx_pip[1]), float(wrist[0]), float(wrist[1]))
+        mid_tip_dist = pinch_dist_2d(float(mid_tip[0]), float(mid_tip[1]), float(wrist[0]), float(wrist[1]))
+        mid_pip_dist = pinch_dist_2d(float(mid_pip[0]), float(mid_pip[1]), float(wrist[0]), float(wrist[1]))
+        extend_margin = max(4.0, self._hand_scale * 0.05)
+        fingers_extended = (
+            idx_tip_dist > (idx_pip_dist + extend_margin)
+            and mid_tip_dist > (mid_pip_dist + extend_margin)
+        )
+        fingers_together = pm <= 0.50
+        aligned_vertical = (
+            abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.22)
+            and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.26)
+        )
+        scroll_pose = (
+            fingers_extended
+            and fingers_together
+            and aligned_vertical
+            and li > exit_
+            and ri > exit_
+        )
 
         # --- Track pinch duration for drag ---
         if self._left_pinch_active:
@@ -307,7 +330,7 @@ class GestureDetector:
                 raw_state = GestureType.LEFT_CLICK
         elif self._right_pinch_active:
             raw_state = GestureType.RIGHT_CLICK
-        elif peace_pose:
+        elif scroll_pose:
             raw_state = GestureType.SCROLL
 
         # --- Stability filter ---

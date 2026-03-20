@@ -1110,7 +1110,7 @@ class MainWindow(QMainWindow):
             }
             
             #primaryText { color: #E2E8F0; font-size: 13px; font-weight: 600;}
-            #secondary { color: #94A3B8; font-size: 13px; font-weight: 500;}
+            #secondary { color: #D7E3F7; font-size: 13px; font-weight: 600;}
             #muted { color: #475569; font-size: 13px; font-weight: 500;}
             
             #badge {
@@ -1386,6 +1386,34 @@ class MainWindow(QMainWindow):
         if self._region_slider.value() != clamped:
             self._region_slider.setValue(clamped)
         settings.set("frame_r", self.mapper.frame_r)
+
+    def _dual_cursor_point(self, hand_data: dict | None) -> tuple[int, int] | None:
+        if hand_data is None:
+            return None
+        xy = hand_data.get("xy", [])
+        if not xy or len(xy) < 10:
+            return None
+
+        wrist = xy[0]
+        mcp9 = xy[9]
+        hand_scale = max(
+            12.0,
+            ((float(wrist[0]) - float(mcp9[0])) ** 2 + (float(wrist[1]) - float(mcp9[1])) ** 2) ** 0.5,
+        )
+        extend_margin = max(5.0, hand_scale * 0.06)
+
+        for tip_idx, pip_idx in ((8, 6), (12, 10), (16, 14), (20, 18)):
+            if len(xy) <= tip_idx or len(xy) <= pip_idx:
+                continue
+            tip = xy[tip_idx]
+            pip = xy[pip_idx]
+            tip_dist = ((float(tip[0]) - float(wrist[0])) ** 2 + (float(tip[1]) - float(wrist[1])) ** 2) ** 0.5
+            pip_dist = ((float(pip[0]) - float(wrist[0])) ** 2 + (float(pip[1]) - float(wrist[1])) ** 2) ** 0.5
+            if tip_dist > (pip_dist + extend_margin):
+                return int(tip[0]), int(tip[1])
+
+        # Closed palm fallback keeps movement active without forcing an extended finger.
+        return int(mcp9[0]), int(mcp9[1])
 
     @Slot(str)
     def set_cursor_mode(self, mode: str) -> None:
@@ -1792,13 +1820,13 @@ class MainWindow(QMainWindow):
                     if gesture in self._freeze_on:
                         # Freeze cursor during clicks
                         _has_cursor = self._frozen_sx >= 0
-                    elif cursor_hand and len(cursor_hand.get("xy", [])) > 8:
-                        tip = cursor_hand["xy"][8]
-                        sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-                        _has_cursor = True
                     else:
-                        # Do not swap hands automatically in dual mode; keep cursor stable.
-                        _has_cursor = self._frozen_sx >= 0
+                        cursor_point = self._dual_cursor_point(cursor_hand)
+                        if cursor_point is not None:
+                            sx, sy = self.mapper.map_point(cursor_point[0], cursor_point[1])
+                            _has_cursor = True
+                        else:
+                            _has_cursor = self._frozen_sx >= 0
 
                 else:
                     # Single-hand legacy: index finger = cursor
@@ -1994,10 +2022,14 @@ class MainWindow(QMainWindow):
                         _right_ok = True
             self.hand_lbl.setText(
                 f"L: {'●' if _left_ok else '○'}  R: {'●' if _right_ok else '○'}")
+            self.hand_lbl.setStyleSheet("color: #D7E3F7; font-weight: 700;")
         else:
-            self.hand_lbl.setText(
-                "Hand: Detected" if hand_proto is not None else "Hand: Not Detected"
-            )
+            if hand_proto is not None:
+                self.hand_lbl.setText("Single Mode: Hand Detected")
+                self.hand_lbl.setStyleSheet("color: #6EE7B7; font-weight: 800;")
+            else:
+                self.hand_lbl.setText("Single Mode: Hand Not Detected")
+                self.hand_lbl.setStyleSheet("color: #FCA5A5; font-weight: 800;")
         if hand_data and "confidence" in hand_data:
             conf = hand_data["confidence"]
             self.confidence_lbl.setText(f"Confidence: {conf * 100:.0f}%")
