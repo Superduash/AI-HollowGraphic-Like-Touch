@@ -1533,8 +1533,9 @@ class MainWindow(QMainWindow):
                     GestureType.DRAG, GestureType.SCROLL,
                 }
                 if self.mouse_enabled and hand_data and gesture in _cursor_gestures:
-                    # LM9 = middle MCP — stays put when thumb+index pinch, unlike LM8
-                    anchor = hand_data["xy"][9]
+                    # LM8 = index fingertip — full movement range, reaches corners.
+                    # Click drift is handled by freeze logic below, not landmark choice.
+                    anchor = hand_data["xy"][8]
                     cam_x = int(anchor[0])
                     cam_y = int(anchor[1])
                     sx, sy = self.mapper.map_point(cam_x, cam_y)

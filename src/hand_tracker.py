@@ -72,19 +72,22 @@ class HandTracker:
         self._draw = mp.solutions.drawing_utils  # type: ignore[attr-defined]
         self._styles = mp.solutions.drawing_styles  # type: ignore[attr-defined]
 
-        _perf = False
+        _perf = True  # Default to fast model on all platforms
         try:
             from .settings_store import settings as _s
-            _perf = bool(_s.get("performance_mode", False))
+            # "performance_mode" OFF means user explicitly wants high quality model
+            # Default is fast (complexity=0) — user can enable high quality in Settings
+            _fast = not bool(_s.get("high_quality_model", False))
+            _perf = _fast
         except Exception:
             pass
 
         self._hands = self._mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
-            model_complexity=0 if _perf else 1,
-            min_detection_confidence=0.60,
-            min_tracking_confidence=0.40,
+            model_complexity=0,
+            min_detection_confidence=0.55,
+            min_tracking_confidence=0.35,
         )
 
         self._frames_no_hand = 0

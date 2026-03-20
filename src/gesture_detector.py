@@ -163,31 +163,33 @@ class GestureDetector:
     def _finger_states(self, landmarks_xy) -> FingerStates:
         wrist = landmarks_xy[0]
 
+        # Thumb: distance from tip to pinky base vs MCP to pinky base.
+        # Works at any hand angle/rotation.
         thumb_tip = landmarks_xy[4]
-        thumb_ip = landmarks_xy[3]
         thumb_mcp = landmarks_xy[2]
         pinky_base = landmarks_xy[17]
         dist_tip_to_pinky = self._distance(thumb_tip, pinky_base)
         dist_mcp_to_pinky = self._distance(thumb_mcp, pinky_base)
         thumb = dist_tip_to_pinky > (dist_mcp_to_pinky * 1.2)
 
-        # Vectorized finger extension detection
-        # Tip indices: index=8, middle=12, ring=16, pinky=20
-        # MCP  indices: index=5, middle=9, ring=13, pinky=17
-        tips = [4, 8, 12, 16, 20]
-        mcps = [2, 5,  9, 13, 17]
-        pts = np.asarray(landmarks_xy[:21], dtype='float32')
-        tip_pts = pts[tips]
-        mcp_pts = pts[mcps]
-        # Finger is "up" (extended) if tip is higher than its MCP (lower y value)
-        extended = tip_pts[:, 1] < mcp_pts[:, 1]
+        # Fingers: tip-to-wrist > pip-to-wrist AND tip-to-mcp > min_ext.
+        # Fully rotation-invariant — works when hand is vertical, tilted,
+        # sideways, or at any angle. min_ext threshold uses hand_scale.
+        def _up(tip_i: int, pip_i: int, mcp_i: int) -> bool:
+            tip = landmarks_xy[tip_i]
+            pip = landmarks_xy[pip_i]
+            mcp = landmarks_xy[mcp_i]
+            d_tip = self._distance(tip, wrist)
+            d_pip = self._distance(pip, wrist)
+            d_ext = self._distance(tip, mcp)
+            return d_tip > d_pip and d_ext > (self._hand_scale * 0.30)
 
         return FingerStates(
             thumb=thumb,
-            index=bool(extended[1]),
-            middle=bool(extended[2]),
-            ring=bool(extended[3]),
-            pinky=bool(extended[4]),
+            index=_up(8, 6, 5),
+            middle=_up(12, 10, 9),
+            ring=_up(16, 14, 13),
+            pinky=_up(20, 18, 17),
         )
 
     # REMOVED: finger_count() — use _finger_states() instead (line 128)
@@ -227,15 +229,16 @@ class GestureDetector:
 
         left_click_pose = left_dist <= pinch_enter
 
-        # FIX 6: Raise right-click anti-cross gate with index extension check
-        # Prevents random right-click during left-click when thumb drifts
-        index_tip_y = xy[8][1]
-        index_mcp_y = xy[5][1]
-        index_is_up = index_tip_y < index_mcp_y   # tip above MCP = extended (pixel space: y up)
+        # Rotation-invariant index extension check for right-click guard.
+        _i_tip = xy[8]; _i_pip = xy[6]; _i_mcp = xy[5]
+        _d_tip_w = self._distance(_i_tip, xy[0])
+        _d_pip_w = self._distance(_i_pip, xy[0])
+        _d_tip_mcp = self._distance(_i_tip, _i_mcp)
+        index_is_up = _d_tip_w > _d_pip_w and _d_tip_mcp > (self._hand_scale * 0.30)
         right_click_pose = (
             right_dist <= pinch_enter
             and left_dist > (pinch_exit * 1.1)
-            and index_is_up  # index must be clearly extended (not pinching left)
+            and index_is_up
         )
 
         if self._left_pinch_active:
