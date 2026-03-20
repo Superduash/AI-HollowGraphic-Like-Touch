@@ -58,7 +58,8 @@ if "%REQ_HASH%"=="%OLD_HASH%" (
 )
 
 echo Launching Windows Hover...
-python app.py
+set "HT_SILENCE_NATIVE_STDERR=1"
+python app.py 2>nul
 if errorlevel 1 goto :error
 
 exit /b 0

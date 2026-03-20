@@ -4,9 +4,19 @@ Comprehensive test runner - executes all tests and reports results.
 Designed to run fast from command line after every change.
 """
 import sys
+import os
 import time
 import traceback
 from pathlib import Path
+
+
+_DEVNULL_HANDLE = None
+if os.environ.get("HT_SILENCE_NATIVE_STDERR", "1") == "1":
+    try:
+        _DEVNULL_HANDLE = open(os.devnull, "w", encoding="utf-8", errors="ignore")
+        os.dup2(_DEVNULL_HANDLE.fileno(), 2)
+    except Exception:
+        _DEVNULL_HANDLE = None
 
 
 # Add workspace to path

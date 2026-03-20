@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections import deque
 
 import cv2
+
+os.environ.setdefault("GLOG_minloglevel", "3")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
+os.environ.setdefault("MEDIAPIPE_DISABLE_GPU", "1")
+
+try:
+    from absl import logging as _absl_logging  # type: ignore
+    _absl_logging.set_verbosity(_absl_logging.ERROR)
+    _absl_logging.set_stderrthreshold("error")
+except Exception:
+    pass
 
 try:
     import mediapipe as mp
 except Exception:
     mp = None
-
-os.environ.setdefault("GLOG_minloglevel", "2")
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 from .utils import _ensure_mediapipe_solutions
 
@@ -35,17 +45,53 @@ class HandTracker:
         self._draw_utils = mp.solutions.drawing_utils
         self._draw_styles = mp.solutions.drawing_styles
 
-        self._hands = self._mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            model_complexity=0,
-            min_detection_confidence=0.50,
-            min_tracking_confidence=0.30,
-        )
+        self._hands = self._create_hands_model()
 
         self._frames_no_hand = 0
         self._grace_frames = 3
+        self._edge_grace_frames = 7
+        self._edge_ratio = 0.08
+        self._last_valid_near_edge = False
         self._last_valid_result: tuple[dict, list] | None = None
+
+    def _create_hands_model(self):
+        """Build Hands model with temporary native stderr suppression to prevent startup spam."""
+        stderr_fd = None
+        saved_stderr_fd = None
+        devnull = None
+        try:
+            stderr_fd = sys.stderr.fileno()
+            saved_stderr_fd = os.dup(stderr_fd)
+            devnull = open(os.devnull, "w", encoding="utf-8", errors="ignore")
+            os.dup2(devnull.fileno(), stderr_fd)
+        except Exception:
+            stderr_fd = None
+            saved_stderr_fd = None
+
+        try:
+            return self._mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=2,
+                model_complexity=0,
+                min_detection_confidence=0.50,
+                min_tracking_confidence=0.30,
+            )
+        finally:
+            try:
+                if stderr_fd is not None and saved_stderr_fd is not None:
+                    os.dup2(saved_stderr_fd, stderr_fd)
+            except Exception:
+                pass
+            try:
+                if saved_stderr_fd is not None:
+                    os.close(saved_stderr_fd)
+            except Exception:
+                pass
+            try:
+                if devnull is not None:
+                    devnull.close()
+            except Exception:
+                pass
 
     def set_processing_size(self, size: tuple[int, int] | None) -> None:
         if size is None:
@@ -74,6 +120,9 @@ class HandTracker:
         if result.multi_hand_landmarks and result.multi_handedness:
             sx = float(src_w) / max(1, dw)
             sy = float(src_h) / max(1, dh)
+            edge_margin_x = dw * self._edge_ratio
+            edge_margin_y = dh * self._edge_ratio
+            detected_near_edge = False
 
             for idx, hand in enumerate(result.multi_hand_landmarks):
                 if idx >= len(result.multi_handedness):
@@ -103,16 +152,30 @@ class HandTracker:
                 }
                 protos.append((hand, label))
 
+                # Track whether a hand is near camera borders where detections can flap.
+                near_edge = any(
+                    lm.x * dw <= edge_margin_x
+                    or lm.x * dw >= (dw - edge_margin_x)
+                    or lm.y * dh <= edge_margin_y
+                    or lm.y * dh >= (dh - edge_margin_y)
+                    for lm in hand.landmark
+                )
+                detected_near_edge = detected_near_edge or near_edge
+
+            self._last_valid_near_edge = detected_near_edge
+
         if hands_dict:
             self._frames_no_hand = 0
             self._last_valid_result = (hands_dict, protos)
             return hands_dict, protos, False
         else:
             self._frames_no_hand += 1
-            if (self._frames_no_hand < self._grace_frames
+            grace_frames = self._edge_grace_frames if self._last_valid_near_edge else self._grace_frames
+            if (self._frames_no_hand < grace_frames
                     and self._last_valid_result is not None):
                 cached_dict, cached_protos = self._last_valid_result
                 return cached_dict, cached_protos, True
+            self._last_valid_near_edge = False
             self._last_valid_result = None
             return {}, [], False
 
