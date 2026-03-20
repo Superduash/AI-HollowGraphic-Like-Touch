@@ -5,6 +5,7 @@ import ctypes
 import platform
 import threading
 import time
+from pathlib import Path
 from typing import Any, cast
 
 import cv2  # type: ignore
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (  # type: ignore
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -345,32 +347,29 @@ class SettingsDialog(QDialog):
         body.addStretch(1)
 
         footer = QHBoxLayout()
-        about_btn = QPushButton("About")
+        about_btn = QPushButton("README")
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.setObjectName("warnButton")
         apply_btn = QPushButton("Apply")
+        apply_btn.setObjectName("primaryButton")
         close_btn = QPushButton("Close")
         close_btn.setObjectName("ghostButton")
         footer.addWidget(about_btn)
+        footer.addWidget(reset_btn)
         footer.addStretch(1)
         footer.addWidget(apply_btn)
         footer.addWidget(close_btn)
         root.addLayout(footer)
 
-        self.camera_combo.activated.connect(self._on_camera_changed)
-        self.auto_start_chk.stateChanged.connect(self._on_auto_start_changed)
-        self.minimize_to_tray_chk.stateChanged.connect(self._on_minimize_to_tray_changed)
-        self.mirror_chk.stateChanged.connect(self._on_mirror_changed)
-        self.region_chk.stateChanged.connect(self._on_region_changed)
         self.smooth_slider.valueChanged.connect(self._on_smooth_changed)
         self.margin_slider.valueChanged.connect(self._on_margin_changed)
         self.scroll_slider.valueChanged.connect(self._on_scroll_changed)
         self.pinch_slider.valueChanged.connect(self._on_pinch_changed)
         self.hold_slider.valueChanged.connect(self._on_hold_changed)
-        self.eye_chk.stateChanged.connect(self._on_eye_tracking_changed)
-        self.performance_chk.stateChanged.connect(self._on_performance_toggled)
-        self.debug_chk.stateChanged.connect(self._on_debug_changed)
         about_btn.clicked.connect(self._show_about)
-        apply_btn.clicked.connect(self._apply_performance)
-        close_btn.clicked.connect(self.accept)
+        reset_btn.clicked.connect(self._reset_to_defaults)
+        apply_btn.clicked.connect(self._apply_changes)
+        close_btn.clicked.connect(self.reject)
 
         self.setStyleSheet(
             """
@@ -385,6 +384,10 @@ class SettingsDialog(QDialog):
                 background: rgba(15, 18, 25, 0.45);
                 border: 1px solid rgba(39, 39, 42, 0.45);
                 border-radius: 12px;
+            }
+            #muted {
+                color: #94A3B8;
+                font-size: 12px;
             }
             QScrollArea { background: transparent; border: none; }
             QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
@@ -412,12 +415,22 @@ class SettingsDialog(QDialog):
             
             QPushButton {
                 border: none; border-radius: 12px; padding: 10px 20px;
-                color: #021820; font-weight: 700; font-size: 13px; 
+                color: #E2E8F0; font-weight: 700; font-size: 13px; 
+                background: #27272A;
+            }
+            QPushButton:hover { background: #3F3F46; }
+            #primaryButton {
+                color: #021820;
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0891B2, stop:1 #22D3EE);
             }
-            QPushButton:hover { 
+            #primaryButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #22D3EE, stop:1 #67E8F9);
             }
+            #warnButton {
+                color: #1A0505;
+                background: #F59E0B;
+            }
+            #warnButton:hover { background: #FBBF24; }
             #ghostButton { background: transparent; color: #8B97B0; }
             #ghostButton:hover { background: rgba(30, 37, 53, 0.5); color: #F1F5F9; }
             
@@ -437,94 +450,108 @@ class SettingsDialog(QDialog):
             """
         )
 
-    def _on_camera_changed(self, idx: int) -> None:
-        camera_index = self.camera_combo.itemData(idx)
-        if camera_index is None:
-            return
-        self._mw._on_camera_selected(camera_index)
-
-    def _on_auto_start_changed(self, state: int) -> None:
-        settings.set("auto_start_camera", bool(state))
-
-    def _on_minimize_to_tray_changed(self, state: int) -> None:
-        settings.set("minimize_to_tray", bool(state))
-
-    def _on_mirror_changed(self, state: int) -> None:
-        value = bool(state)
-        self._mw._mirror_camera = value
-        settings.set("mirror_camera", value)
-
-    def _on_region_changed(self, state: int) -> None:
-        value = bool(state)
-        self._mw._show_control_region = value
-        settings.set("show_control_region", value)
+        self._on_smooth_changed(self.smooth_slider.value())
+        self._on_margin_changed(self.margin_slider.value())
+        self._on_scroll_changed(self.scroll_slider.value())
+        self._on_pinch_changed(self.pinch_slider.value())
+        self._on_hold_changed(self.hold_slider.value())
 
     def _on_smooth_changed(self, value: int) -> None:
         smooth = value / 10.0
-        self._mw.mapper.set_smoothening(smooth)
         self.smooth_lbl.setText(f"Smoothening: {smooth:.1f}")
-        settings.set("smoothening", smooth)
 
     def _on_margin_changed(self, value: int) -> None:
-        self._mw._set_control_margin(int(value))
-        self.margin_slider.setValue(self._mw.mapper.frame_r)
-        self.margin_lbl.setText(f"Head/Hand Range: {self._mw.mapper.frame_r}")
+        max_margin = max(40, self._mw.mapper.max_effective_margin_px())
+        clamped = max(40, min(int(value), max_margin))
+        if self.margin_slider.value() != clamped:
+            self.margin_slider.setValue(clamped)
+            return
+        self.margin_lbl.setText(f"Head/Hand Range: {clamped}")
 
     def _on_scroll_changed(self, value: int) -> None:
         mult = value / 10.0
-        self._mw._scroll_multiplier = mult
         self.scroll_lbl.setText(f"Scroll speed: {mult:.1f}x")
-        settings.set("scroll_multiplier", mult)
 
     def _on_pinch_changed(self, value: int) -> None:
         pinch = value / 100.0
-        self._mw.gestures._pinch_enter = pinch
-        self._mw.gestures._pinch_exit = max(pinch + 0.05, self._mw.gestures._pinch_exit)
         self.pinch_lbl.setText(f"Pinch sensitivity: {pinch:.2f}")
-        settings.set("pinch_sensitivity", pinch)
-        settings.set("pinch_exit_sensitivity", self._mw.gestures._pinch_exit)
 
     def _on_hold_changed(self, value: int) -> None:
         hold_s = value / 1000.0
-        self._mw.gestures._confirm_hold_s = hold_s
         self.hold_lbl.setText(f"Hold Time: {hold_s:.2f}s")
-        settings.set("confirm_hold_s", hold_s)
 
-    def _on_eye_tracking_changed(self, state: int) -> None:
-        enabled = bool(state)
-        settings.set("force_eye_tracking", enabled)
-        if enabled:
-            settings.set("cursor_mode", "eye_tracking")
-            self._mw.set_cursor_mode("eye_tracking")
-        else:
-            settings.set("cursor_mode", "dual_hand")
-            self._mw.set_cursor_mode("dual_hand")
+    def _collect_settings(self) -> dict[str, object]:
+        cam_data = self.camera_combo.currentData()
+        if cam_data is None:
+            cam_data = _as_int(settings.get("camera_index", 0), 0)
+        pinch_enter = self.pinch_slider.value() / 100.0
+        return {
+            "camera_index": int(cam_data),
+            "auto_start_camera": bool(self.auto_start_chk.isChecked()),
+            "minimize_to_tray": bool(self.minimize_to_tray_chk.isChecked()),
+            "mirror_camera": bool(self.mirror_chk.isChecked()),
+            "show_control_region": bool(self.region_chk.isChecked()),
+            "smoothening": self.smooth_slider.value() / 10.0,
+            "frame_r": int(self.margin_slider.value()),
+            "scroll_multiplier": self.scroll_slider.value() / 10.0,
+            "pinch_sensitivity": pinch_enter,
+            "pinch_exit_sensitivity": pinch_enter + 0.08,
+            "confirm_hold_s": self.hold_slider.value() / 1000.0,
+            "force_eye_tracking": bool(self.eye_chk.isChecked()),
+            "performance_mode": bool(self.performance_chk.isChecked()),
+            "debug_overlay": bool(self.debug_chk.isChecked()),
+        }
 
-    def _on_performance_toggled(self, state: int) -> None:
-        value = bool(state)
-        settings.set("performance_mode", value)
-        if self._mw.running:
-            QMessageBox.information(self, "Restart Required", "Camera will be recreated on Apply.")
+    def _reset_to_defaults(self) -> None:
+        d = settings.DEFAULTS
+        cam_idx = self.camera_combo.findData(_as_int(d.get("camera_index", 0), 0))
+        if cam_idx >= 0:
+            self.camera_combo.setCurrentIndex(cam_idx)
+        elif self.camera_combo.count() > 0:
+            self.camera_combo.setCurrentIndex(0)
 
-    def _on_debug_changed(self, state: int) -> None:
-        value = bool(state)
-        self._mw.debug = value
-        settings.set("debug_overlay", value)
+        self.auto_start_chk.setChecked(bool(d.get("auto_start_camera", False)))
+        self.minimize_to_tray_chk.setChecked(bool(d.get("minimize_to_tray", False)))
+        self.mirror_chk.setChecked(bool(d.get("mirror_camera", True)))
+        self.region_chk.setChecked(bool(d.get("show_control_region", True)))
+        self.smooth_slider.setValue(int(_as_float(d.get("smoothening", 4.8), 4.8) * 10))
+        self.margin_slider.setValue(int(_as_int(d.get("frame_r", 40), 40)))
+        self.scroll_slider.setValue(int(_as_float(d.get("scroll_multiplier", 1.0), 1.0) * 10))
+        self.pinch_slider.setValue(int(_as_float(d.get("pinch_sensitivity", 0.22), 0.22) * 100))
+        self.hold_slider.setValue(int(_as_float(d.get("confirm_hold_s", 0.03), 0.03) * 1000))
+        self.eye_chk.setChecked(bool(d.get("force_eye_tracking", False)))
+        self.performance_chk.setChecked(bool(d.get("performance_mode", False)))
+        self.debug_chk.setChecked(bool(d.get("debug_overlay", False)))
 
-    def _apply_performance(self) -> None:
-        self._mw._apply_performance_mode(bool(self.performance_chk.isChecked()))
+    def _apply_changes(self) -> None:
+        self._mw.apply_settings(self._collect_settings())
+        self.accept()
 
     def _show_about(self) -> None:
-        QMessageBox.information(
-            self,
-            "About Holographic Touch",
-            "Holographic Touch v2.0\n\n"
-            "Hybrid Mode (default): Move head to aim  ·  Pinch to click\n"
-            "Hand-Only Mode: Index finger aims  ·  Pinch to click\n\n"
-            "Gestures: Left Click  ·  Right Click  ·  Double Click  ·  Drag  ·  Scroll\n"
-            "Toggle Hand-Only in Settings → Gestures tab\n"
-            "Hotkey: Ctrl+Shift+H to toggle mouse control",
-        )
+        readme_path = Path(__file__).resolve().parents[1] / "README.txt"
+        try:
+            text = readme_path.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            QMessageBox.warning(self, "README", f"Could not load README.txt\n\n{exc}")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("README")
+        dlg.resize(760, 560)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(14, 12, 14, 12)
+        head = QLabel("Project README")
+        head.setObjectName("title")
+        body = QPlainTextEdit()
+        body.setReadOnly(True)
+        body.setPlainText(text)
+        close_btn = QPushButton("Close")
+        close_btn.setObjectName("primaryButton")
+        close_btn.clicked.connect(dlg.accept)
+        lay.addWidget(head)
+        lay.addWidget(body, 1)
+        lay.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignRight)
+        dlg.exec()
 
 
 class MainWindow(QMainWindow):
@@ -1262,6 +1289,59 @@ class MainWindow(QMainWindow):
             self.cam_status.setText("Camera switch failed")
             self.preview.setText(detail)
 
+    def apply_settings(self, data: dict[str, object]) -> None:
+        index = _as_int(data.get("camera_index", self.camera.camera_index), self.camera.camera_index)
+        if index != self.camera.camera_index:
+            self._on_camera_selected(index)
+        else:
+            settings.set("camera_index", index)
+
+        auto_start = _as_bool(data.get("auto_start_camera", settings.get("auto_start_camera", False)), False)
+        minimize_to_tray = _as_bool(data.get("minimize_to_tray", settings.get("minimize_to_tray", False)), False)
+        mirror = _as_bool(data.get("mirror_camera", self._mirror_camera), self._mirror_camera)
+        show_region = _as_bool(data.get("show_control_region", self._show_control_region), self._show_control_region)
+        smooth = _as_float(data.get("smoothening", self.mapper.smoothening), self.mapper.smoothening)
+        margin = _as_int(data.get("frame_r", self.mapper.frame_r), self.mapper.frame_r)
+        scroll_mult = _as_float(data.get("scroll_multiplier", self._scroll_multiplier), self._scroll_multiplier)
+        pinch_enter = _as_float(data.get("pinch_sensitivity", self.gestures._pinch_enter), self.gestures._pinch_enter)
+        pinch_exit = _as_float(data.get("pinch_exit_sensitivity", max(pinch_enter + 0.08, self.gestures._pinch_exit)), max(pinch_enter + 0.08, self.gestures._pinch_exit))
+        hold_s = _as_float(data.get("confirm_hold_s", self.gestures._confirm_hold_s), self.gestures._confirm_hold_s)
+        force_eye = _as_bool(data.get("force_eye_tracking", settings.get("force_eye_tracking", False)), False)
+        perf = _as_bool(data.get("performance_mode", settings.get("performance_mode", False)), False)
+        debug = _as_bool(data.get("debug_overlay", self.debug), self.debug)
+
+        self._mirror_camera = mirror
+        self._show_control_region = show_region
+        self.mapper.set_smoothening(smooth)
+        self._set_control_margin(margin)
+        self._scroll_multiplier = scroll_mult
+        self.gestures._pinch_enter = pinch_enter
+        self.gestures._pinch_exit = max(pinch_enter + 0.08, pinch_exit)
+        self.gestures._confirm_hold_s = hold_s
+        self.debug = debug
+
+        settings.set("auto_start_camera", auto_start)
+        settings.set("minimize_to_tray", minimize_to_tray)
+        settings.set("mirror_camera", mirror)
+        settings.set("show_control_region", show_region)
+        settings.set("smoothening", smooth)
+        settings.set("scroll_multiplier", scroll_mult)
+        settings.set("pinch_sensitivity", pinch_enter)
+        settings.set("pinch_exit_sensitivity", self.gestures._pinch_exit)
+        settings.set("confirm_hold_s", hold_s)
+        settings.set("force_eye_tracking", force_eye)
+        settings.set("debug_overlay", debug)
+
+        if force_eye:
+            settings.set("cursor_mode", "eye_tracking")
+            self.set_cursor_mode("eye_tracking")
+        elif self._cursor_mode == "eye_tracking":
+            settings.set("cursor_mode", "dual_hand")
+            self.set_cursor_mode("dual_hand")
+
+        self._apply_performance_mode(perf)
+        self._sync_margin_controls()
+
     def _launch_keyboard(self) -> None:
         now = time.monotonic()
         if now < self._kbd_lock_until:
@@ -1368,16 +1448,15 @@ class MainWindow(QMainWindow):
         self._region_label.setText(f"Head/Hand Range: {self.mapper.frame_r}")
 
     def _apply_performance_mode(self, enabled: bool) -> None:
-        settings.set("performance_mode", bool(enabled))
+        enabled_bool = bool(enabled)
+        settings.set("performance_mode", enabled_bool)
         try:
-            old = self.tracker
-            self.tracker = HandTracker()
-            if enabled:
-                self.tracker.set_processing_size((320, 240))
-            else:
-                self.tracker.set_processing_size(None)
-            if old is not None:
-                old.close()
+            if self.tracker is not None:
+                if enabled_bool:
+                    self.tracker.set_processing_size((320, 240))
+                else:
+                    self.tracker.set_processing_size(None)
+            self._sync_margin_controls()
         except Exception as exc:
             self._mediapipe_error = str(exc)
             self.cam_status.setText("MediaPipe Error")
