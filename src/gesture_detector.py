@@ -119,7 +119,7 @@ class GestureDetector:
         dy = float(self._scroll_prev_y) - current_y
         self._scroll_prev_y = current_y
 
-        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.35)
+        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.25)
         v = self._scroll_velocity_ema
 
         deadband = max(1.0, hand_scale * self._scroll_deadband_factor)

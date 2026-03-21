@@ -73,7 +73,7 @@ class HandTracker:
             return self._mp_hands.Hands(
                 static_image_mode=False,
                 max_num_hands=2,
-                model_complexity=1,
+                model_complexity=0,
                 min_detection_confidence=0.55,
                 min_tracking_confidence=0.45,
             )

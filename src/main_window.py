@@ -1745,25 +1745,9 @@ class MainWindow(QMainWindow):
                     frame, is_mirrored=self._mirror_camera)
                 _face_tracked = bool(hands_dict)
 
-                hand_count = len(hands_dict)
-                now_switch = time.monotonic()
-                if hand_count == 1:
-                    if self._1hand_start is None:
-                        self._1hand_start = now_switch
-                    self._2hand_start = None
-                    if now_switch - self._1hand_start > self._MODE_SWITCH_DELAY_S and self._cursor_mode != "single_hand":
-                        settings.set("cursor_mode", "single_hand")
-                        self._cursor_mode_request.emit("single_hand")
-                elif hand_count >= 2:
-                    if self._2hand_start is None:
-                        self._2hand_start = now_switch
-                    self._1hand_start = None
-                    if now_switch - self._2hand_start > self._MODE_SWITCH_DELAY_S and self._cursor_mode != "dual_hand":
-                        settings.set("cursor_mode", "dual_hand")
-                        self._cursor_mode_request.emit("dual_hand")
-                else:
-                    self._1hand_start = None
-                    self._2hand_start = None
+                # Mode switching disabled - use Settings to change.
+                self._1hand_start = None
+                self._2hand_start = None
 
                 rgb_cached = getattr(tracker, '_last_rgb_frame', None)
 

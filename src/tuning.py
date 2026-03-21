@@ -9,7 +9,7 @@ CAMERA_FAIL_SLEEP_S = 0.001
 # Cursor mapper
 CURSOR_INNER_RATIO = 0.80
 CURSOR_SPEED_NORM_RATIO = 0.05
-CURSOR_SOFT_DEADZONE_PX = 6.0
+CURSOR_SOFT_DEADZONE_PX = 2.5
 
 # Gesture — only constants actually used in the new distance engine
 GESTURE_CONFIRM_HOLD_S = 0.04
