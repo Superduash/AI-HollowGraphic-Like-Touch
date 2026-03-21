@@ -50,7 +50,7 @@ class HandTracker:
 
         self._frames_no_hand = 0
         self._grace_frames = 3
-        self._edge_grace_frames = 7
+        self._edge_grace_frames = 10
         self._edge_ratio = 0.08
         self._last_valid_near_edge = False
         self._last_valid_result: tuple[dict, list] | None = None
@@ -142,7 +142,7 @@ class HandTracker:
                 prev_xy = self._prev_xy_by_label.get(label)
                 if prev_xy is not None and len(prev_xy) == len(xy):
                     # Adaptive EMA: stronger smoothing to reduce shake while preserving fingertip response.
-                    blend = 0.48 if conf >= 0.78 else (0.42 if conf >= 0.60 else 0.36)
+                    blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
                     smoothed_xy: list[tuple[int, int]] = []
                     for i, (cx, cy) in enumerate(xy):
                         px, py = prev_xy[i]
