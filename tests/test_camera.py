@@ -32,14 +32,14 @@ def test_camera_backend_priority():
     # Should have at least one backend
     assert len(backends) > 0, "No backends available"
     
-    # On Windows, MSMF should come first
+    # On Windows, DirectShow should come first (lower latency, better for virtual cams).
     import platform
     if platform.system() == "Windows":
-        if cv2.CAP_MSMF in backends:
-            assert backends[0] == cv2.CAP_MSMF, "MSMF should be first on Windows"
-            print("[PASS] Windows backend priority correct: MSMF first")
+        if cv2.CAP_DSHOW in backends:
+            assert backends[0] == cv2.CAP_DSHOW, "DSHOW should be first on Windows"
+            print("[PASS] Windows backend priority correct: DSHOW first")
         else:
-            print(f"[WARN] MSMF not available, backends: {backends}")
+            print(f"[WARN] DSHOW not available, backends: {backends}")
     
     print(f"[PASS] Camera backend list: {[str(b) for b in backends]}")
 

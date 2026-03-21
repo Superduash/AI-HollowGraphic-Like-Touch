@@ -62,6 +62,10 @@ class CameraThread:
         self.actual_width = width
         self.actual_height = height
 
+        # Virtual cameras (e.g. iVCam) can become "laggy" if we request high FPS
+        # or let OpenCV accumulate buffers. Default to 30 FPS unless overridden.
+        self.target_fps = self._read_env_fps(os.environ.get("WH_CAM_FPS", "30"))
+
         self._cap: cv2.VideoCapture | None = None
         self._frame = None
         self._running = False
@@ -72,9 +76,51 @@ class CameraThread:
         self._is_windows = platform.system() == "Windows"
         self._printed_camera_log = False
 
+    @staticmethod
+    def _read_env_fps(value: str) -> int | None:
+        v = str(value or "").strip()
+        if not v:
+            return None
+        try:
+            fps = int(float(v))
+        except Exception:
+            return None
+        if fps <= 0:
+            return None
+        return max(1, min(240, fps))
+
+    def _configure_capture(self, cap: cv2.VideoCapture) -> None:
+        # Best-effort: not all backends honor these.
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+
+        # Apply resolution early so the *first* decoded frame is at the desired size.
+        try:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(self.width))
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(self.height))
+        except Exception:
+            pass
+
+        # Avoid forcing high FPS for virtual cams; allow override via env.
+        if self.target_fps is not None:
+            try:
+                cap.set(cv2.CAP_PROP_FPS, int(self.target_fps))
+            except Exception:
+                pass
+
+        if self._is_windows:
+            # MJPG often reduces CPU on real webcams, but is best-effort.
+            try:
+                cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
+            except Exception:
+                pass
+
     def _backend_candidates(self) -> list[int]:
         if self._is_windows:
-            return [cv2.CAP_MSMF, cv2.CAP_DSHOW, cv2.CAP_ANY]
+            # Prefer DirectShow for lower latency, especially with virtual cameras.
+            return [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
         return [cv2.CAP_ANY]
 
     @staticmethod
@@ -131,15 +177,10 @@ class CameraThread:
                         pass
                     continue
 
-                if self._is_windows:
-                    cap.set(cv2.CAP_PROP_FOURCC, _MJPG_FOURCC)
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(self.width))
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(self.height))
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                self._configure_capture(cap)
 
                 ok, frame = cap.read()
                 if ok and self._is_valid_frame(frame):
-                    cap.set(cv2.CAP_PROP_FPS, 60)
                     self.actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or frame.shape[1])
                     self.actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or frame.shape[0])
                     self._last_error = f"Camera ready index={idx} backend={self._backend_name(backend)}"
@@ -242,6 +283,9 @@ class CameraThread:
                     except Exception:
                         pass
                     continue
+
+                # Keep probing gentle to avoid stuttering virtual cams.
+                self._configure_capture(cap)
                 
                 # Attempt to read an actual frame to validate
                 ok, frame = cap.read()
@@ -356,6 +400,9 @@ class CameraThread:
             self.actual_height, self.actual_width = frame.shape[:2]
             with self._frame_lock:
                 self._frame = frame
+
+            # Yield a tiny amount to avoid hammering virtual camera drivers.
+            time.sleep(0.001)
 
     def latest(self):
         with self._frame_lock:
