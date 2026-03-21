@@ -196,10 +196,10 @@ def test_hand_confidence_gating():
     landmarks = create_landmarks_move()
     
     # Low confidence
-    hand_data = create_hand_data(landmarks, label="Right", confidence=0.10)
+    hand_data = create_hand_data(landmarks, label="Right", confidence=0.09)
     result = detector.detect(hand_data)
     assert result.gesture == GestureType.PAUSE
-    print("[PASS] Hand confidence gating works (rejects < 0.20)")
+    print("[PASS] Hand confidence gating works (rejects < 0.10)")
 
 
 def test_finger_states_detection():
