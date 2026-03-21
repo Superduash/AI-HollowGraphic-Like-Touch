@@ -21,7 +21,7 @@ class SettingsStore:
         "show_control_region": True,
         "mirror_camera": True,
         "cursor_mode": "dual_hand",
-        "dual_right_cursor": False,
+        "dual_right_cursor": True,
         "hand_only_mode": True,
         "overlay_x": -1,
         "overlay_y": -1,

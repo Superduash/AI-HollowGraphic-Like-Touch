@@ -651,7 +651,7 @@ class MainWindow(QMainWindow):
         self.gestures._pinch_exit = max(self.gestures._pinch_enter + 0.08, _as_float(settings.get("pinch_exit_sensitivity", 0.45), 0.45))
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
         self._scroll_multiplier: float = _as_float(settings.get("scroll_multiplier", 1.0), 1.0)
-        self._dual_right_cursor: bool = False
+        self._dual_right_cursor: bool = _as_bool(settings.get("dual_right_cursor", True), True)
         self.debug = _as_bool(settings.get("debug_overlay", False), False)
         self._mirror_camera: bool = _as_bool(settings.get("mirror_camera", True), True)
         self._show_control_region: bool = _as_bool(settings.get("show_control_region", True), True)
@@ -1327,7 +1327,7 @@ class MainWindow(QMainWindow):
         pinch_enter = _as_float(data.get("pinch_sensitivity", self.gestures._pinch_enter), self.gestures._pinch_enter)
         pinch_exit = _as_float(data.get("pinch_exit_sensitivity", max(pinch_enter + 0.08, self.gestures._pinch_exit)), max(pinch_enter + 0.08, self.gestures._pinch_exit))
         hold_s = _as_float(data.get("confirm_hold_s", self.gestures._confirm_hold_s), self.gestures._confirm_hold_s)
-        dual_right_cursor = False
+        dual_right_cursor = _as_bool(data.get("dual_right_cursor", self._dual_right_cursor), self._dual_right_cursor)
         debug = _as_bool(data.get("debug_overlay", self.debug), self.debug)
 
         self._mirror_camera = mirror
@@ -1352,7 +1352,7 @@ class MainWindow(QMainWindow):
         settings.set("pinch_sensitivity", pinch_enter)
         settings.set("pinch_exit_sensitivity", self.gestures._pinch_exit)
         settings.set("confirm_hold_s", hold_s)
-        settings.set("dual_right_cursor", False)
+        settings.set("dual_right_cursor", dual_right_cursor)
         settings.set("debug_overlay", debug)
         self._update_guide_rows()
         self._sync_margin_controls()
@@ -1745,6 +1745,26 @@ class MainWindow(QMainWindow):
                     frame, is_mirrored=self._mirror_camera)
                 _face_tracked = bool(hands_dict)
 
+                hand_count = len(hands_dict)
+                now_switch = time.monotonic()
+                if hand_count == 1:
+                    if self._1hand_start is None:
+                        self._1hand_start = now_switch
+                    self._2hand_start = None
+                    if now_switch - self._1hand_start > self._MODE_SWITCH_DELAY_S and self._cursor_mode != "single_hand":
+                        settings.set("cursor_mode", "single_hand")
+                        self._cursor_mode_request.emit("single_hand")
+                elif hand_count >= 2:
+                    if self._2hand_start is None:
+                        self._2hand_start = now_switch
+                    self._1hand_start = None
+                    if now_switch - self._2hand_start > self._MODE_SWITCH_DELAY_S and self._cursor_mode != "dual_hand":
+                        settings.set("cursor_mode", "dual_hand")
+                        self._cursor_mode_request.emit("dual_hand")
+                else:
+                    self._1hand_start = None
+                    self._2hand_start = None
+
                 rgb_cached = getattr(tracker, '_last_rgb_frame', None)
 
                 if hands_dict:
@@ -1763,13 +1783,12 @@ class MainWindow(QMainWindow):
 
                 # ── GESTURE DETECTION ──────────────────────────────
                 if self._cursor_mode == "dual_hand":
-                    result = self.gestures.detect_dual(hands_dict, is_grace, cursor_label="Left")
-                    _action_hand = hands_dict.get("Right")
+                    cursor_label = "Right" if self._dual_right_cursor else "Left"
+                    result = self.gestures.detect_dual(hands_dict, is_grace, cursor_label=cursor_label)
                 else:
                     # Single-hand mode: one hand does cursor + actions
                     action_hand = hands_dict.get("Right") or hands_dict.get("Left")
                     result = self.gestures.detect(action_hand, is_grace)
-                    _action_hand = action_hand
 
                 if result is None:
                     result = GestureResult(GestureType.PAUSE, 0)
@@ -1778,6 +1797,7 @@ class MainWindow(QMainWindow):
                 gesture_changed = gesture != last_action
 
                 # Confidence gate
+                _action_hand = hands_dict.get("Right") or hands_dict.get("Left")
                 if _action_hand:
                     _conf = float(_action_hand.get("confidence", 0))
                     if _conf < 0.45 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
@@ -1794,8 +1814,9 @@ class MainWindow(QMainWindow):
                 sx, sy = self._frozen_sx, self._frozen_sy
 
                 if self._cursor_mode == "dual_hand":
-                    # Dual-hand strict roles: Left hand moves cursor; Right hand performs actions.
-                    cursor_hand = hands_dict.get("Left")
+                    # Dual-hand: cursor hand is configurable (default right).
+                    cursor_hand_label = "Right" if self._dual_right_cursor else "Left"
+                    cursor_hand = hands_dict.get(cursor_hand_label)
                     if gesture in self._freeze_on:
                         # Freeze cursor during clicks
                         _has_cursor = self._frozen_sx >= 0
@@ -1815,7 +1836,7 @@ class MainWindow(QMainWindow):
                     elif _any_hand and len(_any_hand.get("xy", [])) > 8:
                         tip = _any_hand["xy"][8]
                         self._sh_cursor_history.append((int(tip[0]), int(tip[1])))
-                        if len(self._sh_cursor_history) > 3:
+                        if len(self._sh_cursor_history) > 4:
                             self._sh_cursor_history.pop(0)
                         avg_x = int(sum(p[0] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
                         avg_y = int(sum(p[1] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
@@ -1965,7 +1986,11 @@ class MainWindow(QMainWindow):
         _mode_color = "#22D3EE" if self._cursor_mode == "dual_hand" else "#A78BFA"
         _mode_icon = "⬡" if self._cursor_mode == "dual_hand" else "◈"
         _mode_text_map = {
-            "dual_hand": f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions",
+            "dual_hand": (
+                f"{_mode_icon} DUAL HAND  R=Cursor  L=Actions"
+                if self._dual_right_cursor
+                else f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions"
+            ),
             "single_hand": f"{_mode_icon} SINGLE HAND  Any hand = cursor+actions",
         }
         if hasattr(self, "mode_lbl"):

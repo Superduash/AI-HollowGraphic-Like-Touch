@@ -61,7 +61,8 @@ class GestureDetector:
         self._scroll_dir_switch_cooldown_s = float(GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S)
         self._scroll_step_limit = 8
         self._scroll_gain = 1.0
-        self._right_click_hold_s = max(0.25, float(GESTURE_RIGHT_CLICK_HOLD_S))
+        self._right_click_hold_s = max(0.14, float(GESTURE_RIGHT_CLICK_HOLD_S))
+        self._right_click_hold_s = min(self._right_click_hold_s, 0.18)
 
         # EMA-smoothed pinch ratios reduce false click flicker while keeping response quick.
         self._li_ema: float | None = None
@@ -162,17 +163,17 @@ class GestureDetector:
         self._scroll_accumulator = 0.0
 
     # =====================================================================
-    # DUAL-HAND MODE (default) — left hand = cursor, right hand = actions
+    # DUAL-HAND MODE (default) — right hand = cursor, left hand = actions
     # =====================================================================
     def detect_dual(
         self,
         hands_dict: dict,
         is_grace: bool = False,
-        cursor_label: str = "Left",
+        cursor_label: str = "Right",
     ) -> GestureResult:
         """Process gestures from dual-hand input.
 
-        By default LEFT hand: cursor tracking, RIGHT hand: click/scroll/drag.
+        By default RIGHT hand: cursor tracking, LEFT hand: click/scroll/drag.
         When cursor_label="Left", roles are swapped.
 
         If only cursor hand visible: return MOVE (cursor follows cursor hand)
@@ -203,7 +204,7 @@ class GestureDetector:
             self._dragging = False
             return self._make_result(GestureType.MOVE, 0)
 
-        # Process gestures from action hand only.
+        # Process gestures from left action hand.
         return self._process_action_hand(action_hand, now, is_grace)
 
     # =====================================================================
@@ -268,13 +269,10 @@ class GestureDetector:
             self._left_pinch_active = True
             self._left_click_emitted_this_hold = False
 
-        left_started = (not prev_left and self._left_pinch_active)
-
         # --- Right pinch (thumb+middle) = right-click ---
         # Requires: index finger clearly open (li > exit_),
         # middle+thumb close, held for _right_click_hold_s
         right_enter = enter * 0.88
-        right_started = False
         if self._right_pinch_active:
             if ri > exit_:
                 self._right_pinch_active = False
@@ -283,15 +281,14 @@ class GestureDetector:
         elif (
             not self._left_pinch_active
             and ri <= right_enter
-            and li > exit_
-            and pm > 0.20
+            and li > (enter * 0.90)
+            and pm > 0.14
         ):
             if self._right_pinch_start_t is None:
                 self._right_pinch_start_t = now
             elif now - self._right_pinch_start_t >= self._right_click_hold_s:
                 self._right_pinch_active = True
                 self._right_click_emitted_this_hold = False
-                right_started = True
         else:
             self._right_pinch_start_t = None
 
@@ -328,59 +325,83 @@ class GestureDetector:
         else:
             self._left_pinch_since = None
 
-        # Grace frames are tracking-only to prevent stale-frame actions.
-        if is_grace:
-            self._clear_scroll()
-            self._state = GestureType.MOVE
-            self._dragging = False
-            return self._make_result(GestureType.MOVE, 0)
+        # --- Route to raw state ---
+        raw_state = GestureType.MOVE
 
-        # Priority: DRAG > RIGHT_CLICK > LEFT_CLICK > SCROLL > MOVE
         if self._left_pinch_active and self._left_pinch_since is not None:
             held = now - self._left_pinch_since
             if held >= self._drag_activate_s:
-                self._clear_scroll()
-                self._dragging = True
-                self._state = GestureType.DRAG
-                return self._make_result(GestureType.DRAG, 0)
+                raw_state = GestureType.DRAG
+            else:
+                raw_state = GestureType.LEFT_CLICK
+        elif self._right_pinch_active:
+            raw_state = GestureType.RIGHT_CLICK
+        elif scroll_pose:
+            raw_state = GestureType.SCROLL
 
-        if right_started and (not self._right_click_emitted_this_hold) and self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
-            self._clear_scroll()
-            self._state = GestureType.RIGHT_CLICK
-            self._record_action(GestureType.RIGHT_CLICK, now)
-            self._right_click_emitted_this_hold = True
-            self._dragging = False
-            return self._make_result(GestureType.RIGHT_CLICK, 0)
+        # --- Stability filter ---
+        if raw_state != self._candidate:
+            self._candidate = raw_state
+            self._stable_start_t = now
 
-        if left_started and (not self._left_click_emitted_this_hold) and self._check_action_cooldown(GestureType.LEFT_CLICK, now):
+        hold_elapsed = max(0.0, now - self._stable_start_t)
+        if is_grace:
+            stable_state = self._state if self._state not in {
+                GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
+                GestureType.DOUBLE_CLICK} else GestureType.MOVE
+        elif hold_elapsed >= self._confirm_hold_s:
+            stable_state = self._candidate
+        else:
+            stable_state = self._state
+
+        # --- Clear scroll when not scrolling ---
+        if stable_state != GestureType.SCROLL and self._state != GestureType.SCROLL:
             self._clear_scroll()
-            # Double-click detection
-            if (
-                self._left_click_release_time > 0.0
-                and 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s
-                and self._check_action_cooldown(GestureType.DOUBLE_CLICK, now)
-            ):
-                self._state = GestureType.DOUBLE_CLICK
-                self._record_action(GestureType.DOUBLE_CLICK, now)
+
+        # --- Emit actions ---
+        if stable_state == GestureType.LEFT_CLICK:
+            if (not self._left_click_emitted_this_hold) and self._check_action_cooldown(GestureType.LEFT_CLICK, now):
+                # Double-click detection
+                if (self._left_click_release_time > 0.0
+                    and 0.0 < (now - self._left_click_release_time) <= self._double_click_window_s
+                    and self._check_action_cooldown(GestureType.DOUBLE_CLICK, now)):
+                    self._state = GestureType.DOUBLE_CLICK
+                    self._record_action(GestureType.DOUBLE_CLICK, now)
+                    self._record_action(GestureType.LEFT_CLICK, now)
+                    self._left_click_emitted_this_hold = True
+                    self._dragging = False
+                    return self._make_result(GestureType.DOUBLE_CLICK, 0)
+
+                self._state = GestureType.LEFT_CLICK
                 self._record_action(GestureType.LEFT_CLICK, now)
                 self._left_click_emitted_this_hold = True
                 self._dragging = False
-                return self._make_result(GestureType.DOUBLE_CLICK, 0)
+                return self._make_result(GestureType.LEFT_CLICK, 0)
+            self._state = GestureType.MOVE
+            return self._make_result(GestureType.MOVE, 0)
 
-            self._state = GestureType.LEFT_CLICK
-            self._record_action(GestureType.LEFT_CLICK, now)
-            self._left_click_emitted_this_hold = True
-            self._dragging = False
-            return self._make_result(GestureType.LEFT_CLICK, 0)
+        if stable_state == GestureType.RIGHT_CLICK:
+            if (not self._right_click_emitted_this_hold) and self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
+                self._state = GestureType.RIGHT_CLICK
+                self._record_action(GestureType.RIGHT_CLICK, now)
+                self._right_click_emitted_this_hold = True
+                self._dragging = False
+                return self._make_result(GestureType.RIGHT_CLICK, 0)
+            self._state = GestureType.MOVE
+            return self._make_result(GestureType.MOVE, 0)
 
-        if scroll_pose and (not self._left_pinch_active) and (not self._right_pinch_active):
+        if stable_state == GestureType.DRAG:
+            self._dragging = True
+            self._state = GestureType.DRAG
+            return self._make_result(GestureType.DRAG, 0)
+
+        if stable_state == GestureType.SCROLL:
             scroll_y = (float(xy[8][1]) + float(xy[12][1])) * 0.5
             delta = self._resolve_scroll(scroll_y, self._hand_scale)
             self._state = GestureType.SCROLL
             self._dragging = False
             return self._make_result(GestureType.SCROLL, delta)
 
-        self._clear_scroll()
         self._state = GestureType.MOVE
         self._dragging = False
         return self._make_result(GestureType.MOVE, 0)

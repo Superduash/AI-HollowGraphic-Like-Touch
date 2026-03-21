@@ -132,7 +132,7 @@ class HandTracker:
                 label = self._map_label(raw_label, is_mirrored)
                 conf = float(result.multi_handedness[idx].classification[0].score)
 
-                if conf < 0.50:
+                if conf < 0.30:
                     continue
 
                 xy = [(int(lm.x * dw * sx), int(lm.y * dh * sy))
@@ -219,7 +219,7 @@ class HandTracker:
         for proto, lbl in pairs:
             if proto is None:
                 continue
-            color = (0, 255, 120) if lbl == "Right" else (255, 220, 0)
+            color = (0, 255, 120) if lbl == "Right" else (255, 180, 50)
             try:
                 conn_spec = self._draw_utils.DrawingSpec(
                     color=color, thickness=2, circle_radius=2)
