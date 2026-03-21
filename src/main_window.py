@@ -1388,31 +1388,47 @@ class MainWindow(QMainWindow):
         settings.set("frame_r", self.mapper.frame_r)
 
     def _dual_cursor_point(self, hand_data: dict | None) -> tuple[int, int] | None:
+        """Return cursor tracking point for the cursor hand in dual mode.
+
+        Uses weighted blend of palm center (landmark 9) and index tip (landmark 8):
+        - When index finger is extended: 70% index tip + 30% palm center
+          (responsive to pointing direction)
+        - When fingers are curled/closed: 100% palm center
+          (stable, no jump when fingers touch)
+
+        This eliminates cursor jumping when fingers contact each other during
+        movement, while still allowing precise pointing when index is extended.
+        """
         if hand_data is None:
             return None
         xy = hand_data.get("xy", [])
-        if not xy or len(xy) < 10:
+        if not xy or len(xy) < 13:
             return None
 
         wrist = xy[0]
-        mcp9 = xy[9]
-        hand_scale = max(
-            12.0,
-            ((float(wrist[0]) - float(mcp9[0])) ** 2 + (float(wrist[1]) - float(mcp9[1])) ** 2) ** 0.5,
-        )
-        extend_margin = max(5.0, hand_scale * 0.06)
+        mcp9 = xy[9]  # Palm center - most stable point
 
-        # Always prefer index finger (landmark 8) for cursor tracking
-        if len(xy) > 8 and len(xy) > 6:
-            tip = xy[8]
-            pip = xy[6]
-            tip_dist = ((float(tip[0]) - float(wrist[0])) ** 2 + (float(tip[1]) - float(wrist[1])) ** 2) ** 0.5
-            pip_dist = ((float(pip[0]) - float(wrist[0])) ** 2 + (float(pip[1]) - float(wrist[1])) ** 2) ** 0.5
+        # Always have palm center as baseline
+        palm_x, palm_y = float(mcp9[0]), float(mcp9[1])
+
+        # Check if index finger is extended
+        if len(xy) > 8:
+            tip8 = xy[8]
+            pip6 = xy[6]
+            hand_scale = max(
+                12.0,
+                ((float(wrist[0]) - palm_x) ** 2 + (float(wrist[1]) - palm_y) ** 2) ** 0.5,
+            )
+            extend_margin = max(5.0, hand_scale * 0.06)
+            tip_dist = ((float(tip8[0]) - float(wrist[0])) ** 2 + (float(tip8[1]) - float(wrist[1])) ** 2) ** 0.5
+            pip_dist = ((float(pip6[0]) - float(wrist[0])) ** 2 + (float(pip6[1]) - float(wrist[1])) ** 2) ** 0.5
+
             if tip_dist > (pip_dist + extend_margin):
-                return int(tip[0]), int(tip[1])
+                # Index extended - blend toward fingertip for precision
+                return int(0.7 * float(tip8[0]) + 0.3 * palm_x), int(0.7 * float(tip8[1]) + 0.3 * palm_y)
 
-        # Closed palm fallback keeps movement active without forcing an extended finger.
-        return int(mcp9[0]), int(mcp9[1])
+        # Fallback: pure palm center (most stable when fingers are closed/touching)
+        return int(palm_x), int(palm_y)
 
     @Slot(str)
     def set_cursor_mode(self, mode: str) -> None:
@@ -1823,8 +1839,9 @@ class MainWindow(QMainWindow):
                     # Dual-hand: cursor hand is configurable (default right).
                     cursor_hand_label = "Right" if self._dual_right_cursor else "Left"
                     cursor_hand = hands_dict.get(cursor_hand_label)
-                    if gesture in self._freeze_on:
-                        # Freeze cursor during clicks
+                    _pinch_active_dual = self.gestures._left_pinch_active or self.gestures._right_pinch_active
+                    if gesture in self._freeze_on or _pinch_active_dual:
+                        # Freeze cursor during clicks and active pinches
                         _has_cursor = self._frozen_sx >= 0
                     else:
                         cursor_point = self._dual_cursor_point(cursor_hand)

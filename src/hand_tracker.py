@@ -141,13 +141,17 @@ class HandTracker:
 
                 prev_xy = self._prev_xy_by_label.get(label)
                 if prev_xy is not None and len(prev_xy) == len(xy):
-                    # Adaptive EMA: stronger smoothing to reduce shake while preserving fingertip response.
-                    blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
+                    # Fingertip indices jitter much more than palm/wrist - use
+                    # weaker blend (stronger smoothing) on tips to kill shake.
+                    _tip_indices = {4, 8, 12, 16, 20}
+                    base_blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
+                    tip_blend = base_blend * 0.55  # Tips get ~half the responsiveness = much less jitter
                     smoothed_xy: list[tuple[int, int]] = []
                     for i, (cx, cy) in enumerate(xy):
                         px, py = prev_xy[i]
-                        sx_i = int(px + (cx - px) * blend)
-                        sy_i = int(py + (cy - py) * blend)
+                        b = tip_blend if i in _tip_indices else base_blend
+                        sx_i = int(px + (cx - px) * b)
+                        sy_i = int(py + (cy - py) * b)
                         smoothed_xy.append((sx_i, sy_i))
                     xy = smoothed_xy
 

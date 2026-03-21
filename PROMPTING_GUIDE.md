@@ -37,6 +37,10 @@ Output the COMPLETE file.
 5. Always say "Output the COMPLETE file"
 6. Never say "refactor", "clean up", "improve", "optimize"
 7. Never say "fix all issues" or "make it work better"
+8. Never change the fingertip smoothing multiplier (tip_blend = base_blend * 0.55)
+9. Never change the outer_slack_ratio (0.10) or max_jump (scr_diag * 0.25)
+10. Never remove the _movement_suppress logic from gesture_detector
+11. Never change _dual_cursor_point blend ratio (0.7 tip + 0.3 palm)
 
 ## If you need multiple fixes:
 Do them as separate prompts, one at a time, committing between each:

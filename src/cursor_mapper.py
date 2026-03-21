@@ -53,7 +53,7 @@ class CursorMapper:
         self._alpha_max = 0.72
         self._inner_ratio = CURSOR_INNER_RATIO
         self._max_inner_margin_ratio = 0.42
-        self._outer_slack_ratio = 0.04
+        self._outer_slack_ratio = 0.10
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
         self._margin_x_ratio = self._inner_margin_ratio
         self._margin_y_ratio = self._inner_margin_ratio
@@ -243,13 +243,8 @@ class CursorMapper:
                 amin, amax = self._alpha_min_face, self._alpha_max_face
         alpha = amin + v_norm * (amax - amin)
 
-        margin_px = 15
-        if (raw_x <= self._screen_x + margin_px) or (raw_x >= self._screen_x + self.scr_w - margin_px) or \
-           (raw_y <= self._screen_y + margin_px) or (raw_y >= self._screen_y + self.scr_h - margin_px):
-            alpha *= 0.75
-
         scr_diag = math.sqrt(float(self.scr_w ** 2 + self.scr_h ** 2))
-        max_jump = scr_diag * 0.14
+        max_jump = scr_diag * 0.25
         jump_dx = raw_x - self._flt_x
         jump_dy = raw_y - self._flt_y
         jump_dist = math.sqrt(jump_dx * jump_dx + jump_dy * jump_dy)

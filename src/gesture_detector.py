@@ -83,6 +83,7 @@ class GestureDetector:
 
         # Z-tap (kept for settings compat, disabled by default)
         self._z_tap_enabled = False
+        self._prev_wrist_pos: tuple[float, float] | None = None
 
     @property
     def dragging(self) -> bool:
@@ -283,6 +284,30 @@ class GestureDetector:
         enter = float(self._pinch_enter)
         exit_ = float(self._pinch_exit)
 
+        # Movement priority: if hand moved significantly, suppress click entry.
+        # This prevents accidental clicks during fast cursor movement when
+        # thumb brushes against index/middle finger.
+        _movement_suppress = False
+        if self._li_ema is not None:
+            # Compare current pinch ratios to previous - if hand geometry
+            # is changing rapidly, likely moving not pinching
+            li_raw_now, ri_raw_now, pm_raw_now = self._pinch_ratios(xy, self._hand_scale)
+            _wrist_x, _wrist_y = float(xy[0][0]), float(xy[0][1])
+            _tip8_x, _tip8_y = float(xy[8][0]), float(xy[8][1])
+            # If index tip is far from thumb AND hand is big (close to camera),
+            # trust the pinch detection. Otherwise, if pinch ratios are near
+            # the threshold boundary, apply movement suppression.
+            if li_raw_now > (enter * 0.7) and li_raw_now < (exit_ * 1.1):
+                # In the ambiguous zone - check if wrist is moving fast
+                if hasattr(self, '_prev_wrist_pos') and self._prev_wrist_pos is not None:
+                    _pw = self._prev_wrist_pos
+                    _wrist_move = ((_wrist_x - _pw[0])**2 + (_wrist_y - _pw[1])**2)**0.5
+                    if _wrist_move > self._hand_scale * 0.08:
+                        _movement_suppress = True
+            self._prev_wrist_pos = (_wrist_x, _wrist_y)
+        else:
+            self._prev_wrist_pos = (float(xy[0][0]), float(xy[0][1]))
+
         # --- Left pinch (thumb+index) = click/drag ---
         prev_left = self._left_pinch_active
         if self._left_pinch_active:
@@ -290,7 +315,7 @@ class GestureDetector:
                 self._left_pinch_active = False
                 self._left_click_release_time = now
                 self._left_click_emitted_this_hold = False
-        elif li <= enter:
+        elif li <= enter and not _movement_suppress:
             self._left_pinch_active = True
             self._left_click_emitted_this_hold = False
 
@@ -332,6 +357,7 @@ class GestureDetector:
         elif (
             not self._left_pinch_active
             and not scroll_pose
+            and not _movement_suppress
             and ri <= right_enter
             and li > (enter * 1.2)
             and pm > 0.22
@@ -458,4 +484,5 @@ class GestureDetector:
         self._right_pinch_start_t = None
         self._action_lock_until = 0.0
         self._action_lock_type = GestureType.PAUSE
+        self._prev_wrist_pos = None
         self._clear_scroll()

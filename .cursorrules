@@ -48,11 +48,28 @@ min_tracking_confidence = 0.45
 self._edge_grace_frames = 10
 blend = 0.55 / 0.48 / 0.40 (confidence-adaptive)
 
+# src/hand_tracker.py (fingertip smoothing):
+_tip_indices = {4, 8, 12, 16, 20}
+tip_blend = base_blend * 0.55
+
 # src/gesture_detector.py _process_action_hand (updated by Prompt 2):
 confidence < 0.10  (minimum acceptance threshold)
 pinch_alpha = 0.50 if confidence < 0.6 else 0.65
 li <= enter  (left pinch entry, no 0.94 multiplier)
 right-click requires: not scroll_pose, li > enter*1.2, pm > 0.22
+
+# src/cursor_mapper.py:
+self._outer_slack_ratio = 0.10
+max_jump = scr_diag * 0.25
+(NO edge alpha reduction - those 3 lines were deleted)
+
+# src/gesture_detector.py:
+_movement_suppress logic (prevents clicks during fast hand movement)
+self._prev_wrist_pos tracking
+
+# src/main_window.py:
+_dual_cursor_point uses 70/30 blend of index tip + palm center
+Dual-hand cursor freezes on _pinch_active_dual (matches single-hand behavior)
 
 ## FROZEN INTERFACES
 - HandTracker.detect() returns (hands_dict, hand_protos_list, is_grace)
@@ -69,3 +86,7 @@ right-click requires: not scroll_pose, li > enter*1.2, pm > 0.22
 - Scroll accumulator with direction-switch cooldown
 - Drag progress arc, status overlay, system tray, Ctrl+Shift+H hotkey
 - All GestureType enum values
+- Fingertip-specific smoothing in hand_tracker (tip_blend = base_blend * 0.55)
+- Movement suppression in gesture_detector (_movement_suppress)
+- Palm+fingertip blend in _dual_cursor_point (0.7 tip + 0.3 palm)
+- Dual-hand pinch pre-freeze (_pinch_active_dual)
