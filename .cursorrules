@@ -1,4 +1,4 @@
-# Holographic Touch - AI Agent Rules
+# Holographic Touch — AI Agent Rules
 # This file is read automatically by VS Code Copilot/Codex.
 
 ## GOLDEN RULE
@@ -11,7 +11,7 @@ Change ONLY the lines described in the task. Do NOT:
 - change any method signature or return type
 
 ## OUTPUT FORMAT
-- Always output the COMPLETE file - never use "# ... existing code ..."
+- Always output the COMPLETE file — never use "# ... existing code ..."
 - Copy every unchanged method CHARACTER FOR CHARACTER
 - If unsure whether to change something: DON'T
 
