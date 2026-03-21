@@ -146,9 +146,9 @@ class StatusOverlay(QWidget):
             * { font-family: "Segoe UI Variable Display", "Segoe UI", "Inter", sans-serif; }
             #overlayRoot {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 rgba(8, 12, 20, 188), stop:1 rgba(10, 16, 28, 172));
+                    stop:0 rgba(8, 12, 20, 210), stop:1 rgba(10, 16, 28, 200));
                 border: 1px solid rgba(34, 211, 238, 0.30);
-                border-radius: 18px;
+                border-radius: 16px;
             }
             QLabel { color: #F1F5F9; font-size: 13px; font-weight: 600; }
             #overlayTitle { font-size: 16px; font-weight: 900; letter-spacing: 0.7px; }
@@ -796,8 +796,8 @@ class MainWindow(QMainWindow):
         status = QFrame()
         status.setObjectName("sideCard")
         sl = QVBoxLayout(status)
-        sl.setContentsMargins(0, 8, 0, 8)
-        sl.setSpacing(10)
+        sl.setContentsMargins(8, 12, 8, 12)
+        sl.setSpacing(8)
         status_title = QLabel("System Status")
         status_title.setObjectName("cardTitle")
         status_title.setWordWrap(True)
@@ -850,8 +850,8 @@ class MainWindow(QMainWindow):
         guide.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         gl = QGridLayout(guide)
         gl.setContentsMargins(0, 8, 0, 8)
-        gl.setHorizontalSpacing(16)
-        gl.setVerticalSpacing(12)
+        gl.setHorizontalSpacing(12)
+        gl.setVerticalSpacing(10)
 
         guide_title = QLabel("Protocol Guide")
         guide_title.setObjectName("cardTitle")
@@ -964,8 +964,8 @@ class MainWindow(QMainWindow):
 
         side_wrap = QWidget()
         side_wrap.setLayout(side)
-        side_wrap.setMinimumWidth(300)
-        side_wrap.setMaximumWidth(420)
+        side_wrap.setMinimumWidth(320)
+        side_wrap.setMaximumWidth(450)
         side_wrap.setObjectName("sideCardWrap")
 
         body_l.addWidget(cam_card, 3)
@@ -1062,10 +1062,10 @@ class MainWindow(QMainWindow):
                 border-radius: 26px;
             }
             #sideCard {
-                background: rgba(15, 18, 25, 0.56);
-                border: 1px solid rgba(34, 211, 238, 0.10);
+                background: rgba(15, 18, 25, 0.70);
+                border: 1px solid rgba(34, 211, 238, 0.15);
                 border-radius: 12px;
-                padding: 12px;
+                padding: 14px;
             }
             #sideCardWrap {
                 background: transparent;
@@ -1081,7 +1081,7 @@ class MainWindow(QMainWindow):
                 letter-spacing: 1.5px; 
             }
             #cardTitle { 
-                font-size: 12px; font-weight: 700; color: #64748B; 
+                font-size: 13px; font-weight: 800; color: #64748B; 
                 text-transform: uppercase; letter-spacing: 2px; 
                 padding-bottom: 4px; 
             }
@@ -1110,14 +1110,14 @@ class MainWindow(QMainWindow):
             }
             
             #primaryText { color: #E2E8F0; font-size: 13px; font-weight: 600;}
-            #secondary { color: #D7E3F7; font-size: 13px; font-weight: 600;}
-            #muted { color: #475569; font-size: 13px; font-weight: 500;}
+            #secondary { color: #E8EDF5; font-size: 13px; font-weight: 600;}
+            #muted { color: #64748B; font-size: 13px; font-weight: 500;}
             
             #badge {
-                border-radius: 12px; padding: 6px 18px; font-weight: 700;
+                border-radius: 12px; padding: 8px 20px; font-weight: 700;
                 background: rgba(15, 18, 25, 0.8); color: #E2E8F0;
-                min-width: 100px; max-width: 220px;
-                font-size: 13px; letter-spacing: 1.5px;
+                min-width: 110px; max-width: 220px;
+                font-size: 14px; letter-spacing: 1.5px;
                 border: 1px solid rgba(39, 39, 42, 0.4);
                 text-align: center;
             }
@@ -1131,14 +1131,14 @@ class MainWindow(QMainWindow):
             #historyItem { 
                 font-weight: 500; 
                 font-family: "Cascadia Code", "Consolas", "SF Mono", monospace;
-                font-size: 12px;
-                color: #64748B;
+                font-size: 13px;
+                color: #94A3B8;
             }
             
             QPushButton {
                 border: none; 
                 border-radius: 14px; 
-                padding: 10px 22px;
+                padding: 12px 24px;
                 font-size: 13px;
                 font-weight: 700; 
                 background: #18181B;
