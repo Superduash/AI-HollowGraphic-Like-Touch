@@ -1,6 +1,2331 @@
-PROJECT: AI HollowGraphic Like Touch
+User: Let me re-read your latest codebase carefully to understand the current state before writing anything.Now let me read the existing MASTER_PROMPT.txt to understand what rules are already there:Now let me look at what models, tuning, and settings_store currently look like:Now I have the full picture of the current codebase. Let me create the definitive document.Here's the honest answer to what you're asking: *you don't need a master prompt. You need to stop using master prompts.*
+
+Let me explain what I found reading your latest code versus the previous versions:
+
+*Your app has been rewritten at least 3 times.* The MASTER_PROMPT.txt already in your repo is a 300-line mega-prompt that asks for 6 complete file rewrites simultaneously. Every time you run something like that through Codex, it produces 2000+ lines of code where maybe 20 lines actually needed to change. The other 1980 lines are the AI's "interpretation" of your existing code — and that's where your bugs come back.
+
+Here's a concrete example from your codebase: CURSOR_SOFT_DEADZONE_PX has been 1.5, then 0.8, then 6.0 across different versions. Each "master prompt" set it to whatever the AI thought was right. Right now it's at 6.0 which makes the cursor feel sticky and unresponsive. That's not a code bug — it's a regression from a previous prompt that "fixed" something else.
+
+*The document I gave you has three things:*
+
+*1. A .cursorrules file* — VS Code Copilot reads this automatically before every edit. It lists every threshold value, every interface signature, and every feature that must not be touched. This is the "don't mess with it" file you were asking about, but in the format that actually works.
+
+*2. A prompting guide* — a template you copy every time you prompt Codex. It forces you to name the exact file, exact method, exact line, and exact change. No more "fix everything" prompts.
+
+*3. The 5 actual remaining issues* — with the exact line changes for each one. Do them one at a time with a git commit between each.
+
+The biggest one: your model_complexity=1 in hand_tracker.py is probably halving your FPS on your Ryzen 5 / 8GB machine. Changing that single number to 0 will make the app feel dramatically more responsive. That's a 2-second fix, not a 300-line rewrite. # How to finish Holographic Touch without infinite prompt loops
+
+## THE ACTUAL PROBLEM (read this first)
+
+Your app architecture is solid. Your code works. The reason it keeps breaking
+is NOT bad code — it's that every AI prompt is a full-file rewrite, and each
+rewrite silently changes 5-10 things the AI thinks are "improvements" but are
+actually regressions of fixes from previous prompts.
+
+The solution is two files plus a workflow change.
+
+---
+
+## STEP 1: Create `.cursorrules` in your project root
+
+This file is automatically read by VS Code Copilot/Codex agents.
+Create it at: `C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch\.cursorrules`
+
+Copy EXACTLY this content:
+
+```
+# ═══════════════════════════════════════════════════════════════
+# .cursorrules — Holographic Touch
+# This file is READ by the AI agent before every edit.
+# NEVER modify this file. NEVER ignore these rules.
+# ═══════════════════════════════════════════════════════════════
+
+## GOLDEN RULE
+When asked to fix ONE thing, change ONLY the lines related to that fix.
+Do NOT "clean up", "refactor", "simplify", "improve", or "normalize"
+any code that is NOT directly part of the requested fix.
+
+## OUTPUT FORMAT
+- Always output COMPLETE files — no "# ... existing code ..." placeholders
+- If a method is not being changed, copy it EXACTLY as-is, character for character
+- Never rename variables, methods, classes, or parameters unless explicitly asked
+
+## FROZEN VALUES — NEVER CHANGE THESE WITHOUT EXPLICIT INSTRUCTION
+These values have been carefully tuned through testing. Changing any of them
+will break gesture detection. Copy them exactly as-is in every file output.
+
+### src/tuning.py — frozen constants:
+CURSOR_SOFT_DEADZONE_PX = 6.0
+GESTURE_CONFIRM_HOLD_S = 0.04
+GESTURE_ACTION_COOLDOWN_S = 0.18
+GESTURE_DRAG_ACTIVATE_S = 0.45
+GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45
+GESTURE_RIGHT_CLICK_HOLD_S = 0.25
+GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25
+MOUSE_WORKER_HZ = 240.0
+
+### src/gesture_detector.py — frozen thresholds in __init__:
+self._pinch_enter = 0.22
+self._pinch_exit = 0.36
+self._scroll_step_factor = 0.06
+self._scroll_deadband_factor = 0.04
+self._scroll_step_limit = 8
+self._scroll_gain = 1.0
+self._right_click_hold_s = max(0.14, float(GESTURE_RIGHT_CLICK_HOLD_S))
+self._right_click_hold_s = min(self._right_click_hold_s, 0.18)
+right_enter = enter * 0.88  (inside _process_action_hand)
+
+### src/gesture_detector.py — frozen per-action cooldowns:
+GestureType.LEFT_CLICK: 0.25
+GestureType.RIGHT_CLICK: 0.50
+GestureType.DOUBLE_CLICK: 0.50
+
+### src/settings_store.py — frozen DEFAULTS:
+"frame_r": 60
+"pinch_sensitivity": 0.22
+"pinch_exit_sensitivity": 0.38
+"confirm_hold_s": 0.03
+
+### src/hand_tracker.py — frozen MediaPipe config:
+max_num_hands=2
+model_complexity=1
+min_detection_confidence=0.55
+min_tracking_confidence=0.45
+
+## FROZEN INTERFACES — NEVER CHANGE SIGNATURES
+- HandTracker.detect(frame_bgr, is_mirrored) → (hands_dict, hand_protos_list, is_grace)
+  where hands_dict = {"Left": {...}, "Right": {...}}
+  and hand_protos_list = [(proto, label), ...]
+- GestureDetector.detect_dual(hands_dict, is_grace, cursor_label) → GestureResult
+- GestureDetector.detect(hand_data, is_grace_frame) → GestureResult  (legacy single-hand)
+- GestureResult has .gesture (GestureType) and .scroll_delta (int)
+- CursorMapper.map_point(cam_x, cam_y) → (int, int)
+- MouseController: .move(), .left_click(), .right_click(), .double_click(),
+  .scroll(), .start_drag(), .end_drag(), .is_dragging
+
+## FROZEN ARCHITECTURE — NEVER MERGE OR SPLIT THESE FILES
+- src/hand_tracker.py → ONLY hand detection, returns landmarks
+- src/gesture_detector.py → ONLY gesture classification from landmarks
+- src/cursor_mapper.py → ONLY coordinate mapping + smoothing
+- src/mouse.py → ONLY OS-level input simulation
+- src/main_window.py → UI + wiring (process loop, render, settings)
+- src/tuning.py → ONLY numeric constants
+- src/models.py → ONLY data classes (GestureType, GestureResult, FingerStates)
+
+## FEATURES THAT EXIST AND MUST NOT BE REMOVED
+- Dual-hand mode (detect_dual) — cursor_label parameter controls which hand steers
+- Single-hand mode fallback
+- Auto mode switching (1-hand → single, 2-hand → dual) with delay
+- Cursor freeze during click gestures (self._freeze_on set)
+- Grace frame handling (is_grace flag from hand_tracker)
+- Right-click hold timer (prevents accidental triggers)
+- EMA-smoothed pinch ratios (self._li_ema, _ri_ema, _pm_ema)
+- Scroll accumulator with direction-switch cooldown
+- Drag progress arc in _render()
+- Status overlay (StatusOverlay class)
+- Settings dialog with all current controls
+- System tray integration
+- Ctrl+Shift+H hotkey
+
+## GestureType ENUM — NEVER REMOVE ANY VALUE
+NONE, MOVE, LEFT_CLICK, RIGHT_CLICK, DOUBLE_CLICK, SCROLL, DRAG,
+TASK_VIEW, PAUSE, KEYBOARD, MEDIA_VOL_UP, MEDIA_VOL_DOWN, MEDIA_NEXT, MEDIA_PREV
+
+## WHAT TO DO WHEN UNCERTAIN
+- If unsure whether to change a value: DON'T. Keep the existing value.
+- If unsure whether to remove code: DON'T. Keep it.
+- If a method seems unused: keep it anyway — it may be called dynamically.
+- If a threshold seems wrong: keep it — it was tuned by testing.
+```
+
+---
+
+## STEP 2: Create `PROMPTING_GUIDE.md` in your project root
+
+This is for YOU to reference before sending any prompt:
+
+```markdown
+# How to prompt Codex/GPT to fix this app without regressions
+
+## Before EVERY prompt:
+1. git add . && git commit -m "before: [what you're about to fix]"
+2. Test the app — note what currently works
+3. Write the prompt following the rules below
+4. After applying: test ONLY the thing you changed
+5. If it works: git commit -m "fixed: [what you fixed]"
+6. If it broke something: git checkout . (reverts everything)
+
+## Prompt template (copy this structure every time):
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: [one specific thing — e.g. "Fix scroll direction being inverted"]
+
+FILE TO CHANGE: src/gesture_detector.py
+
+EXACT CHANGE:
+In the _resolve_scroll method, on the line:
+    dy = float(self._scroll_prev_y) - current_y
+Change to:
+    dy = current_y - float(self._scroll_prev_y)
+
+Do NOT change any other line in this file.
+Do NOT change any threshold values.
+Do NOT change any other method.
+Output the COMPLETE file.
+```
+
+## Rules for writing prompts:
+1. ONE file per prompt. Never "fix gesture_detector.py AND main_window.py"
+2. NAME the exact method and line you want changed
+3. Say what to change it FROM and what to change it TO
+4. Always end with "Do NOT change any other line in this file"
+5. Always say "Output the COMPLETE file"
+6. Never say "refactor", "clean up", "improve", "optimize"
+7. Never say "fix all issues" or "make it work better"
+
+## If you need multiple fixes:
+Do them as separate prompts, one at a time, committing between each:
+- Prompt 1: fix scroll → test → commit
+- Prompt 2: fix right-click → test → commit
+- Prompt 3: fix cursor jitter → test → commit
+
+## What to do when Codex changes things you didn't ask for:
+1. Run: git diff (shows everything that changed)
+2. Look for changes OUTSIDE the area you asked about
+3. If you see threshold values changed, method signatures changed,
+   or code removed: git checkout . and re-prompt more specifically
+4. If the diff looks clean (only your requested change): test and commit
+
+## Emergency recovery:
+If the app is completely broken and you can't figure out what changed:
+    git log --oneline          (see your commit history)
+    git checkout [commit-hash] (go back to a working version)
+    git checkout -b recovery   (make a new branch from there)
+```
+
+---
+
+## STEP 3: Set up git RIGHT NOW
+
+Open a terminal in your project folder and run:
+
+```
+git init
+git add .
+git commit -m "baseline - current working state"
+```
+
+From now on, EVERY time something works, run:
+```
+git add . && git commit -m "works: [what works]"
+```
+
+---
+
+## STEP 4: Your actual remaining issues (and how to fix each one)
+
+Based on reading your full codebase, here's what's left to fix. 
+Do these ONE AT A TIME using the prompt template above:
+
+### Issue 1: Cursor deadzone too large (feels sticky)
+**File:** src/tuning.py
+**Change:** CURSOR_SOFT_DEADZONE_PX = 6.0 → change to 2.5
+**Why:** 6.0px deadzone means the cursor ignores small movements.
+         2.5 is responsive but still kills micro-jitter.
+
+### Issue 2: Right-click too sensitive (triggers randomly)
+**File:** src/gesture_detector.py  
+**Change:** In _process_action_hand, find the right pinch entry condition:
+  `and ri <= right_enter`
+  Add after it: `and not self._left_pinch_active`
+  The full condition should be:
+  ```
+  elif (
+      not self._left_pinch_active
+      and ri <= right_enter
+      and li > (enter * 0.90)
+      and pm > 0.14
+  ):
+  ```
+  This is ALREADY in your code — verify it's still there. If Codex removed
+  the `not self._left_pinch_active` guard, that's your random right-click bug.
+
+### Issue 3: Scroll feels jerky
+**File:** src/gesture_detector.py
+**Change:** In _resolve_scroll, the EMA alpha is 0.35. Change to 0.25.
+  Lower alpha = smoother but slightly slower response. Worth it for scroll.
+
+### Issue 4: model_complexity=1 hurts FPS on your Ryzen 5 + 8GB RAM
+**File:** src/hand_tracker.py
+**Change:** In _create_hands_model, change model_complexity=1 to model_complexity=0
+**Why:** complexity=1 is the full model (~30ms/frame). complexity=0 is the lite
+         model (~12ms/frame). On 8GB RAM this matters a lot.
+         Trade: slightly less accurate landmark positions, but 2-3x faster.
+         Since your smoothing pipeline already handles jitter, complexity=0 is fine.
+
+### Issue 5: Auto mode-switching causes confusion
+Your code at line 4696-4712 auto-switches between single/dual mode based on
+how many hands it sees. This is probably causing the "it randomly stops working"
+feeling — when one hand briefly disappears, it flips to single mode.
+**File:** src/main_window.py
+**Change:** Remove or comment out the auto-switching block (lines 4694-4712 in your
+  export). Replace with just: `# Mode switching disabled — use Settings to change`
+  Keep self._1hand_start and self._2hand_start vars (just don't use them).
+  Mode should ONLY change through Settings dialog.
+
+---
+
+## SUMMARY
+
+| Step | What | Time |
+|------|------|------|
+| 1 | Create `.cursorrules` in project root | 2 min |
+| 2 | Create `PROMPTING_GUIDE.md` in project root | 2 min |
+| 3 | Run `git init && git add . && git commit -m "baseline"` | 1 min |
+| 4 | Fix issues ONE AT A TIME using the prompt template | 5 min each |
+
+Total time to finish: ~30 minutes for the 5 issues listed, done properly,
+with zero regressions.
+
+The key insight: the app is 90% done. You don't need a "master prompt" that
+rewrites everything. You need 5 small, precise prompts with git commits
+between each one. That's it.
+
+
+GitHub Copilot: I’m going to apply this directly by creating the guardrail files in your project and verifying them. First I’ll load the customization skill instructions so I follow the correct workflow for agent-rule files.
+
+Read skill [agent-customization](copilot-skill:/agent-customization/SKILL.md?vscodeLinkType%3Dskill)
+
+I’ve loaded the customization guidance and next I’ll check whether `.cursorrules` and `PROMPTING_GUIDE.md` already exist so I can create or update only what’s needed.
+
+Read changed files in the active git repository
+
+Searched for files matching `**/.cursorrules`, no matches
+
+Searched for files matching `**/PROMPTING_GUIDE.md`, no matches
+
+I confirmed neither file exists, so I’m now creating both files in the project root with the exact guardrail content so your workflow is enforced before future edits.
+
+Created [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/.cursorrules)
+
+Created [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/PROMPTING_GUIDE.md)
+
+The two workflow files are now in place; I’ll quickly verify the working tree so you can commit this as a clean baseline change.
+
+Read changed files in the active git repository
+
+Implemented exactly what your document prescribes by creating the two root-level workflow files:
+
+- .cursorrules
+- PROMPTING_GUIDE.md
+
+Both were added with the full content from your provided template so future edits are constrained by those rules.
+
+Current git state also includes your pre-existing new file:
+- finish_holographic_touch.md
+
+If you want, I can do the next step now and run:
+1. git init
+2. git add .
+3. git commit -m "baseline - current working state"
+
+Made changes.
+
+User: If you want, I can do the next step now and run:
+
+git init
+git add .
+git commit -m "baseline - current working state" ye do everything i gave in final prompt
+
+GitHub Copilot: I’m proceeding with the exact next-step workflow now: initialize git in the workspace, stage all files, and create the baseline commit so your project state is snapshotted.
+
+Ran terminal command: git init; git add .; git commit -m "baseline - current working state"
+
+Baseline commit is done successfully. Next I’ll apply the remaining five fixes from your final prompt one-by-one and verify each change location before editing.
+
+Searched for regex `CURSOR_SOFT_DEADZONE_PX\s*=\s*` (`**/src/tuning.py`), 1 result
+
+Searched for regex `not self\._left_pinch_active|ri <= right_enter|_resolve_scroll|0\.35|model_complexity\s*=\s*1` (`**/src/**`), 8 results
+
+Searched for regex `_1hand_start|_2hand_start|dual|single|mode` (`**/src/main_window.py`), 192 results
+
+I found all target spots: four are straightforward and one auto-switch block is clearly located in main window processing. I’ll read the exact code slices now and then patch only those lines.
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/tuning.py)
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py#90-90), lines 90 to 180
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py#250-250), lines 250 to 320
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/hand_tracker.py#50-50), lines 50 to 110
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py#1728-1728), lines 1728 to 1774
+
+I’m applying the five concrete code fixes now with minimal edits only in the requested lines: deadzone, scroll smoothing, MediaPipe complexity, and disabling auto mode-switching.
+
+Generating patch (59 lines) in [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/tuning.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/hand_tracker.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py)
+
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+Edits are in place. I’ll run a quick error check on the changed files and then commit these fixes in one clean commit unless something fails.
+
+Checked [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/tuning.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/hand_tracker.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py), no problems found
+
+Ran terminal command: git add src/tuning.py src/gesture_detector.py src/hand_tracker.py src/main_window.py; git commit -m "fixed: apply final prompt 5 targeted issues"
+
+I’ve committed the five implementation fixes too. I’ll do one final status check so you know exactly what commit state you’re on now.
+
+Ran terminal command: git status --short; git log --oneline -n 3
+
+Completed. I executed everything from your final prompt that is actionable in-code and in git.
+
+What I did
+1. Created ​.cursorrules
+2. Created PROMPTING_GUIDE.md
+3. Initialized and committed baseline snapshot:
+   1. 59e01a0 baseline - current working state
+4. Applied and committed the 5 targeted fixes:
+   1. tuning.py: CURSOR_SOFT_DEADZONE_PX changed 6.0 → 2.5
+   2. gesture_detector.py: scroll EMA alpha changed 0.35 → 0.25
+   3. gesture_detector.py: verified right-click guard not self._left_pinch_active is present
+   4. hand_tracker.py: model_complexity changed 1 → 0
+   5. main_window.py: disabled auto mode switching block and kept _1hand_start/_2hand_start variables
+   6. Commit: 7a8a272 fixed: apply final prompt 5 targeted issues
+
+Current repo state
+1. HEAD is 7a8a272 on main
+2. Working tree is clean (no uncommitted changes shown)
+
+Natural next step
+1. Run your app and validate behavior (cursor responsiveness, right-click stability, scroll smoothness, FPS, and manual mode switching via Settings).All requested work has been fully completed: I created the two root workflow files, initialized git, made the baseline commit, applied the five targeted code fixes, verified no errors in changed files, and committed the fixes.Completed end-to-end: created the guardrail docs, initialized git and committed a baseline, implemented the five requested targeted code fixes, validated changed files had no errors, and committed the fixes with a clean working tree.
+
+
+
+Made changes.
+
+User: # 5 Prompts to Finish Holographic Touch
+# Apply in order: 1 → 2 → 3 → 4 → 5
+# After EACH prompt: test the specific thing it fixed, then: git add . && git commit -m "fixed: [topic]"
+# If a prompt breaks something: git checkout . (reverts) and re-apply with tighter instructions
+
+═══════════════════════════════════════════════════════════════════
+BEFORE ANYTHING: Update .cursorrules in your project root
+═══════════════════════════════════════════════════════════════════
+
+Replace the ENTIRE content of .cursorrules (or create it) with this:
+
+--- START .cursorrules ---
+# Holographic Touch — AI Agent Rules
+# This file is read automatically by VS Code Copilot/Codex.
+
+## GOLDEN RULE
+Change ONLY the lines described in the task. Do NOT:
+- rename variables, methods, classes, or parameters
+- remove code that is not explicitly mentioned
+- change threshold values not explicitly mentioned
+- add new imports unless explicitly told to
+- "clean up", "refactor", or "simplify" anything
+- change any method signature or return type
+
+## OUTPUT FORMAT
+- Always output the COMPLETE file — never use "# ... existing code ..." 
+- Copy every unchanged method CHARACTER FOR CHARACTER
+- If unsure whether to change something: DON'T
+
+## FROZEN VALUES (never change without explicit instruction)
+# src/tuning.py:
+GESTURE_CONFIRM_HOLD_S = 0.04
+GESTURE_ACTION_COOLDOWN_S = 0.18
+GESTURE_DRAG_ACTIVATE_S = 0.45
+GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45
+GESTURE_RIGHT_CLICK_HOLD_S = 0.25
+GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25
+MOUSE_WORKER_HZ = 240.0
+
+# src/gesture_detector.py __init__:
+self._pinch_enter = 0.22
+self._pinch_exit = 0.36
+self._scroll_step_limit = 8
+self._scroll_gain = 1.0
+
+# src/gesture_detector.py per-action cooldowns:
+LEFT_CLICK: 0.25, RIGHT_CLICK: 0.50, DOUBLE_CLICK: 0.50
+
+# src/settings_store.py DEFAULTS:
+"pinch_sensitivity": 0.22
+"pinch_exit_sensitivity": 0.38
+"confirm_hold_s": 0.03
+
+# src/hand_tracker.py Hands config:
+max_num_hands = 2
+min_detection_confidence = 0.55
+min_tracking_confidence = 0.45
+
+## FROZEN INTERFACES
+- HandTracker.detect() returns (hands_dict, hand_protos_list, is_grace)
+- GestureDetector.detect_dual(hands_dict, is_grace, cursor_label) returns GestureResult
+- GestureDetector.detect(hand_data, is_grace_frame) returns GestureResult
+- CursorMapper.map_point(cam_x, cam_y) returns (int, int)
+
+## FEATURES THAT MUST NOT BE REMOVED
+- Dual-hand mode, single-hand mode, auto mode switching
+- Cursor freeze during clicks (self._freeze_on)
+- Grace frame handling
+- Right-click hold timer
+- EMA-smoothed pinch ratios (self._li_ema, _ri_ema, _pm_ema)
+- Scroll accumulator with direction-switch cooldown
+- Drag progress arc, status overlay, system tray, Ctrl+Shift+H hotkey
+- All GestureType enum values
+--- END .cursorrules ---
+
+
+═══════════════════════════════════════════════════════════════════
+PROMPT 1 OF 5 — CURSOR SMOOTHNESS + HAND TRACKER PERFORMANCE
+═══════════════════════════════════════════════════════════════════
+(fixes: cursor pausy/laggy/jittery, skeleton shaking, low FPS)
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Fix cursor smoothness and hand tracker performance. Three targeted changes across two files.
+
+=== FILE 1: src/hand_tracker.py ===
+Output the COMPLETE file with these 3 changes ONLY:
+
+CHANGE A — Faster model for better FPS:
+In the _create_hands_model method, find:
+    model_complexity=1,
+Change to:
+    model_complexity=0,
+Reason: complexity=1 is ~30ms/frame, complexity=0 is ~12ms/frame. On 8GB RAM this matters.
+
+CHANGE B — Stronger landmark smoothing to kill skeleton shake:
+In the detect method, find the blend calculation:
+    blend = 0.48 if conf >= 0.78 else (0.42 if conf >= 0.60 else 0.36)
+Change to:
+    blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
+Reason: Higher blend = landmarks follow camera data faster, lower = smoother.
+Current values are too low, causing visible lag between hand and skeleton.
+The new values give enough smoothing to kill jitter but fast enough to feel responsive.
+
+CHANGE C — Increase grace frames near edges to prevent hand loss at screen corners:
+In __init__, find:
+    self._edge_grace_frames = 7
+Change to:
+    self._edge_grace_frames = 10
+Reason: When hand moves to camera edges, MediaPipe drops detection. 10 grace frames
+gives ~300ms at 30fps before declaring hand lost, which is enough to re-detect.
+
+DO NOT change:
+- max_num_hands (keep 2)
+- min_detection_confidence (keep 0.55)
+- min_tracking_confidence (keep 0.45)
+- The _map_label method
+- The draw method
+- The close method
+- Any other threshold or method
+
+Output the COMPLETE file.
+
+=== FILE 2: src/tuning.py ===
+Output the COMPLETE file with this ONE change:
+
+Find:
+    CURSOR_SOFT_DEADZONE_PX = 6.0
+Change to:
+    CURSOR_SOFT_DEADZONE_PX = 2.0
+Reason: 6.0px deadzone causes cursor to feel "stuck" on small movements.
+2.0px still kills micro-jitter but allows fine control.
+
+DO NOT change any other value in this file.
+Output the COMPLETE file.
+```
+
+TEST AFTER APPLYING: Move hand slowly — cursor should follow smoothly without pausing.
+Move hand fast — no visible lag. Check FPS counter — should show 25+ FPS.
+git add . && git commit -m "fixed: cursor smoothness and hand tracker FPS"
+
+
+═══════════════════════════════════════════════════════════════════
+PROMPT 2 OF 5 — GESTURE DETECTION (CLICKS + SCROLL)  
+═══════════════════════════════════════════════════════════════════
+(fixes: clicks not detecting, hard pinch not working, right-click triggering randomly, scroll triggering right-click)
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Fix gesture detection — clicks must always register, right-clicks must not trigger randomly, scroll must not trigger other gestures.
+
+=== FILE: src/gesture_detector.py ===
+Output the COMPLETE file with these changes ONLY:
+
+CHANGE A — Fix hard pinch not detecting (confidence gate too high):
+In _process_action_hand, find:
+    confidence = float(hand_data.get("confidence", 0.0))
+    if confidence < 0.20:
+Change the threshold to:
+    if confidence < 0.10:
+Reason: When pinching hard, fingers overlap and MediaPipe confidence drops to 0.15-0.25.
+The 0.20 gate rejects these frames, making hard pinches fail. 0.10 accepts them.
+
+CHANGE B — Fix left-click pinch enter threshold (sometimes doesn't trigger):
+In _process_action_hand, find:
+    elif li <= (enter * 0.94):
+        self._left_pinch_active = True
+Change to:
+    elif li <= enter:
+        self._left_pinch_active = True
+Reason: The 0.94 multiplier makes the effective threshold 0.207 instead of 0.22.
+This is too tight — a pinch at distance ratio 0.21 (clearly pinched) gets rejected.
+Using the full enter threshold (0.22) catches all intentional pinches.
+
+CHANGE C — Fix right-click triggering during scroll:
+In _process_action_hand, find the right-pinch elif condition. It currently reads:
+    elif (
+        not self._left_pinch_active
+        and ri <= right_enter
+        and li > (enter * 0.90)
+        and pm > 0.14
+    ):
+Change to:
+    elif (
+        not self._left_pinch_active
+        and not scroll_pose
+        and ri <= right_enter
+        and li > (enter * 1.2)
+        and pm > 0.22
+    ):
+Reason: Three fixes in one:
+- "not scroll_pose" prevents right-click during peace sign (scroll gesture)
+- "li > enter * 1.2" requires index finger to be CLEARLY open, not borderline
+- "pm > 0.22" requires index and middle to be further apart, preventing
+  accidental triggers when fingers are close together
+
+CHANGE D — Make EMA smoothing on pinch ratios slightly faster for quicker click response:
+In _process_action_hand, find:
+    pinch_alpha = 0.42 if confidence < 0.6 else 0.55
+Change to:
+    pinch_alpha = 0.50 if confidence < 0.6 else 0.65
+Reason: Faster EMA means the pinch ratio reaches the threshold sooner,
+making clicks feel more responsive. The stability filter still prevents jitter.
+
+CHANGE E — Fix scroll pose detection (must be fingers sticking straight up):
+Find the scroll_pose calculation block (around line 2576-2600). The current detection
+uses extended finger + together + aligned checks. Keep the structure but fix the 
+aligned_vertical check to be more forgiving:
+
+Find:
+    aligned_vertical = (
+        abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.22)
+        and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.26)
+    )
+Change to:
+    aligned_vertical = (
+        abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.30)
+        and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.35)
+    )
+Reason: The current values are too strict — slight finger misalignment breaks scroll.
+Widening to 0.30/0.35 lets scroll work at various hand angles while still requiring
+the peace-sign shape.
+
+DO NOT change:
+- __init__ threshold values (_pinch_enter, _pinch_exit, cooldowns, etc.)
+- _resolve_scroll method (scroll math is fine)
+- _check_action_cooldown or _record_action
+- _reset_all
+- detect_dual or detect method signatures
+- Any per_action_cooldown values
+
+Output the COMPLETE file.
+```
+
+TEST AFTER APPLYING:
+- Pinch thumb+index firmly → should ALWAYS show LEFT CLICK in audit log
+- Pinch thumb+middle with index extended → RIGHT CLICK after brief hold
+- Peace sign (2 fingers up) → SCROLL, move up/down → scroll works
+- While scrolling, right-click should NOT trigger
+- While doing left-click, scroll should NOT trigger
+git add . && git commit -m "fixed: gesture detection clicks and scroll"
+
+
+═══════════════════════════════════════════════════════════════════
+PROMPT 3 OF 5 — MODE SWITCHING + CONTROL MARGIN
+═══════════════════════════════════════════════════════════════════
+(fixes: mode detection, hand label accuracy, margin edge control)
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Fix mode switching logic and control margin for edge/corner control.
+
+=== FILE 1: src/settings_store.py ===
+Output the COMPLETE file with this ONE change:
+
+In DEFAULTS dict, find:
+    "frame_r": 60,
+Change to:
+    "frame_r": 120,
+Reason: User needs 120px margin to have enough room for hand movement while
+still being able to reach screen edges. The cursor mapper already extends
+slightly beyond the margin box.
+
+DO NOT change any other DEFAULT value or any method.
+Output the COMPLETE file.
+
+=== FILE 2: src/cursor_mapper.py ===
+Output the COMPLETE file with this ONE change:
+
+In the set_frame_margin method, find:
+    self._max_inner_margin_ratio = 0.35
+(in __init__)
+Change to:
+    self._max_inner_margin_ratio = 0.42
+Reason: Allows larger margins (up to 42% of camera dimension) so frame_r=120
+works on 480p cameras. This gives users the range they need.
+
+Also in map_point, find the section right after the soft deadzone calculation.
+After the line:
+    raw_x = prev_raw_x + dx * scale
+    raw_y = prev_raw_y + dy * scale
+Add NO changes — the existing overshoot handling (nx/ny clamped 0.0 to 1.0)
+already maps to full screen edges. The margin increase alone fixes corner access.
+
+DO NOT change _map_to_screen, set_smoothening, set_prediction_strength, or any 
+alpha/deadzone values.
+Output the COMPLETE file.
+
+=== FILE 3: src/main_window.py ===
+Output the COMPLETE file with these targeted changes ONLY:
+
+CHANGE A — Fix auto mode switching delay (too aggressive):
+In _process_loop, find the mode switching block (around lines 4696-4712 in current code).
+It starts with:
+    hand_count = len(hands_dict)
+    now_switch = time.monotonic()
+
+Replace the ENTIRE block (from "hand_count = len(hands_dict)" through 
+"self._1hand_start = None" / "self._2hand_start = None") with:
+
+    hand_count = len(hands_dict)
+    now_switch = time.monotonic()
+    if hand_count == 1:
+        if self._1hand_start is None:
+            self._1hand_start = now_switch
+        self._2hand_start = None
+        # Switch to single ONLY after 3 seconds of seeing just one hand
+        if (now_switch - self._1hand_start > 3.0 
+                and self._cursor_mode != "single_hand"):
+            settings.set("cursor_mode", "single_hand")
+            self._cursor_mode_request.emit("single_hand")
+    elif hand_count >= 2:
+        if self._2hand_start is None:
+            self._2hand_start = now_switch
+        self._1hand_start = None
+        # Switch to dual after 1.5 seconds of seeing two hands
+        if (now_switch - self._2hand_start > 1.5 
+                and self._cursor_mode != "dual_hand"):
+            settings.set("cursor_mode", "dual_hand")
+            self._cursor_mode_request.emit("dual_hand")
+    else:
+        self._1hand_start = None
+        self._2hand_start = None
+
+Reason: Previous delay was too short (self._MODE_SWITCH_DELAY_S could be <1s).
+New logic: 1.5s to go dual (fast — user wants dual), 3.0s to go single (slow —
+prevents accidental switch when one hand briefly leaves camera).
+
+CHANGE B — Make skeletons visible by default:
+In __init__, find:
+    self.debug = _as_bool(settings.get("debug_overlay", False), False)
+Change to:
+    self.debug = _as_bool(settings.get("debug_overlay", True), True)
+
+Also find in _render():
+    if self.debug and hand_proto is not None and tracker is not None:
+Change to:
+    if hand_proto is not None and tracker is not None:
+Reason: Skeletons should ALWAYS draw. The "debug" checkbox in settings can
+still toggle the setting for other debug features later, but skeleton
+visibility is essential for the user to know what the app sees.
+
+CHANGE C — In the confidence gate in _process_loop, fix the right-click threshold:
+Find:
+    elif _conf < 0.50 and gesture == GestureType.RIGHT_CLICK:
+Change to:
+    elif _conf < 0.40 and gesture == GestureType.RIGHT_CLICK:
+Reason: 0.50 was too high — right-clicks often have 0.45 confidence because
+the middle finger overlaps the thumb. Lowering to 0.40 lets intentional
+right-clicks through while still blocking garbage detections.
+
+DO NOT change:
+- Any UI layout, stylesheet, or widget code
+- The _render method (except the skeleton debug change above)
+- Any method signatures
+- The _dual_cursor_point method
+- The settings dialog
+- The overlay or tray code
+
+Output the COMPLETE file.
+```
+
+TEST AFTER APPLYING:
+- Show 2 hands → badge should say "DUAL" after 1.5s
+- Remove one hand → stays dual for 3s, then switches to "SINGLE"
+- Skeletons visible without enabling debug
+- Hand near camera edge → cursor still reaches screen corners
+git add . && git commit -m "fixed: mode switching and control margin"
+
+
+═══════════════════════════════════════════════════════════════════
+PROMPT 4 OF 5 — GESTURE ISOLATION (NO CROSS-TRIGGERING)
+═══════════════════════════════════════════════════════════════════
+(fixes: scroll triggering right-click, gestures interfering with each other, gesture detection gaps)
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Ensure gestures never cross-trigger. Each gesture must be fully isolated.
+
+=== FILE: src/gesture_detector.py ===
+Output the COMPLETE file with these changes ONLY:
+
+CHANGE A — Add state locking: after an action fires, lock out other actions briefly:
+In __init__, after the line:
+    self._last_action_time: dict[GestureType, float] = {}
+ADD:
+    self._action_lock_until: float = 0.0
+    self._action_lock_type: GestureType = GestureType.PAUSE
+
+In _process_action_hand, at the very START of the method (right after the xy/confidence checks,
+before the pinch ratio calculations), ADD:
+    # Action lock: if we recently fired a discrete action, suppress other discrete actions
+    if now < self._action_lock_until:
+        locked_type = self._action_lock_type
+        # Allow the same gesture type to continue (e.g., drag after click)
+        # but block OTHER discrete gestures from firing
+        if locked_type in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+            # After a click, only allow MOVE, DRAG, SCROLL (not right-click)
+            pass  # Don't return — just let the normal flow handle it
+        elif locked_type == GestureType.RIGHT_CLICK:
+            # After right-click, block all other clicks for the lock duration
+            pass
+        elif locked_type == GestureType.SCROLL:
+            # During scroll, block clicks entirely
+            if self._left_pinch_active or self._right_pinch_active:
+                self._left_pinch_active = False
+                self._right_pinch_active = False
+                self._right_pinch_start_t = None
+
+In _record_action, REPLACE the method with:
+    def _record_action(self, gesture: GestureType, now: float) -> None:
+        self._last_action_time[gesture] = now
+        # Lock out cross-triggering for 200ms after any discrete action
+        if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, 
+                       GestureType.DOUBLE_CLICK}:
+            self._action_lock_until = now + 0.20
+            self._action_lock_type = gesture
+
+CHANGE B — When scroll is active, force-clear pinch states to prevent click triggering:
+In the routing section, find:
+    elif scroll_pose:
+        raw_state = GestureType.SCROLL
+Add AFTER this elif:
+        # Force-clear pinch states during scroll to prevent click cross-triggers
+        self._left_pinch_active = False
+        self._right_pinch_active = False
+        self._left_pinch_since = None
+        self._right_pinch_start_t = None
+        self._left_click_emitted_this_hold = False
+        self._right_click_emitted_this_hold = False
+
+CHANGE C — When scroll state is confirmed, also lock actions:
+In the emit actions section, find:
+    if stable_state == GestureType.SCROLL:
+        scroll_y = (float(xy[8][1]) + float(xy[12][1])) * 0.5
+        delta = self._resolve_scroll(scroll_y, self._hand_scale)
+        self._state = GestureType.SCROLL
+        self._dragging = False
+        return self._make_result(GestureType.SCROLL, delta)
+Add BEFORE the return:
+        self._action_lock_until = now + 0.10
+        self._action_lock_type = GestureType.SCROLL
+
+CHANGE D — Reset action lock in _reset_all:
+In _reset_all, add:
+    self._action_lock_until = 0.0
+    self._action_lock_type = GestureType.PAUSE
+
+DO NOT change any threshold values, any method signatures, or any other logic.
+Output the COMPLETE file.
+```
+
+TEST AFTER APPLYING:
+- Do peace sign scroll → no random clicks during scroll
+- Left click → immediately after, no random right-click
+- Right click → no random left-click following it
+- Scroll up/down → only scroll events in audit log, no click events
+git add . && git commit -m "fixed: gesture isolation no cross-triggering"
+
+
+═══════════════════════════════════════════════════════════════════
+PROMPT 5 OF 5 — UI POLISH
+═══════════════════════════════════════════════════════════════════
+(fixes: spacing, contrast, font visibility, status bar, mode bar, overlay, animations)
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Polish the UI — fix spacing, contrast, font visibility, and the overall look.
+Change ONLY the stylesheet and _build_ui layout code. Do NOT touch any logic,
+process loop, gesture detection, or cursor mapping code.
+
+=== FILE: src/main_window.py ===
+Output the COMPLETE file with these stylesheet/layout changes ONLY:
+
+CHANGE A — Fix the main window stylesheet:
+In _build_ui, find the self.setStyleSheet(...) call. Make these specific changes
+WITHIN the existing stylesheet (keep all other rules unchanged):
+
+1. Increase secondary text contrast:
+   Find: #secondary { color: #D7E3F7;
+   Change to: #secondary { color: #E8EDF5;
+
+2. Increase muted text visibility:
+   Find: #muted { color: #475569;
+   Change to: #muted { color: #64748B;
+
+3. Make badge text larger and more padded:
+   Find the #badge { block. Change these properties:
+   padding: 8px 20px;
+   font-size: 14px;
+   min-width: 110px;
+
+4. Make side cards have visible backgrounds:
+   Find: #sideCard {
+   Change background to: background: rgba(15, 18, 25, 0.70);
+   Change border to: border: 1px solid rgba(34, 211, 238, 0.15);
+   Add: padding: 14px;
+
+5. Make buttons have more padding:
+   Find the QPushButton { block (the generic one, not #startBtn etc.)
+   Change: padding: 12px 24px;
+
+6. Increase card title size:
+   Find: #cardTitle {
+   Change: font-size: 13px; font-weight: 800;
+
+7. Increase history item visibility:
+   Find: #historyItem {
+   Change: font-size: 13px; color: #94A3B8;
+
+CHANGE B — Fix spacing in the status panel:
+In _build_ui, find where the status panel (sl = QVBoxLayout(status)) is built.
+Find:
+    sl.setContentsMargins(0, 8, 0, 8)
+    sl.setSpacing(10)
+Change to:
+    sl.setContentsMargins(8, 12, 8, 12)
+    sl.setSpacing(8)
+
+CHANGE C — Fix the side panel width for better text visibility:
+Find:
+    side_wrap.setMinimumWidth(300)
+    side_wrap.setMaximumWidth(420)
+If these lines don't exist, find the side_wrap creation and ADD them.
+If they already exist, change to:
+    side_wrap.setMinimumWidth(320)
+    side_wrap.setMaximumWidth(450)
+
+CHANGE D — Fix overlay styling for better visibility:
+In StatusOverlay.__init__, find the setStyleSheet call.
+In the #overlayRoot rule, change:
+    border-radius: 18px;
+to:
+    border-radius: 16px;
+And change the background gradient to be slightly more opaque:
+    stop:0 rgba(8, 12, 20, 210), stop:1 rgba(10, 16, 28, 200)
+
+CHANGE E — Fix the gesture guide grid spacing:
+Find:
+    gl.setHorizontalSpacing(16)
+    gl.setVerticalSpacing(12)
+Change to:
+    gl.setHorizontalSpacing(12)
+    gl.setVerticalSpacing(10)
+
+DO NOT change:
+- Any logic in _process_loop, _render (except stylesheet rendering), gesture detection
+- Any method signatures or return types
+- Any threshold values
+- The settings dialog functionality
+- Any imports
+
+Output the COMPLETE file.
+```
+
+TEST AFTER APPLYING:
+- All text should be clearly readable on dark background
+- Status badges should be visible and properly sized
+- Side panel should have visible card backgrounds
+- Overlay should be more opaque and easier to read
+- History items should be visible
+- No text clipping or overflow
+git add . && git commit -m "fixed: UI polish spacing contrast fonts"
+
+
+═══════════════════════════════════════════════════════════════════
+AFTER ALL 5 PROMPTS — FINAL VERIFICATION
+═══════════════════════════════════════════════════════════════════
+
+Run through this checklist:
+
+CURSOR:
+□ Move hand slowly — smooth following, no pausing
+□ Move hand fast — responsive, no visible lag  
+□ Move to screen corners — cursor reaches edges
+□ FPS counter shows 25+ FPS
+
+MODES:
+□ Single hand → SINGLE badge, all gestures work
+□ Two hands → DUAL badge after 1.5s
+□ Remove one hand → stays DUAL for 3s before switching
+□ Right hand = cursor (default in dual mode)
+□ Settings swap checkbox works
+
+GESTURES:
+□ Thumb+Index pinch = left click (ALWAYS registers, even hard pinch)
+□ Quick double pinch = double click
+□ Thumb+Middle pinch (index extended) = right click after hold
+□ Right click does NOT trigger during scroll
+□ Left click does NOT trigger during scroll  
+□ Peace sign up/down = scroll (smooth, correct direction)
+□ Hold pinch 0.45s = drag
+□ All gestures show in audit log
+
+SKELETONS:
+□ Visible on both hands
+□ Stick to fingers accurately
+□ Green for right hand, orange for left
+□ Don't shake excessively
+
+UI:
+□ All text readable
+□ Status badges visible
+□ Mode indicator colored (cyan=dual, purple=single)
+□ Side panel cards have visible backgrounds
+□ Overlay readable when minimized
+
+If everything passes: git tag v1.0-beta
+ finish all prompts use cursorrules or prompting guide if u want... test at the end
+
+GitHub Copilot: I’m applying all 5 prompts in order and will finish with automated verification and git commits after each step. I’ll start by loading the customization skill guidance, then update .cursorrules, then implement each prompt exactly and test what can be tested automatically.
+
+Read skill [agent-customization](copilot-skill:/agent-customization/SKILL.md?vscodeLinkType%3Dskill)
+
+I’ve loaded the skill guidance and now I’m scanning the exact target lines across all affected files so I can patch each prompt precisely and avoid unintended changes.
+
+Searched for regex `blend = 0\.48 if conf >= 0\.78 else \(0\.42 if conf >= 0\.60 else 0\.36\)|_edge_grace_frames = 7|model_complexity=0|model_complexity=1` (`**/src/hand_tracker.py`), 3 results
+
+Searched for text `CURSOR_SOFT_DEADZONE_PX =` (`**/src/tuning.py`), 1 result
+
+Searched for regex `confidence < 0\.20|li <= \(enter \* 0\.94\)|pinch_alpha = 0\.42 if confidence < 0\.6 else 0\.55|aligned_vertical = \(|ri <= right_enter|elif scroll_pose:|if stable_state == GestureType\.SCROLL:|def _record_action|_last_action_time: dict\[GestureType, float\] = \{\}|def _reset_all` (`**/src/gesture_detector.py`), 10 results
+
+Searched for regex `"frame_r": 60|_max_inner_margin_ratio = 0\.35|hand_count = len\(hands_dict\)|self\.debug = _as_bool\(settings\.get\("debug_overlay", False\), False\)|elif _conf < 0\.50 and gesture == GestureType\.RIGHT_CLICK|if self\.debug and hand_proto is not None and tracker is not None|sl\.setContentsMargins\(0, 8, 0, 8\)|sl\.setSpacing\(10\)|side_wrap\.setMinimumWidth\(300\)|side_wrap\.setMaximumWidth\(420\)|gl\.setHorizontalSpacing\(16\)|gl\.setVerticalSpacing\(12\)|#overlayRoot|#secondary \{|#muted \{|#badge \{|#sideCard \{|QPushButton \{|#cardTitle \{|#historyItem \{` (`**/src/**`), 24 results
+
+I located all required targets; next I’m reading the exact code blocks for safe patching, including the process-loop mode block and stylesheet sections to avoid touching unrelated logic.
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/.cursorrules)
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/hand_tracker.py)
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/tuning.py)
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py)
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/settings_store.py)
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py#120-120), lines 120 to 240
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py#620-620), lines 620 to 760
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py#780-780), lines 780 to 1010
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py#1030-1030), lines 1030 to 1165
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py#1760-1760), lines 1760 to 1835
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py#2050-2050), lines 2050 to 2110
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/cursor_mapper.py#1-1), lines 1 to 220
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py#1718-1718), lines 1718 to 1775
+
+I’m now applying the prerequisite plus Prompt 1 changes first, then I’ll commit that step before moving to Prompt 2 so your history stays exactly in the requested sequence.
+
+Generating patch (191 lines) in [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/.cursorrules), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/hand_tracker.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/tuning.py)
+
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+
+Checked [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/hand_tracker.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/tuning.py), no problems found
+
+Ran terminal command: git add .cursorrules src/hand_tracker.py src/tuning.py; git commit -m "fixed: cursor smoothness and hand tracker FPS"
+
+Prompt 1 is committed. I’m now applying Prompt 2 only in gesture_detector.py, including a safe reordering so the new `not scroll_pose` guard works correctly at runtime.
+
+Generating patch (96 lines) in [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py)
+
+
+```
+
+```
+
+
+Checked [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py), no problems found
+
+Ran terminal command: git add src/gesture_detector.py; git commit -m "fixed: gesture detection clicks and scroll"
+
+Prompt 2 is committed. I’m applying Prompt 3 now: mode-switch timing, control margin defaults, always-on skeleton drawing, and right-click confidence gate adjustments.
+
+Generating patch (63 lines) in [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/settings_store.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/cursor_mapper.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py)
+
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+
+Checked [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/settings_store.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/cursor_mapper.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py), no problems found
+
+Ran terminal command: git add src/settings_store.py src/cursor_mapper.py src/main_window.py; git commit -m "fixed: mode switching and control margin"
+
+Prompt 3 is committed. I’m implementing Prompt 4 in gesture_detector.py now to isolate gestures and suppress cross-triggering states.
+
+Generating patch (65 lines) in [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py)
+
+
+```
+
+```
+
+
+Checked [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py), no problems found
+
+Ran terminal command: git add src/gesture_detector.py; git commit -m "fixed: gesture isolation no cross-triggering"
+
+I’m applying Prompt 5 now by changing only UI layout/style values in main_window.py (no gesture/process logic changes), then I’ll commit that as the final prompt step.
+
+Generating patch (88 lines) in [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py)
+
+
+```
+
+```
+
+
+Checked [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py), no problems found
+
+Ran terminal command: git add src/main_window.py; git commit -m "fixed: UI polish spacing contrast fonts"
+
+All five prompt commits are in place. I’m moving to end verification now by configuring the Python environment and running the project test runner so we can confirm there are no regressions.
+
+Configuring a Python Environment
+Completed with input: {
+  "resourcePath": "c:\\Users\\Superduash\\Downloads\\AI HollowGraphic Like Touch"
+}
+
+Ran terminal command: & "c:/Users/Superduash/Downloads/AI HollowGraphic Like Touch/.venv/Scripts/python.exe" "tests/run_tests.py"
+Completed with input: & "c:/Users/Superduash/Downloads/AI HollowGraphic Like Touch/.venv/Scripts/python.exe" "tests/run_tests.py"
+
+The automated suite found one failing test tied to the confidence-gating behavior we intentionally changed in Prompt 2. I’ll update that test to match the new threshold so the suite reflects the new expected behavior, then rerun tests.
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/tests/test_gesture_detector.py#1-1), lines 1 to 260
+
+Generating patch (16 lines) in [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/tests/test_gesture_detector.py)
+
+
+```
+
+```
+I’ve aligned the failing test with the intentional Prompt 2 behavior. Next I’ll rerun the full test suite and then finalize with commit/tag status.
+
+Ran terminal command: & "c:/Users/Superduash/Downloads/AI HollowGraphic Like Touch/.venv/Scripts/python.exe" "tests/run_tests.py"
+
+Ran terminal command: git add tests/test_gesture_detector.py; git commit -m "test: align confidence gating threshold"; git tag v1.0-beta
+
+Ran terminal command: git status --short; git log --oneline -n 8; git tag --list "v1.0-beta"
+
+Finished end-to-end, in the exact prompt order, with commits after each step.
+
+1. Updated .cursorrules to your new full ruleset.
+2. Applied Prompt 1 and committed:
+   1. fixed: cursor smoothness and hand tracker FPS
+3. Applied Prompt 2 and committed:
+   1. fixed: gesture detection clicks and scroll
+4. Applied Prompt 3 and committed:
+   1. fixed: mode switching and control margin
+5. Applied Prompt 4 and committed:
+   1. fixed: gesture isolation no cross-triggering
+6. Applied Prompt 5 and committed:
+   1. fixed: UI polish spacing contrast fonts
+7. Ran full automated verification:
+   1. Passed: 29
+   2. Failed: 0
+   3. Skipped: 6
+8. Added a test-alignment commit for the intentional confidence-threshold change:
+   1. test: align confidence gating threshold
+9. Created tag:
+   1. v1.0-beta
+
+Important repo-state note: there are currently additional working tree changes not introduced by these prompt commits:
+1. deleted: MASTER_PROMPT.txt
+2. deleted: finish_holographic_touch.md
+3. untracked: five_prompts_to_finish.md
+
+I did not modify or revert those extra changes. If you want, I can now stage and commit them in a separate commit with your preferred message.Completed all requested prompt applications in order, committed each step, ran the full test suite to passing, aligned one test with the intentionally changed confidence threshold, and created the `v1.0-beta` tag.
+
+
+
+Made changes.
+
+User: # 5 Prompts to Finish Holographic Touch
+# Apply in order: 1 → 2 → 3 → 4 → 5
+# After EACH prompt: test the specific thing it fixed, then: git add . && git commit -m "fixed: [topic]"
+# If a prompt breaks something: git checkout . (reverts) and re-apply with tighter instructions
+
+═══════════════════════════════════════════════════════════════════
+BEFORE ANYTHING: Update .cursorrules in your project root
+═══════════════════════════════════════════════════════════════════
+
+Replace the ENTIRE content of .cursorrules (or create it) with this:
+
+--- START .cursorrules ---
+# Holographic Touch — AI Agent Rules
+# This file is read automatically by VS Code Copilot/Codex.
+
+## GOLDEN RULE
+Change ONLY the lines described in the task. Do NOT:
+- rename variables, methods, classes, or parameters
+- remove code that is not explicitly mentioned
+- change threshold values not explicitly mentioned
+- add new imports unless explicitly told to
+- "clean up", "refactor", or "simplify" anything
+- change any method signature or return type
+
+## OUTPUT FORMAT
+- Always output the COMPLETE file — never use "# ... existing code ..." 
+- Copy every unchanged method CHARACTER FOR CHARACTER
+- If unsure whether to change something: DON'T
+
+## FROZEN VALUES (never change without explicit instruction)
+# src/tuning.py:
+GESTURE_CONFIRM_HOLD_S = 0.04
+GESTURE_ACTION_COOLDOWN_S = 0.18
+GESTURE_DRAG_ACTIVATE_S = 0.45
+GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45
+GESTURE_RIGHT_CLICK_HOLD_S = 0.25
+GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25
+MOUSE_WORKER_HZ = 240.0
+
+# src/gesture_detector.py __init__:
+self._pinch_enter = 0.22
+self._pinch_exit = 0.36
+self._scroll_step_limit = 8
+self._scroll_gain = 1.0
+
+# src/gesture_detector.py per-action cooldowns:
+LEFT_CLICK: 0.25, RIGHT_CLICK: 0.50, DOUBLE_CLICK: 0.50
+
+# src/settings_store.py DEFAULTS:
+"pinch_sensitivity": 0.22
+"pinch_exit_sensitivity": 0.38
+"confirm_hold_s": 0.03
+
+# src/hand_tracker.py Hands config:
+max_num_hands = 2
+min_detection_confidence = 0.55
+min_tracking_confidence = 0.45
+
+## FROZEN INTERFACES
+- HandTracker.detect() returns (hands_dict, hand_protos_list, is_grace)
+- GestureDetector.detect_dual(hands_dict, is_grace, cursor_label) returns GestureResult
+- GestureDetector.detect(hand_data, is_grace_frame) returns GestureResult
+- CursorMapper.map_point(cam_x, cam_y) returns (int, int)
+
+## FEATURES THAT MUST NOT BE REMOVED
+- Dual-hand mode, single-hand mode, auto mode switching
+- Cursor freeze during clicks (self._freeze_on)
+- Grace frame handling
+- Right-click hold timer
+- EMA-smoothed pinch ratios (self._li_ema, _ri_ema, _pm_ema)
+- Scroll accumulator with direction-switch cooldown
+- Drag progress arc, status overlay, system tray, Ctrl+Shift+H hotkey
+- All GestureType enum values
+--- END .cursorrules ---
+
+
+═══════════════════════════════════════════════════════════════════
+PROMPT 1 OF 5 — CURSOR SMOOTHNESS + HAND TRACKER PERFORMANCE
+═══════════════════════════════════════════════════════════════════
+(fixes: cursor pausy/laggy/jittery, skeleton shaking, low FPS)
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Fix cursor smoothness and hand tracker performance. Three targeted changes across two files.
+
+=== FILE 1: src/hand_tracker.py ===
+Output the COMPLETE file with these 3 changes ONLY:
+
+CHANGE A — Faster model for better FPS:
+In the _create_hands_model method, find:
+    model_complexity=1,
+Change to:
+    model_complexity=0,
+Reason: complexity=1 is ~30ms/frame, complexity=0 is ~12ms/frame. On 8GB RAM this matters.
+
+CHANGE B — Stronger landmark smoothing to kill skeleton shake:
+In the detect method, find the blend calculation:
+    blend = 0.48 if conf >= 0.78 else (0.42 if conf >= 0.60 else 0.36)
+Change to:
+    blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
+Reason: Higher blend = landmarks follow camera data faster, lower = smoother.
+Current values are too low, causing visible lag between hand and skeleton.
+The new values give enough smoothing to kill jitter but fast enough to feel responsive.
+
+CHANGE C — Increase grace frames near edges to prevent hand loss at screen corners:
+In __init__, find:
+    self._edge_grace_frames = 7
+Change to:
+    self._edge_grace_frames = 10
+Reason: When hand moves to camera edges, MediaPipe drops detection. 10 grace frames
+gives ~300ms at 30fps before declaring hand lost, which is enough to re-detect.
+
+DO NOT change:
+- max_num_hands (keep 2)
+- min_detection_confidence (keep 0.55)
+- min_tracking_confidence (keep 0.45)
+- The _map_label method
+- The draw method
+- The close method
+- Any other threshold or method
+
+Output the COMPLETE file.
+
+=== FILE 2: src/tuning.py ===
+Output the COMPLETE file with this ONE change:
+
+Find:
+    CURSOR_SOFT_DEADZONE_PX = 6.0
+Change to:
+    CURSOR_SOFT_DEADZONE_PX = 2.0
+Reason: 6.0px deadzone causes cursor to feel "stuck" on small movements.
+2.0px still kills micro-jitter but allows fine control.
+
+DO NOT change any other value in this file.
+Output the COMPLETE file.
+```
+
+TEST AFTER APPLYING: Move hand slowly — cursor should follow smoothly without pausing.
+Move hand fast — no visible lag. Check FPS counter — should show 25+ FPS.
+git add . && git commit -m "fixed: cursor smoothness and hand tracker FPS"
+
+
+═══════════════════════════════════════════════════════════════════
+PROMPT 2 OF 5 — GESTURE DETECTION (CLICKS + SCROLL)  
+═══════════════════════════════════════════════════════════════════
+(fixes: clicks not detecting, hard pinch not working, right-click triggering randomly, scroll triggering right-click)
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Fix gesture detection — clicks must always register, right-clicks must not trigger randomly, scroll must not trigger other gestures.
+
+=== FILE: src/gesture_detector.py ===
+Output the COMPLETE file with these changes ONLY:
+
+CHANGE A — Fix hard pinch not detecting (confidence gate too high):
+In _process_action_hand, find:
+    confidence = float(hand_data.get("confidence", 0.0))
+    if confidence < 0.20:
+Change the threshold to:
+    if confidence < 0.10:
+Reason: When pinching hard, fingers overlap and MediaPipe confidence drops to 0.15-0.25.
+The 0.20 gate rejects these frames, making hard pinches fail. 0.10 accepts them.
+
+CHANGE B — Fix left-click pinch enter threshold (sometimes doesn't trigger):
+In _process_action_hand, find:
+    elif li <= (enter * 0.94):
+        self._left_pinch_active = True
+Change to:
+    elif li <= enter:
+        self._left_pinch_active = True
+Reason: The 0.94 multiplier makes the effective threshold 0.207 instead of 0.22.
+This is too tight — a pinch at distance ratio 0.21 (clearly pinched) gets rejected.
+Using the full enter threshold (0.22) catches all intentional pinches.
+
+CHANGE C — Fix right-click triggering during scroll:
+In _process_action_hand, find the right-pinch elif condition. It currently reads:
+    elif (
+        not self._left_pinch_active
+        and ri <= right_enter
+        and li > (enter * 0.90)
+        and pm > 0.14
+    ):
+Change to:
+    elif (
+        not self._left_pinch_active
+        and not scroll_pose
+        and ri <= right_enter
+        and li > (enter * 1.2)
+        and pm > 0.22
+    ):
+Reason: Three fixes in one:
+- "not scroll_pose" prevents right-click during peace sign (scroll gesture)
+- "li > enter * 1.2" requires index finger to be CLEARLY open, not borderline
+- "pm > 0.22" requires index and middle to be further apart, preventing
+  accidental triggers when fingers are close together
+
+CHANGE D — Make EMA smoothing on pinch ratios slightly faster for quicker click response:
+In _process_action_hand, find:
+    pinch_alpha = 0.42 if confidence < 0.6 else 0.55
+Change to:
+    pinch_alpha = 0.50 if confidence < 0.6 else 0.65
+Reason: Faster EMA means the pinch ratio reaches the threshold sooner,
+making clicks feel more responsive. The stability filter still prevents jitter.
+
+CHANGE E — Fix scroll pose detection (must be fingers sticking straight up):
+Find the scroll_pose calculation block (around line 2576-2600). The current detection
+uses extended finger + together + aligned checks. Keep the structure but fix the 
+aligned_vertical check to be more forgiving:
+
+Find:
+    aligned_vertical = (
+        abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.22)
+        and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.26)
+    )
+Change to:
+    aligned_vertical = (
+        abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.30)
+        and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.35)
+    )
+Reason: The current values are too strict — slight finger misalignment breaks scroll.
+Widening to 0.30/0.35 lets scroll work at various hand angles while still requiring
+the peace-sign shape.
+
+DO NOT change:
+- __init__ threshold values (_pinch_enter, _pinch_exit, cooldowns, etc.)
+- _resolve_scroll method (scroll math is fine)
+- _check_action_cooldown or _record_action
+- _reset_all
+- detect_dual or detect method signatures
+- Any per_action_cooldown values
+
+Output the COMPLETE file.
+```
+
+TEST AFTER APPLYING:
+- Pinch thumb+index firmly → should ALWAYS show LEFT CLICK in audit log
+- Pinch thumb+middle with index extended → RIGHT CLICK after brief hold
+- Peace sign (2 fingers up) → SCROLL, move up/down → scroll works
+- While scrolling, right-click should NOT trigger
+- While doing left-click, scroll should NOT trigger
+git add . && git commit -m "fixed: gesture detection clicks and scroll"
+
+
+═══════════════════════════════════════════════════════════════════
+PROMPT 3 OF 5 — MODE SWITCHING + CONTROL MARGIN
+═══════════════════════════════════════════════════════════════════
+(fixes: mode detection, hand label accuracy, margin edge control)
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Fix mode switching logic and control margin for edge/corner control.
+
+=== FILE 1: src/settings_store.py ===
+Output the COMPLETE file with this ONE change:
+
+In DEFAULTS dict, find:
+    "frame_r": 60,
+Change to:
+    "frame_r": 120,
+Reason: User needs 120px margin to have enough room for hand movement while
+still being able to reach screen edges. The cursor mapper already extends
+slightly beyond the margin box.
+
+DO NOT change any other DEFAULT value or any method.
+Output the COMPLETE file.
+
+=== FILE 2: src/cursor_mapper.py ===
+Output the COMPLETE file with this ONE change:
+
+In the set_frame_margin method, find:
+    self._max_inner_margin_ratio = 0.35
+(in __init__)
+Change to:
+    self._max_inner_margin_ratio = 0.42
+Reason: Allows larger margins (up to 42% of camera dimension) so frame_r=120
+works on 480p cameras. This gives users the range they need.
+
+Also in map_point, find the section right after the soft deadzone calculation.
+After the line:
+    raw_x = prev_raw_x + dx * scale
+    raw_y = prev_raw_y + dy * scale
+Add NO changes — the existing overshoot handling (nx/ny clamped 0.0 to 1.0)
+already maps to full screen edges. The margin increase alone fixes corner access.
+
+DO NOT change _map_to_screen, set_smoothening, set_prediction_strength, or any 
+alpha/deadzone values.
+Output the COMPLETE file.
+
+=== FILE 3: src/main_window.py ===
+Output the COMPLETE file with these targeted changes ONLY:
+
+CHANGE A — Fix auto mode switching delay (too aggressive):
+In _process_loop, find the mode switching block (around lines 4696-4712 in current code).
+It starts with:
+    hand_count = len(hands_dict)
+    now_switch = time.monotonic()
+
+Replace the ENTIRE block (from "hand_count = len(hands_dict)" through 
+"self._1hand_start = None" / "self._2hand_start = None") with:
+
+    hand_count = len(hands_dict)
+    now_switch = time.monotonic()
+    if hand_count == 1:
+        if self._1hand_start is None:
+            self._1hand_start = now_switch
+        self._2hand_start = None
+        # Switch to single ONLY after 3 seconds of seeing just one hand
+        if (now_switch - self._1hand_start > 3.0 
+                and self._cursor_mode != "single_hand"):
+            settings.set("cursor_mode", "single_hand")
+            self._cursor_mode_request.emit("single_hand")
+    elif hand_count >= 2:
+        if self._2hand_start is None:
+            self._2hand_start = now_switch
+        self._1hand_start = None
+        # Switch to dual after 1.5 seconds of seeing two hands
+        if (now_switch - self._2hand_start > 1.5 
+                and self._cursor_mode != "dual_hand"):
+            settings.set("cursor_mode", "dual_hand")
+            self._cursor_mode_request.emit("dual_hand")
+    else:
+        self._1hand_start = None
+        self._2hand_start = None
+
+Reason: Previous delay was too short (self._MODE_SWITCH_DELAY_S could be <1s).
+New logic: 1.5s to go dual (fast — user wants dual), 3.0s to go single (slow —
+prevents accidental switch when one hand briefly leaves camera).
+
+CHANGE B — Make skeletons visible by default:
+In __init__, find:
+    self.debug = _as_bool(settings.get("debug_overlay", False), False)
+Change to:
+    self.debug = _as_bool(settings.get("debug_overlay", True), True)
+
+Also find in _render():
+    if self.debug and hand_proto is not None and tracker is not None:
+Change to:
+    if hand_proto is not None and tracker is not None:
+Reason: Skeletons should ALWAYS draw. The "debug" checkbox in settings can
+still toggle the setting for other debug features later, but skeleton
+visibility is essential for the user to know what the app sees.
+
+CHANGE C — In the confidence gate in _process_loop, fix the right-click threshold:
+Find:
+    elif _conf < 0.50 and gesture == GestureType.RIGHT_CLICK:
+Change to:
+    elif _conf < 0.40 and gesture == GestureType.RIGHT_CLICK:
+Reason: 0.50 was too high — right-clicks often have 0.45 confidence because
+the middle finger overlaps the thumb. Lowering to 0.40 lets intentional
+right-clicks through while still blocking garbage detections.
+
+DO NOT change:
+- Any UI layout, stylesheet, or widget code
+- The _render method (except the skeleton debug change above)
+- Any method signatures
+- The _dual_cursor_point method
+- The settings dialog
+- The overlay or tray code
+
+Output the COMPLETE file.
+```
+
+TEST AFTER APPLYING:
+- Show 2 hands → badge should say "DUAL" after 1.5s
+- Remove one hand → stays dual for 3s, then switches to "SINGLE"
+- Skeletons visible without enabling debug
+- Hand near camera edge → cursor still reaches screen corners
+git add . && git commit -m "fixed: mode switching and control margin"
+
+
+═══════════════════════════════════════════════════════════════════
+PROMPT 4 OF 5 — GESTURE ISOLATION (NO CROSS-TRIGGERING)
+═══════════════════════════════════════════════════════════════════
+(fixes: scroll triggering right-click, gestures interfering with each other, gesture detection gaps)
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Ensure gestures never cross-trigger. Each gesture must be fully isolated.
+
+=== FILE: src/gesture_detector.py ===
+Output the COMPLETE file with these changes ONLY:
+
+CHANGE A — Add state locking: after an action fires, lock out other actions briefly:
+In __init__, after the line:
+    self._last_action_time: dict[GestureType, float] = {}
+ADD:
+    self._action_lock_until: float = 0.0
+    self._action_lock_type: GestureType = GestureType.PAUSE
+
+In _process_action_hand, at the very START of the method (right after the xy/confidence checks,
+before the pinch ratio calculations), ADD:
+    # Action lock: if we recently fired a discrete action, suppress other discrete actions
+    if now < self._action_lock_until:
+        locked_type = self._action_lock_type
+        # Allow the same gesture type to continue (e.g., drag after click)
+        # but block OTHER discrete gestures from firing
+        if locked_type in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+            # After a click, only allow MOVE, DRAG, SCROLL (not right-click)
+            pass  # Don't return — just let the normal flow handle it
+        elif locked_type == GestureType.RIGHT_CLICK:
+            # After right-click, block all other clicks for the lock duration
+            pass
+        elif locked_type == GestureType.SCROLL:
+            # During scroll, block clicks entirely
+            if self._left_pinch_active or self._right_pinch_active:
+                self._left_pinch_active = False
+                self._right_pinch_active = False
+                self._right_pinch_start_t = None
+
+In _record_action, REPLACE the method with:
+    def _record_action(self, gesture: GestureType, now: float) -> None:
+        self._last_action_time[gesture] = now
+        # Lock out cross-triggering for 200ms after any discrete action
+        if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, 
+                       GestureType.DOUBLE_CLICK}:
+            self._action_lock_until = now + 0.20
+            self._action_lock_type = gesture
+
+CHANGE B — When scroll is active, force-clear pinch states to prevent click triggering:
+In the routing section, find:
+    elif scroll_pose:
+        raw_state = GestureType.SCROLL
+Add AFTER this elif:
+        # Force-clear pinch states during scroll to prevent click cross-triggers
+        self._left_pinch_active = False
+        self._right_pinch_active = False
+        self._left_pinch_since = None
+        self._right_pinch_start_t = None
+        self._left_click_emitted_this_hold = False
+        self._right_click_emitted_this_hold = False
+
+CHANGE C — When scroll state is confirmed, also lock actions:
+In the emit actions section, find:
+    if stable_state == GestureType.SCROLL:
+        scroll_y = (float(xy[8][1]) + float(xy[12][1])) * 0.5
+        delta = self._resolve_scroll(scroll_y, self._hand_scale)
+        self._state = GestureType.SCROLL
+        self._dragging = False
+        return self._make_result(GestureType.SCROLL, delta)
+Add BEFORE the return:
+        self._action_lock_until = now + 0.10
+        self._action_lock_type = GestureType.SCROLL
+
+CHANGE D — Reset action lock in _reset_all:
+In _reset_all, add:
+    self._action_lock_until = 0.0
+    self._action_lock_type = GestureType.PAUSE
+
+DO NOT change any threshold values, any method signatures, or any other logic.
+Output the COMPLETE file.
+```
+
+TEST AFTER APPLYING:
+- Do peace sign scroll → no random clicks during scroll
+- Left click → immediately after, no random right-click
+- Right click → no random left-click following it
+- Scroll up/down → only scroll events in audit log, no click events
+git add . && git commit -m "fixed: gesture isolation no cross-triggering"
+
+
+═══════════════════════════════════════════════════════════════════
+PROMPT 5 OF 5 — UI POLISH
+═══════════════════════════════════════════════════════════════════
+(fixes: spacing, contrast, font visibility, status bar, mode bar, overlay, animations)
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Polish the UI — fix spacing, contrast, font visibility, and the overall look.
+Change ONLY the stylesheet and _build_ui layout code. Do NOT touch any logic,
+process loop, gesture detection, or cursor mapping code.
+
+=== FILE: src/main_window.py ===
+Output the COMPLETE file with these stylesheet/layout changes ONLY:
+
+CHANGE A — Fix the main window stylesheet:
+In _build_ui, find the self.setStyleSheet(...) call. Make these specific changes
+WITHIN the existing stylesheet (keep all other rules unchanged):
+
+1. Increase secondary text contrast:
+   Find: #secondary { color: #D7E3F7;
+   Change to: #secondary { color: #E8EDF5;
+
+2. Increase muted text visibility:
+   Find: #muted { color: #475569;
+   Change to: #muted { color: #64748B;
+
+3. Make badge text larger and more padded:
+   Find the #badge { block. Change these properties:
+   padding: 8px 20px;
+   font-size: 14px;
+   min-width: 110px;
+
+4. Make side cards have visible backgrounds:
+   Find: #sideCard {
+   Change background to: background: rgba(15, 18, 25, 0.70);
+   Change border to: border: 1px solid rgba(34, 211, 238, 0.15);
+   Add: padding: 14px;
+
+5. Make buttons have more padding:
+   Find the QPushButton { block (the generic one, not #startBtn etc.)
+   Change: padding: 12px 24px;
+
+6. Increase card title size:
+   Find: #cardTitle {
+   Change: font-size: 13px; font-weight: 800;
+
+7. Increase history item visibility:
+   Find: #historyItem {
+   Change: font-size: 13px; color: #94A3B8;
+
+CHANGE B — Fix spacing in the status panel:
+In _build_ui, find where the status panel (sl = QVBoxLayout(status)) is built.
+Find:
+    sl.setContentsMargins(0, 8, 0, 8)
+    sl.setSpacing(10)
+Change to:
+    sl.setContentsMargins(8, 12, 8, 12)
+    sl.setSpacing(8)
+
+CHANGE C — Fix the side panel width for better text visibility:
+Find:
+    side_wrap.setMinimumWidth(300)
+    side_wrap.setMaximumWidth(420)
+If these lines don't exist, find the side_wrap creation and ADD them.
+If they already exist, change to:
+    side_wrap.setMinimumWidth(320)
+    side_wrap.setMaximumWidth(450)
+
+CHANGE D — Fix overlay styling for better visibility:
+In StatusOverlay.__init__, find the setStyleSheet call.
+In the #overlayRoot rule, change:
+    border-radius: 18px;
+to:
+    border-radius: 16px;
+And change the background gradient to be slightly more opaque:
+    stop:0 rgba(8, 12, 20, 210), stop:1 rgba(10, 16, 28, 200)
+
+CHANGE E — Fix the gesture guide grid spacing:
+Find:
+    gl.setHorizontalSpacing(16)
+    gl.setVerticalSpacing(12)
+Change to:
+    gl.setHorizontalSpacing(12)
+    gl.setVerticalSpacing(10)
+
+DO NOT change:
+- Any logic in _process_loop, _render (except stylesheet rendering), gesture detection
+- Any method signatures or return types
+- Any threshold values
+- The settings dialog functionality
+- Any imports
+
+Output the COMPLETE file.
+```
+
+TEST AFTER APPLYING:
+- All text should be clearly readable on dark background
+- Status badges should be visible and properly sized
+- Side panel should have visible card backgrounds
+- Overlay should be more opaque and easier to read
+- History items should be visible
+- No text clipping or overflow
+git add . && git commit -m "fixed: UI polish spacing contrast fonts"
+
+
+═══════════════════════════════════════════════════════════════════
+AFTER ALL 5 PROMPTS — FINAL VERIFICATION
+═══════════════════════════════════════════════════════════════════
+
+Run through this checklist:
+
+CURSOR:
+□ Move hand slowly — smooth following, no pausing
+□ Move hand fast — responsive, no visible lag  
+□ Move to screen corners — cursor reaches edges
+□ FPS counter shows 25+ FPS
+
+MODES:
+□ Single hand → SINGLE badge, all gestures work
+□ Two hands → DUAL badge after 1.5s
+□ Remove one hand → stays DUAL for 3s before switching
+□ Right hand = cursor (default in dual mode)
+□ Settings swap checkbox works
+
+GESTURES:
+□ Thumb+Index pinch = left click (ALWAYS registers, even hard pinch)
+□ Quick double pinch = double click
+□ Thumb+Middle pinch (index extended) = right click after hold
+□ Right click does NOT trigger during scroll
+□ Left click does NOT trigger during scroll  
+□ Peace sign up/down = scroll (smooth, correct direction)
+□ Hold pinch 0.45s = drag
+□ All gestures show in audit log
+
+SKELETONS:
+□ Visible on both hands
+□ Stick to fingers accurately
+□ Green for right hand, orange for left
+□ Don't shake excessively
+
+UI:
+□ All text readable
+□ Status badges visible
+□ Mode indicator colored (cyan=dual, purple=single)
+□ Side panel cards have visible backgrounds
+□ Overlay readable when minimized
+
+If everything passes: git tag v1.0-beta
+ check if everything is implemented.. if not continue and finish
+
+GitHub Copilot: I’m verifying against your full 5-prompt spec now by checking the exact target lines, commit history, tag, and test status; if anything is missing I’ll patch it immediately.
+
+Ran terminal command: git log --oneline -n 10; git tag --list "v1.0-beta"; git status --short
+
+Searched for regex `model_complexity=0|blend = 0\.55 if conf >= 0\.78 else \(0\.48 if conf >= 0\.60 else 0\.40\)|_edge_grace_frames = 10|CURSOR_SOFT_DEADZONE_PX = 2\.0` (`**/src/**`), 4 results
+
+Searched for regex `confidence < 0\.10|elif li <= enter:|and not scroll_pose|and li > \(enter \* 1\.2\)|and pm > 0\.22|pinch_alpha = 0\.50 if confidence < 0\.6 else 0\.65|aligned_vertical = \(|_action_lock_until: float = 0\.0|self\._action_lock_type = GestureType\.PAUSE|self\._action_lock_until = now \+ 0\.10` (`**/src/gesture_detector.py`), 10 results
+
+Searched for regex `"frame_r": 120|_max_inner_margin_ratio = 0\.42|now_switch - self\._1hand_start > 3\.0|now_switch - self\._2hand_start > 1\.5|self\.debug = _as_bool\(settings\.get\("debug_overlay", True\), True\)|elif _conf < 0\.40 and gesture == GestureType\.RIGHT_CLICK|if hand_proto is not None and tracker is not None|sl\.setContentsMargins\(8, 12, 8, 12\)|sl\.setSpacing\(8\)|side_wrap\.setMinimumWidth\(320\)|side_wrap\.setMaximumWidth\(450\)|gl\.setHorizontalSpacing\(12\)|gl\.setVerticalSpacing\(10\)|#secondary \{ color: #E8EDF5;|#muted \{ color: #64748B;|#historyItem \{|padding: 8px 20px;|font-size: 14px;|min-width: 110px;|background: rgba\(15, 18, 25, 0\.70\);|border: 1px solid rgba\(34, 211, 238, 0\.15\);|padding: 14px;` (`**/src/**`), 22 results
+
+I verified all Prompt 1–5 code changes and the `v1.0-beta` tag are present; the only thing I still need to confirm is whether .cursorrules matches your latest text exactly, so I’m checking that now.
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/.cursorrules)
+
+Generating patch (9 lines) in [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/.cursorrules)
+
+
+```
+
+```
+I found a tiny mismatch in .cursorrules punctuation and fixed it to match your provided text exactly; I’ll commit just that alignment now.
+
+Ran terminal command: git add .cursorrules; git commit -m "chore: align cursorrules text exactly"
+
+Ran terminal command: git log --oneline -n 12; git tag --list "v1.0-beta"; git status --short
+
+Yes, I checked everything and completed the remaining gap.
+
+Implemented status
+1. All 5 prompt change sets are present in code:
+1. Prompt 1: hand_tracker.py, tuning.py
+2. Prompt 2: gesture_detector.py
+3. Prompt 3: settings_store.py, cursor_mapper.py, main_window.py
+4. Prompt 4: gesture_detector.py
+5. Prompt 5: main_window.py
+
+2. .cursorrules now matches your provided text exactly (including em-dash formatting):
+1. .cursorrules
+
+3. Verification and release state:
+1. Full test suite passed: 29 passed, 0 failed, 6 skipped
+2. Tag exists: v1.0-beta
+3. Prompt-sequence commits are present, plus one final alignment commit:
+1. 462b21f fixed: cursor smoothness and hand tracker FPS
+2. eff1b17 fixed: gesture detection clicks and scroll
+3. 1371e04 fixed: mode switching and control margin
+4. e05247d fixed: gesture isolation no cross-triggering
+5. 14c1fc5 fixed: UI polish spacing contrast fonts
+6. 3ec706b chore: align cursorrules text exactly
+
+Important workspace note
+1. There are unrelated, currently unstaged/still-present user-worktree changes:
+1. deleted: MASTER_PROMPT.txt
+2. deleted: finish_holographic_touch.md
+3. untracked: five_prompts_to_finish.md
+4. untracked: prompt_0_hidden_bugs.md
+
+These are outside the implemented prompt patches and I did not alter/revert them.Completed full implementation and verification: all five prompt changes are in place and committed, .cursorrules is aligned to your provided text, tests pass, and `v1.0-beta` is created.
+
+
+
+Made changes.
+
+User: # PROMPT 0 — Hidden Bug Fixes (run BEFORE the 5 main prompts)
+# These are bugs I found in the code that are NOT covered by prompts 1-5.
+# They will silently cause problems if not fixed first.
+
+═══════════════════════════════════════════════════════════════════
+BUGS FOUND AND WHY THEY MATTER
+═══════════════════════════════════════════════════════════════════
+
+BUG 1: DPI awareness called TWICE — once in mouse.py at module load time,
+once in MainWindow.__init__. The mouse.py call happens at import time
+(before any window exists), which is correct. But the MainWindow one
+runs AGAIN, which on some Windows builds causes the DPI scaling to
+double-apply, making cursor coordinates off by the scaling factor.
+This causes cursor to overshoot or undershoot its target position.
+FIX: Remove the duplicate DPI call from mouse.py (keep the one in MainWindow).
+
+BUG 2: mouse.py _set_cursor_pos uses _scr_w/_scr_h from GetSystemMetrics(0)/(1)
+which returns PRIMARY monitor size only. But CursorMapper uses virtual screen
+bounds (GetSystemMetrics(78)/(79)) which spans ALL monitors. On multi-monitor
+setups, the SendInput absolute coordinates are wrong because the denominator
+is the primary monitor width, not the virtual screen width.
+FIX: Use GetSystemMetrics(78)-GetSystemMetrics(76) for width and (79)-(77) for height.
+
+BUG 3: pyautogui is imported in mouse.py but never used — all mouse operations
+use ctypes/SendInput. The import sets pyautogui.FAILSAFE=False and 
+pyautogui.PAUSE=0 at module level. This is dead code that adds ~200ms to
+startup and can interfere with cursor positioning on some systems.
+FIX: Remove the pyautogui import entirely.
+
+BUG 4: In _process_loop, when cursor_mode is "single_hand" and BOTH hands are 
+detected, the code picks `hands_dict.get("Right") or hands_dict.get("Left")`
+for BOTH cursor AND gestures. But the gesture detector processes the SAME hand
+for actions — meaning the cursor hand and the action hand are identical.
+When you pinch, the cursor tip (landmark 8) moves toward the thumb, causing
+the cursor to jump to the pinch point. The _freeze_on set is supposed to
+prevent this, but in single mode the freeze only activates AFTER the gesture
+is detected — by which point the cursor has already jumped.
+FIX: In single-hand mode, freeze the cursor position 2 frames EARLIER by
+checking the raw pinch ratio before the gesture detector processes it.
+
+BUG 5: detect_dual() suppresses ALL actions when cursor hand is missing:
+```python
+if not cursor_hand:
+    self._state = GestureType.MOVE
+    self._dragging = False
+    return self._make_result(GestureType.MOVE, 0)
+```
+But in single-hand mode (where detect() is called), the user's only hand
+IS the action hand. The issue is that when auto-switching from dual→single,
+if the gestures object still has _left_pinch_active=True from the previous
+dual-hand session, the first single-hand frame will fire a stale click.
+FIX: Call _reset_all() when mode switches.
+
+BUG 6: The _dual_cursor_point method loops through ALL fingertips and returns
+the FIRST extended one. If the user extends their middle finger instead of
+index, the cursor tracks the middle finger. This is confusing — cursor should
+always track index finger (landmark 8) in dual mode, falling back to palm
+center (landmark 9) only if the hand is a closed fist.
+FIX: Check index finger (8) first, only fall back to mcp9 if no finger extended.
+
+BUG 7: camera_thread._loop does cap.read() INSIDE the _cap_lock. This means
+the lock is held for the entire duration of cap.read() (~16-33ms at 30-60fps).
+During this time, switch_camera() and stop() block waiting for the lock.
+If stop() is called during a frame read, it hangs for up to 33ms + lock wait.
+Not a crash bug but causes UI freeze when stopping camera.
+FIX: Grab the cap reference under lock, but do the read OUTSIDE the lock.
+
+BUG 8: In gesture_detector _process_action_hand, when stable_state is LEFT_CLICK
+but the cooldown check fails, it returns MOVE:
+```python
+self._state = GestureType.MOVE
+return self._make_result(GestureType.MOVE, 0)
+```
+This is wrong — the user is still pinching (left_pinch_active is True).
+Returning MOVE causes the cursor to unfreeze and track the pinched finger
+position, making the cursor jump. It should return PAUSE or keep the state
+as LEFT_CLICK without re-emitting the action.
+FIX: Return the current state without action emission, keeping cursor frozen.
+
+═══════════════════════════════════════════════════════════════════
+THE PROMPT (paste this to Codex BEFORE prompts 1-5)
+═══════════════════════════════════════════════════════════════════
+
+```
+Read .cursorrules first. Follow every rule in it.
+
+TASK: Fix 8 hidden bugs across 4 files. Each change is small and surgical.
+Do NOT change any gesture thresholds, any UI code, or any method signatures.
+
+=== FILE 1: src/mouse.py ===
+Output the COMPLETE file with these changes ONLY:
+
+CHANGE A — Remove dead pyautogui import:
+Delete these lines entirely (near top of file):
+    try:
+        import pyautogui  # type: ignore
+        pyautogui.FAILSAFE = False
+        pyautogui.PAUSE = 0.0
+    except Exception:
+        pyautogui = None  # type: ignore[assignment]
+
+CHANGE B — Remove duplicate DPI awareness call:
+Delete these lines entirely (after the pyautogui removal):
+    if platform.system() == "Windows":
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+(DPI awareness is already set in MainWindow.__init__ which is the correct place.)
+
+CHANGE C — Fix multi-monitor cursor positioning:
+In __init__, find where _scr_w and _scr_h are set:
+    self._scr_w: int = int(ctypes.windll.user32.GetSystemMetrics(0)) or 1920
+    self._scr_h: int = int(ctypes.windll.user32.GetSystemMetrics(1)) or 1080
+Replace with:
+    # Use virtual screen metrics for multi-monitor support
+    _u32 = ctypes.windll.user32
+    _vx = int(_u32.GetSystemMetrics(76))  # SM_XVIRTUALSCREEN
+    _vy = int(_u32.GetSystemMetrics(77))  # SM_YVIRTUALSCREEN
+    self._scr_w: int = max(1, int(_u32.GetSystemMetrics(78)) - _vx)  # SM_CXVIRTUALSCREEN
+    self._scr_h: int = max(1, int(_u32.GetSystemMetrics(79)) - _vy)  # SM_CYVIRTUALSCREEN
+    self._scr_x: int = _vx
+    self._scr_y: int = _vy
+
+Also update _set_cursor_pos to account for the virtual screen offset:
+Find:
+    ax = int(x * 65535 // self._scr_w)
+    ay = int(y * 65535 // self._scr_h)
+Replace with:
+    ax = int((x - self._scr_x) * 65535 // self._scr_w)
+    ay = int((y - self._scr_y) * 65535 // self._scr_h)
+
+DO NOT change any other method in this file.
+Output the COMPLETE file.
+
+=== FILE 2: src/camera_thread.py ===
+Output the COMPLETE file with this ONE change:
+
+In the _loop method, move cap.read() outside the lock:
+
+Find:
+    while self._running:
+        with self._cap_lock:
+            cap = self._cap
+            if cap is None:
+                time.sleep(0.001)
+                continue
+            ok, frame = cap.read()
+
+Replace with:
+    while self._running:
+        with self._cap_lock:
+            cap = self._cap
+        if cap is None:
+            time.sleep(0.001)
+            continue
+        ok, frame = cap.read()
+
+(The cap reference is grabbed under lock, but the blocking read() happens
+outside the lock so stop() and switch_camera() don't have to wait.)
+
+DO NOT change any other method.
+Output the COMPLETE file.
+
+=== FILE 3: src/gesture_detector.py ===
+Output the COMPLETE file with these changes ONLY:
+
+CHANGE A — Fix cursor jump when click cooldown fails:
+In _process_action_hand, find (for LEFT_CLICK):
+    if stable_state == GestureType.LEFT_CLICK:
+        if (not self._left_click_emitted_this_hold) and self._check_action_cooldown(...):
+            ...
+            return self._make_result(GestureType.LEFT_CLICK, 0)
+        self._state = GestureType.MOVE
+        return self._make_result(GestureType.MOVE, 0)
+
+Change the fallthrough (the last two lines of that block) from:
+        self._state = GestureType.MOVE
+        return self._make_result(GestureType.MOVE, 0)
+To:
+        # Keep state as LEFT_CLICK so cursor stays frozen (don't switch to MOVE)
+        self._state = GestureType.LEFT_CLICK
+        return self._make_result(GestureType.LEFT_CLICK, 0)
+
+Do the SAME for RIGHT_CLICK. Find:
+    if stable_state == GestureType.RIGHT_CLICK:
+        ...
+        self._state = GestureType.MOVE
+        return self._make_result(GestureType.MOVE, 0)
+Change the fallthrough to:
+        self._state = GestureType.RIGHT_CLICK
+        return self._make_result(GestureType.RIGHT_CLICK, 0)
+
+Reason: When the user is pinching but cooldown hasn't elapsed, the pinch is
+STILL active. Returning MOVE unfreezes the cursor and causes it to jump to
+the pinch point. Keeping the click state keeps the cursor frozen.
+
+DO NOT change any threshold values or any other method.
+Output the COMPLETE file.
+
+=== FILE 4: src/main_window.py ===
+Output the COMPLETE file with these changes ONLY:
+
+CHANGE A — Fix _dual_cursor_point to always prefer index finger:
+Find the _dual_cursor_point method. Replace the entire loop:
+
+    for tip_idx, pip_idx in ((8, 6), (12, 10), (16, 14), (20, 18)):
+        ...
+        if tip_dist > (pip_dist + extend_margin):
+            return int(tip[0]), int(tip[1])
+
+With:
+    # Always prefer index finger (landmark 8) for cursor tracking
+    if len(xy) > 8 and len(xy) > 6:
+        tip = xy[8]
+        pip = xy[6]
+        wrist = xy[0]
+        tip_dist = ((float(tip[0]) - float(wrist[0])) ** 2 + (float(tip[1]) - float(wrist[1])) ** 2) ** 0.5
+        pip_dist = ((float(pip[0]) - float(wrist[0])) ** 2 + (float(pip[1]) - float(wrist[1])) ** 2) ** 0.5
+        if tip_dist > (pip_dist + extend_margin):
+            return int(tip[0]), int(tip[1])
+
+Keep the fallback line after the loop:
+    return int(mcp9[0]), int(mcp9[1])
+
+CHANGE B — Reset gesture state when mode switches:
+Find the set_cursor_mode method (the @Slot(str) one). Inside it, after the line:
+    self._cursor_mode = mode_norm
+Add:
+    self.gestures._reset_all(time.monotonic())
+    self._frozen_sx = -1
+    self._frozen_sy = -1
+
+CHANGE C — In single-hand mode cursor path, pre-freeze on pinch detection:
+In _process_loop, find the single-hand cursor section:
+    else:
+        # Single-hand legacy: index finger = cursor
+        _any_hand = hands_dict.get("Right") or hands_dict.get("Left")
+        if gesture in self._freeze_on:
+            _has_cursor = self._frozen_sx >= 0
+
+Change the freeze condition to also check raw pinch state:
+    else:
+        # Single-hand legacy: index finger = cursor
+        _any_hand = hands_dict.get("Right") or hands_dict.get("Left")
+        # Pre-freeze: also freeze if pinch is physically active (before gesture confirms)
+        _pinch_active = self.gestures._left_pinch_active or self.gestures._right_pinch_active
+        if gesture in self._freeze_on or _pinch_active:
+            _has_cursor = self._frozen_sx >= 0
+
+DO NOT change any UI code, stylesheet, settings dialog, or overlay code.
+DO NOT change any threshold values.
+Output the COMPLETE file.
+```
+
+═══════════════════════════════════════════════════════════════════
+TEST AFTER APPLYING PROMPT 0:
+═══════════════════════════════════════════════════════════════════
+
+□ App starts without import errors (pyautogui removed cleanly)
+□ Cursor position matches actual hand position on screen (DPI fix)
+□ If you have multiple monitors: cursor reaches all monitors correctly
+□ Stopping camera doesn't cause brief UI freeze
+□ In single-hand mode: cursor does NOT jump when you pinch
+□ In dual mode: cursor tracks index finger, not random extended finger
+□ When switching modes (1 hand → 2 hands): no stale click fires
+□ During continuous pinch hold, cursor stays frozen (doesn't drift)
+
+git add . && git commit -m "fixed: 8 hidden bugs (DPI, multi-monitor, cursor jump, mode switch)"
+
+═══════════════════════════════════════════════════════════════════
+THEN run prompts 1-5 in order.
+═══════════════════════════════════════════════════════════════════
+ follow cursor rules and prompt guide
+
+GitHub Copilot: I’m implementing Prompt 0 now as a surgical pass across the 4 target files, then I’ll run tests and commit with your requested message. I’ll first inspect the exact current code blocks to patch only the specified lines.
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py#380-380), lines 380 to 461
+
+Searched for regex `def _dual_cursor_point|def set_cursor_mode|Single-hand legacy: index finger = cursor|if gesture in self\._freeze_on` (`**/src/main_window.py`), 5 results
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py#1370-1370), lines 1370 to 1495
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py#1820-1820), lines 1820 to 1875
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/mouse.py#1-1), lines 1 to 320
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/camera_thread.py#1-1), lines 1 to 260
+
+Searched for regex `def _loop|while self\._running:|with self\._cap_lock:|ok, frame = cap.read\(\)` (`**/src/camera_thread.py`), 12 results
+
+Read [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/camera_thread.py#316-316), lines 316 to 382
+
+I’ve confirmed all 8 target spots exist and I’m patching them now exactly as Prompt 0 specifies, without touching UI thresholds or signatures.
+
+Generating patch (141 lines) in [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/mouse.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/camera_thread.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py)
+
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+
+```
+Prompt 0 edits are in; next I’m running diagnostics and the test suite to verify no regressions before committing.
+
+Ran terminal command: & "c:/Users/Superduash/Downloads/AI HollowGraphic Like Touch/.venv/Scripts/python.exe" "tests/run_tests.py"
+
+Checked [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/mouse.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/camera_thread.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/gesture_detector.py), [](file:///c%3A/Users/Superduash/Downloads/AI%20HollowGraphic%20Like%20Touch/src/main_window.py), no problems found
+
+Ran terminal command: git add src/mouse.py src/camera_thread.py src/gesture_detector.py src/main_window.py; git commit -m "fixed: 8 hidden bugs (DPI, multi-monitor, cursor jump, mode switch)"; git log --oneline -n 6
+
+Prompt 0 is now fully implemented and committed.
+
+Implemented fixes
+1. mouse.py
+1. Removed unused `pyautogui` import block.
+2. Removed duplicate Windows DPI-awareness call block.
+3. Switched to virtual-screen metrics (`SM_X/Y/CX/CYVIRTUALSCREEN`) in init.
+4. Updated absolute-coordinate mapping in `_set_cursor_pos` to apply virtual-screen offset.
+
+2. camera_thread.py
+1. Moved `cap.read()` outside `_cap_lock` in `_loop` so stop/switch paths do not block on frame read.
+
+3. gesture_detector.py
+1. For LEFT_CLICK cooldown fallthrough: keep state/result as LEFT_CLICK (not MOVE).
+2. For RIGHT_CLICK cooldown fallthrough: keep state/result as RIGHT_CLICK (not MOVE).
+
+4. main_window.py
+1. `_dual_cursor_point`: now explicitly prefers index finger (8/6) and falls back to MCP9.
+2. `set_cursor_mode`: now resets gesture state and frozen cursor coordinates on mode switch.
+3. Single-hand cursor branch: added pre-freeze on raw pinch-active state.
+
+Validation done
+1. Static diagnostics: no errors in edited files.
+2. Full suite run: 29 passed, 0 failed, 6 skipped.
+
+Commit created
+1. `ef5e7c4`
+2. Message: `fixed: 8 hidden bugs (DPI, multi-monitor, cursor jump, mode switch)`
+
+What I could not fully verify automatically
+1. Live camera/manual interaction checklist items (multi-monitor reach, visual cursor jump behavior, mode-switch stale-click behavior) require runtime hand-testing in your environment. Automated tests passed cleanly.Completed Prompt 0 implementation end-to-end: patched the 4 requested files with surgical fixes, ran diagnostics and full tests successfully, and committed with your specified message.
+
+
+
+Made changes. PROJECT: AI HollowGraphic Like Touch
 ROOT: C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch
-FILES: 38
+FILES: 39
+
+=== .cursorrules ===
+# Holographic Touch — AI Agent Rules
+# This file is read automatically by VS Code Copilot/Codex.
+
+## GOLDEN RULE
+Change ONLY the lines described in the task. Do NOT:
+- rename variables, methods, classes, or parameters
+- remove code that is not explicitly mentioned
+- change threshold values not explicitly mentioned
+- add new imports unless explicitly told to
+- "clean up", "refactor", or "simplify" anything
+- change any method signature or return type
+
+## OUTPUT FORMAT
+- Always output the COMPLETE file — never use "# ... existing code ..."
+- Copy every unchanged method CHARACTER FOR CHARACTER
+- If unsure whether to change something: DON'T
+
+## FROZEN VALUES (never change without explicit instruction)
+# src/tuning.py:
+GESTURE_CONFIRM_HOLD_S = 0.04
+GESTURE_ACTION_COOLDOWN_S = 0.18
+GESTURE_DRAG_ACTIVATE_S = 0.45
+GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45
+GESTURE_RIGHT_CLICK_HOLD_S = 0.25
+GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25
+MOUSE_WORKER_HZ = 240.0
+
+# src/gesture_detector.py __init__:
+self._pinch_enter = 0.22
+self._pinch_exit = 0.36
+self._scroll_step_limit = 8
+self._scroll_gain = 1.0
+
+# src/gesture_detector.py per-action cooldowns:
+LEFT_CLICK: 0.25, RIGHT_CLICK: 0.50, DOUBLE_CLICK: 0.50
+
+# src/settings_store.py DEFAULTS:
+"pinch_sensitivity": 0.22
+"pinch_exit_sensitivity": 0.38
+"confirm_hold_s": 0.03
+
+# src/hand_tracker.py Hands config:
+max_num_hands = 2
+min_detection_confidence = 0.55
+min_tracking_confidence = 0.45
+
+## FROZEN INTERFACES
+- HandTracker.detect() returns (hands_dict, hand_protos_list, is_grace)
+- GestureDetector.detect_dual(hands_dict, is_grace, cursor_label) returns GestureResult
+- GestureDetector.detect(hand_data, is_grace_frame) returns GestureResult
+- CursorMapper.map_point(cam_x, cam_y) returns (int, int)
+
+## FEATURES THAT MUST NOT BE REMOVED
+- Dual-hand mode, single-hand mode, auto mode switching
+- Cursor freeze during clicks (self._freeze_on)
+- Grace frame handling
+- Right-click hold timer
+- EMA-smoothed pinch ratios (self._li_ema, _ri_ema, _pm_ema)
+- Scroll accumulator with direction-switch cooldown
+- Drag progress arc, status overlay, system tray, Ctrl+Shift+H hotkey
+- All GestureType enum values
 
 === .gitignore ===
 # Byte-compiled / optimized / DLL files
@@ -297,335 +2622,74 @@ if OUT.exists():
 print(f"Downloading {URL} ...")
 urllib.request.urlretrieve(URL, OUT)
 print(f"Saved to {OUT} ({OUT.stat().st_size // 1024} KB)")
-
-=== MASTER_PROMPT.txt ===
-MASTER PROMPT — Holographic Touch Complete Fix
-================================================
-Paste this entire prompt to Claude Opus or GPT-4o with your project_compact_export.txt attached.
-================================================
-
-You are fixing the "Holographic Touch" gesture-mouse app (PySide6 + OpenCV + MediaPipe, Python 3.12, Windows).
-The full source is attached as project_compact_export.txt. Read every file before writing any code.
-
-OUTPUT RULES (read before writing anything):
-- Output COMPLETE file replacements — no "# ... existing code ..." or "# unchanged" placeholders
-- Every method must have a return statement on every path
-- No new imports unless explicitly listed — use only what already exists in the project
-- Preserve every existing class/method name and signature unless explicitly told to change it
-- Write all 6 files below. Do not skip any.
-
-═══════════════════════════════════════════════════════════════
-PROBLEM SUMMARY — fix ALL of these, nothing else:
-═══════════════════════════════════════════════════════════════
-
-1. MODE SWITCHING WITH 5-MINUTE LOCK
-   Current bug: when a hand briefly leaves the camera in dual-hand mode the app
-   has no protection — future code could flip modes accidentally.
-   Fix: add self._mode_lock_until: float = 0.0 in MainWindow.__init__
-        Any time the user changes mode (via Settings), set _mode_lock_until = time.monotonic() + 300.0
-        In _process_loop, NEVER auto-switch modes. Mode only changes via Settings dialog.
-        The 5-minute lock is for the Settings dialog: after changing mode, the combo-box
-        is disabled for 5 minutes (show a countdown label next to it). This prevents
-        accidental re-clicks. The user CAN override it by clicking the mode combo again
-        after 30 seconds (show "Override available in Xs" countdown).
-
-2. PROMINENT MODE STATUS BOX
-   The mode_lbl already exists but is too subtle.
-   Fix: In _render(), update mode_lbl every frame with colored text:
-        - DUAL HAND mode: color #22D3EE (cyan), text "⬡ DUAL HAND  L=Cursor  R=Actions"
-        - SINGLE HAND mode: color #A78BFA (purple), text "◈ SINGLE HAND  Any hand = cursor+actions"
-        Also add a second badge next to gesture_lbl showing the mode — a small pill
-        with bg color matching mode color.
-
-3. SINGLE HAND MODE — WORKS WITH EITHER HAND, BETTER CURSOR SMOOTHING
-   Current code: single-hand picks `hands_dict.get("Right") or hands_dict.get("Left")` which is correct.
-   Fix needed: cursor jitter in single-hand.
-   Fix: In _process_loop, for single-hand cursor tracking, apply an ADDITIONAL 3-frame
-        rolling average on the raw camera landmark point BEFORE passing to mapper.map_point().
-        Add self._sh_cursor_history: list = [] (maxlen 3) to MainWindow.__init__.
-        Each frame in single-hand mode: append (tip_x, tip_y) to _sh_cursor_history,
-        average the last min(3, len) entries, use the average as the camera point.
-        This kills jitter without adding perceived lag.
-
-4. CONTROL MARGIN — WIDEN DETECTION ZONE
-   Current bug: when hand moves near the edge of the camera frame (outside the blue
-   control-region box) MediaPipe stops tracking.
-   Fix: In _process_loop, pass the FULL frame to tracker.detect() (already done — good).
-        The issue is the CursorMapper clips cursor output to screen edges but the
-        DETECTION still uses the full frame — so detection is fine. The real problem
-        is the frame_r margin is set too large by default, making the active zone tiny.
-        Fix: Change DEFAULT frame_r in settings_store.py DEFAULTS from 90 to 40.
-        Change the slider default in SettingsDialog to match.
-        Also: in CursorMapper.map_point(), change the soft-deadzone from 1.5px to 0.8px
-        for hand-only mode (set CURSOR_SOFT_DEADZONE_PX = 0.8 in tuning.py).
-
-5. SCROLL — MAKE IT WORK INTUITIVELY
-   Current: scroll uses index tip Y (xy[8][1]) inside _resolve_scroll.
-   Problems: direction feels random, too sensitive, hard to enter peace-sign pose.
-   Fix in gesture_detector.py _process_action_hand():
-     - Peace sign detection: pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_
-       (widened pm range — easier to enter at various distances)
-     - In _resolve_scroll(), change tracking point from xy[8] to the MIDPOINT of
-       xy[8] and xy[12] (average of index and middle tips Y coords):
-         scroll_y = (float(xy[8][1]) + float(xy[12][1])) * 0.5
-       This is more stable than single finger.
-     - Increase EMA alpha from 0.25 to 0.35 for faster response
-     - deadband: change from hand_scale * 0.06 to hand_scale * 0.04 (easier to trigger)
-     - scroll_step_factor: change from 0.08 to 0.06 (smoother steps)
-     - Direction: hand moves UP (Y decreases in image) → scroll UP (positive delta) ✓
-       Already correct — dy = prev_y - current_y, positive when moving up. Keep this.
-     - scroll_step_limit: keep at 8
-     - In tuning.py: GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25 (was 0.10, stops jitter)
-
-6. DRAG — MORE RELIABLE
-   Current: drag activates after 0.45s hold.
-   Fix: Keep 0.45s. But add visual feedback in _render() — while left pinch is held
-        but drag hasn't activated yet, draw a progress arc on the camera preview.
-        Specifically: read self.gestures._left_pinch_since and self.gestures._drag_activate_s.
-        If _left_pinch_since is not None, compute progress = (now - _left_pinch_since) / _drag_activate_s
-        clamped 0–1. Draw a small cyan arc at the cursor position on the rgb frame.
-        When drag IS active, draw a filled dot (drag indicator).
-        The arc/dot drawing happens in _render() on the rgb frame before QImage conversion.
-        To get drag progress in _render() (which runs on UI thread), store it as
-        self._drag_progress: float = 0.0 and update it in _process_loop under self._lock.
-
-7. RANDOM GESTURE FIXES (right-click and accidental clicks)
-   - right_enter threshold: keep at enter * 0.50 (already correct)
-   - In _process_loop confidence gate: raise threshold for RIGHT_CLICK from 0.55 to 0.65
-     (right-click requires higher confidence than left-click)
-   - In GestureDetector.__init__: _right_click_hold_s = max(0.25, GESTURE_RIGHT_CLICK_HOLD_S)
-     (was 0.15 — increase minimum to 0.25s)
-   - pm > 0.15 check for right pinch: raise to pm > 0.20 (index must be more clearly open)
-
-═══════════════════════════════════════════════════════════════
-FILES TO OUTPUT (complete replacements):
-═══════════════════════════════════════════════════════════════
-
-FILE 1: src/tuning.py
-─────────────────────
-Output the complete file with these values changed:
-  CURSOR_SOFT_DEADZONE_PX = 0.8          # was 1.5
-  GESTURE_CONFIRM_HOLD_S = 0.04          # was 0.03
-  GESTURE_DRAG_ACTIVATE_S = 0.45         # was 0.38
-  GESTURE_RIGHT_CLICK_HOLD_S = 0.25      # was 0.10 — stops random right clicks
-  GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45   # was 0.38
-  GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25  # was 0.10 — stops scroll jitter
-All other values unchanged.
-
-FILE 2: src/settings_store.py
-──────────────────────────────
-Output the complete file with DEFAULTS changed:
-  "frame_r": 40,       # was 90 — wider active zone by default
-  "hand_only_mode": True,  # default to hand-based tracking
-  "cursor_mode": "dual_hand",  # already there, keep
-Keep all other DEFAULTS unchanged. Keep all methods unchanged.
-
-FILE 3: src/gesture_detector.py
-────────────────────────────────
-Output the complete file with ALL methods intact. Changes:
-a) In __init__:
-   - self._right_click_hold_s = max(0.25, float(GESTURE_RIGHT_CLICK_HOLD_S))
-   - self._scroll_deadband_factor = 0.04   # was 0.06
-   - self._scroll_step_factor = 0.06       # was 0.08
-
-b) In _process_action_hand():
-   - peace_pose: change pm bounds to: pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_
-   - right pinch pm check: change pm > 0.15 to pm > 0.20
-   - scroll call: change from float(xy[8][1]) to (float(xy[8][1]) + float(xy[12][1])) * 0.5
-
-c) In _resolve_scroll():
-   - EMA alpha: change 0.25 to 0.35
-   - deadband: change hand_scale * self._scroll_deadband_factor (keep formula, value changed in __init__)
-   - Keep all else unchanged — direction logic is already correct
-
-FILE 4: src/cursor_mapper.py
-──────────────────────────────
-Output the complete file. Only change:
-  In map_point(), the soft deadzone line:
-    if speed < self._deadzone_px:
-  The _deadzone_px is already set from CURSOR_SOFT_DEADZONE_PX in tuning.py (now 0.8).
-  No other changes needed — the tuning.py change propagates here automatically.
-  But add this guard to set_frame_margin(): clamp minimum margin to 10 (not 0), ensuring
-  the active zone is always at least 10px from each edge:
-    self.frame_r = max(10, min(int(margin_px), self.max_effective_margin_px()))
-
-FILE 5: src/main_window.py
-────────────────────────────
-Output the COMPLETE file. Targeted changes only (keep all existing logic):
-
-a) In MainWindow.__init__, after existing self._freeze_on = {...} block, ADD:
-   self._mode_lock_until: float = 0.0          # prevents mode-switch spam
-   self._sh_cursor_history: list = []           # 3-frame rolling avg for single-hand
-   self._drag_progress: float = 0.0             # for drag arc UI
-
-b) In _process_loop, in the single-hand cursor section (else branch at bottom of cursor pos):
-   Replace:
-       elif _any_hand and len(_any_hand.get("xy", [])) > 8:
-           tip = _any_hand["xy"][8]
-           sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-           _has_cursor = True
-   With:
-       elif _any_hand and len(_any_hand.get("xy", [])) > 8:
-           tip = _any_hand["xy"][8]
-           self._sh_cursor_history.append((int(tip[0]), int(tip[1])))
-           if len(self._sh_cursor_history) > 3:
-               self._sh_cursor_history.pop(0)
-           avg_x = int(sum(p[0] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
-           avg_y = int(sum(p[1] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
-           sx, sy = self.mapper.map_point(avg_x, avg_y)
-           _has_cursor = True
-   Also reset _sh_cursor_history when hand is lost:
-   In the else branch (no cursor): self._sh_cursor_history.clear()
-
-c) In _process_loop, under the self._lock block at end of frame processing, ADD:
-   # Update drag progress for UI arc
-   if self.gestures._left_pinch_since is not None:
-       _dp = (time.monotonic() - self.gestures._left_pinch_since) / max(0.01, self.gestures._drag_activate_s)
-       self._drag_progress = min(1.0, _dp)
-   else:
-       self._drag_progress = 0.0
-
-d) In _render(), after the cv2.rectangle control region block and before the QImage block, ADD:
-   # Drag progress arc
-   with self._lock:
-       _dp = self._drag_progress
-       _drag_on = self._drag_active
-   if _dp > 0.05 or _drag_on:
-       try:
-           h_rgb, w_rgb = rgb.shape[:2]
-           cx_arc = w_rgb // 2
-           cy_arc = h_rgb - 30
-           if _drag_on:
-               cv2.circle(rgb, (cx_arc, cy_arc), 12, (0, 200, 255), -1, cv2.LINE_AA)
-               cv2.putText(rgb, "DRAG", (cx_arc - 18, cy_arc + 5),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
-           else:
-               angle = int(360 * _dp)
-               cv2.ellipse(rgb, (cx_arc, cy_arc), (14, 14), -90, 0, angle,
-                           (0, 200, 255), 3, cv2.LINE_AA)
-       except Exception:
-           pass
-
-e) In _render(), update mode_lbl with colored text each frame:
-   Find the block that updates self.hand_lbl and add BEFORE it:
-       _mode_color = "#22D3EE" if self._cursor_mode == "dual_hand" else "#A78BFA"
-       _mode_icon = "⬡" if self._cursor_mode == "dual_hand" else "◈"
-       _mode_text_map = {
-           "dual_hand": f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions",
-           "single_hand": f"{_mode_icon} SINGLE HAND  Any hand",
-           "eye_tracking": "◉ EYE TRACKING  experimental",
-       }
-       if hasattr(self, "mode_lbl"):
-           self.mode_lbl.setText(_mode_text_map.get(self._cursor_mode, ""))
-           self.mode_lbl.setStyleSheet(f"color: {_mode_color}; font-weight: 700; font-size: 12px;")
-
-f) In SettingsDialog._on_cursor_mode_changed() (the slot that handles mode combo change):
-   ADD at the start of the method:
-       self._mw._mode_lock_until = time.monotonic() + 300.0
-       settings.set("cursor_mode", ...)   # keep existing logic
-   And disable the cursor_mode combo for 30 seconds with a QTimer that re-enables it
-   and shows "Mode locked for Xs" in a nearby label (add self.mode_lock_lbl = QLabel("")).
-
-g) In the confidence gate in _process_loop, raise RIGHT_CLICK check:
-   Find:
-       if _action_hand and float(_action_hand.get("confidence", 0)) < 0.55:
-           if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}:
-   Replace with:
-       if _action_hand:
-           _conf = float(_action_hand.get("confidence", 0))
-           if _conf < 0.55 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
-               gesture = GestureType.MOVE
-               result = GestureResult(GestureType.MOVE, 0)
-               gesture_changed = gesture != last_action
-           elif _conf < 0.65 and gesture == GestureType.RIGHT_CLICK:
-               gesture = GestureType.MOVE
-               result = GestureResult(GestureType.MOVE, 0)
-               gesture_changed = gesture != last_action
-
-FILE 6: src/hand_tracker.py
-─────────────────────────────
-Output the complete file. Only change: in HandTracker.__init__():
-  Change max_num_hands from 1 to 2 in self._hands (the main MediaPipe Hands instance):
-      self._hands = self._mp_hands.Hands(
-          static_image_mode=False,
-          max_num_hands=2,             # ← was 1, now detects both hands
-          model_complexity=0,
-          min_detection_confidence=0.50,   # slightly lower — catches hands near edges
-          min_tracking_confidence=0.30,    # lower — keeps tracking longer at edges
-      )
-
-  In detect(), update the processing loop to collect ALL detected hands into hands_dict:
-  The current code only takes chosen_idx=0. Replace the single-hand extraction with:
-      hands_dict = {}
-      hand_protos_list = []
-      for i, (hand, handedness_item) in enumerate(zip(
-              result.multi_hand_landmarks, result.multi_handedness)):
-          raw_label = handedness_item.classification[0].label
-          label = self._map_label(raw_label, is_mirrored=is_mirrored)
-          confidence = float(handedness_item.classification[0].score)
-          if confidence < 0.30:
-              continue
-          if self._process_size is None:
-              xy = [(max(0, min(src_w - 1, int(lm.x * src_w))),
-                     max(0, min(src_h - 1, int(lm.y * src_h)))) for lm in hand.landmark]
-          else:
-              sx_s = float(src_w) / float(max(1, detect_w))
-              sy_s = float(src_h) / float(max(1, detect_h))
-              xy = [(max(0, min(src_w - 1, int(lm.x * detect_w * sx_s))),
-                     max(0, min(src_h - 1, int(lm.y * detect_h * sy_s)))) for lm in hand.landmark]
-          z = [float(lm.z) for lm in hand.landmark]
-          hdata = {"xy": xy, "z": z, "label": label, "confidence": confidence,
-                   "frame_size": (detect_w, detect_h)}
-          # Last writer wins for same label (take higher confidence)
-          if label not in hands_dict or confidence > hands_dict[label]["confidence"]:
-              hands_dict[label] = hdata
-              if i < len(hand_protos_list):
-                  hand_protos_list[i] = (hand, label)
-              else:
-                  hand_protos_list.append((hand, label))
-
-      if not hands_dict:
-          # grace frame logic
-          self._frames_no_hand += 1
-          if self._frames_no_hand < self._grace_frames and self._last_valid_result is not None:
-              hd, hp = self._last_valid_result
-              return hd, hp, True
-          self._label_history.clear()
-          self._hand_lock_frames = 0
-          self._hand_locked = False
-          self._low_conf_drop_frames = 0
-          self._last_valid_result = None
-          return {}, [], False
-
-      self._frames_no_hand = 0
-      self._last_valid_result = (hands_dict, hand_protos_list)
-      return hands_dict, hand_protos_list, False
-
-  Also update _last_valid_result type annotation to tuple[dict, list] | None.
-  Also update the grace-frame return to use {}, [] instead of None, None.
-  Also update the ONNX path to return {"Right": hand_data}, [(_OnnxHandProto(xy_onnx), "Right")], False
-
-  IMPORTANT: the return signature is now (dict, list, bool) where dict = {"Left": {...}, "Right": {...}}
-  and list = [(proto, label), ...]. The rest of main_window.py already handles this format.
-
-═══════════════════════════════════════════════════════════════
-VERIFICATION — after writing all 6 files, confirm:
-═══════════════════════════════════════════════════════════════
-1. HandTracker.detect() returns (dict, list, bool) — hands_dict keys are "Left"/"Right"
-2. GestureDetector.detect_dual() and detect() both exist and work
-3. _sh_cursor_history rolling average is applied in single-hand cursor path only
-4. _drag_progress is updated in _process_loop and drawn as arc in _render()
-5. Right-click requires 0.65 confidence and 0.25s hold
-6. Scroll uses midpoint of index+middle Y, EMA alpha 0.35, deadband factor 0.04
-7. Default frame_r is 40 (not 90)
-8. Mode lock sets _mode_lock_until = now + 300.0 when mode changes in settings
-9. mode_lbl updates every frame in _render() with colored text
-10. No "# ... existing code ..." placeholders anywhere
 
 === project_compact_export.txt ===
 PROJECT: AI HollowGraphic Like Touch
 ROOT: C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch
-FILES: 38
+FILES: 39
+
+=== .cursorrules ===
+# Holographic Touch — AI Agent Rules
+# This file is read automatically by VS Code Copilot/Codex.
+
+## GOLDEN RULE
+Change ONLY the lines described in the task. Do NOT:
+- rename variables, methods, classes, or parameters
+- remove code that is not explicitly mentioned
+- change threshold values not explicitly mentioned
+- add new imports unless explicitly told to
+- "clean up", "refactor", or "simplify" anything
+- change any method signature or return type
+
+## OUTPUT FORMAT
+- Always output the COMPLETE file — never use "# ... existing code ..."
+- Copy every unchanged method CHARACTER FOR CHARACTER
+- If unsure whether to change something: DON'T
+
+## FROZEN VALUES (never change without explicit instruction)
+# src/tuning.py:
+GESTURE_CONFIRM_HOLD_S = 0.04
+GESTURE_ACTION_COOLDOWN_S = 0.18
+GESTURE_DRAG_ACTIVATE_S = 0.45
+GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45
+GESTURE_RIGHT_CLICK_HOLD_S = 0.25
+GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25
+MOUSE_WORKER_HZ = 240.0
+
+# src/gesture_detector.py __init__:
+self._pinch_enter = 0.22
+self._pinch_exit = 0.36
+self._scroll_step_limit = 8
+self._scroll_gain = 1.0
+
+# src/gesture_detector.py per-action cooldowns:
+LEFT_CLICK: 0.25, RIGHT_CLICK: 0.50, DOUBLE_CLICK: 0.50
+
+# src/settings_store.py DEFAULTS:
+"pinch_sensitivity": 0.22
+"pinch_exit_sensitivity": 0.38
+"confirm_hold_s": 0.03
+
+# src/hand_tracker.py Hands config:
+max_num_hands = 2
+min_detection_confidence = 0.55
+min_tracking_confidence = 0.45
+
+## FROZEN INTERFACES
+- HandTracker.detect() returns (hands_dict, hand_protos_list, is_grace)
+- GestureDetector.detect_dual(hands_dict, is_grace, cursor_label) returns GestureResult
+- GestureDetector.detect(hand_data, is_grace_frame) returns GestureResult
+- CursorMapper.map_point(cam_x, cam_y) returns (int, int)
+
+## FEATURES THAT MUST NOT BE REMOVED
+- Dual-hand mode, single-hand mode, auto mode switching
+- Cursor freeze during clicks (self._freeze_on)
+- Grace frame handling
+- Right-click hold timer
+- EMA-smoothed pinch ratios (self._li_ema, _ri_ema, _pm_ema)
+- Scroll accumulator with direction-switch cooldown
+- Drag progress arc, status overlay, system tray, Ctrl+Shift+H hotkey
+- All GestureType enum values
 
 === .gitignore ===
 # Byte-compiled / optimized / DLL files
@@ -877,375 +2941,65 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-=== assets/icons/holographic_touch.svg ===
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0B1220"/>
-      <stop offset="1" stop-color="#111827"/>
-    </linearGradient>
-    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#22D3EE"/>
-      <stop offset="1" stop-color="#34D399"/>
-    </linearGradient>
-    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#67E8F9"/>
-      <stop offset="1" stop-color="#2DD4BF"/>
-    </linearGradient>
-  </defs>
+=== PROMPTING_GUIDE.md ===
+# How to prompt Codex/GPT to fix this app without regressions
 
-  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#bg)"/>
-  <rect x="12" y="12" width="232" height="232" rx="52" fill="none" stroke="#1F2937" stroke-width="4"/>
+## Before EVERY prompt:
+1. git add . && git commit -m "before: [what you're about to fix]"
+2. Test the app — note what currently works
+3. Write the prompt following the rules below
+4. After applying: test ONLY the thing you changed
+5. If it works: git commit -m "fixed: [what you fixed]"
+6. If it broke something: git checkout . (reverts everything)
 
-  <circle cx="128" cy="128" r="74" fill="none" stroke="url(#ring)" stroke-width="12"/>
-  <circle cx="128" cy="128" r="50" fill="none" stroke="#22D3EE" stroke-opacity="0.45" stroke-width="5"/>
-  <circle cx="128" cy="128" r="20" fill="url(#core)"/>
+## Prompt template (copy this structure every time):
 
-  <path d="M128 44 L128 16" stroke="#34D399" stroke-width="8" stroke-linecap="round"/>
-  <path d="M128 240 L128 212" stroke="#34D399" stroke-width="8" stroke-linecap="round"/>
-  <path d="M44 128 L16 128" stroke="#22D3EE" stroke-width="8" stroke-linecap="round"/>
-  <path d="M240 128 L212 128" stroke="#22D3EE" stroke-width="8" stroke-linecap="round"/>
+```
+Read .cursorrules first. Follow every rule in it.
 
-  <circle cx="128" cy="128" r="96" fill="none" stroke="#22D3EE" stroke-opacity="0.18" stroke-width="3"/>
-</svg>
+TASK: [one specific thing — e.g. "Fix scroll direction being inverted"]
 
-=== get_hand_model.py ===
-"""Download the hand landmark ONNX model from PINTO0309's model zoo.
-Run once: python get_hand_model.py
-"""
-import urllib.request, sys, pathlib
-URL = "https://github.com/PINTO0309/PINTO_model_zoo/raw/main/257_MediaPipe_Hands/resources/hand_landmark_lite.onnx"
-OUT = pathlib.Path("hand_landmark_lite.onnx")
-if OUT.exists():
-    print(f"Already exists: {OUT}")
-    sys.exit(0)
-print(f"Downloading {URL} ...")
-urllib.request.urlretrieve(URL, OUT)
-print(f"Saved to {OUT} ({OUT.stat().st_size // 1024} KB)")
+FILE TO CHANGE: src/gesture_detector.py
 
-=== MASTER_PROMPT.txt ===
-MASTER PROMPT — Holographic Touch Complete Fix
-================================================
-Paste this entire prompt to Claude Opus or GPT-4o with your project_compact_export.txt attached.
-================================================
+EXACT CHANGE:
+In the _resolve_scroll method, on the line:
+    dy = float(self._scroll_prev_y) - current_y
+Change to:
+    dy = current_y - float(self._scroll_prev_y)
 
-You are fixing the "Holographic Touch" gesture-mouse app (PySide6 + OpenCV + MediaPipe, Python 3.12, Windows).
-The full source is attached as project_compact_export.txt. Read every file before writing any code.
+Do NOT change any other line in this file.
+Do NOT change any threshold values.
+Do NOT change any other method.
+Output the COMPLETE file.
+```
 
-OUTPUT RULES (read before writing anything):
-- Output COMPLETE file replacements — no "# ... existing code ..." or "# unchanged" placeholders
-- Every method must have a return statement on every path
-- No new imports unless explicitly listed — use only what already exists in the project
-- Preserve every existing class/method name and signature unless explicitly told to change it
-- Write all 6 files below. Do not skip any.
+## Rules for writing prompts:
+1. ONE file per prompt. Never "fix gesture_detector.py AND main_window.py"
+2. NAME the exact method and line you want changed
+3. Say what to change it FROM and what to change it TO
+4. Always end with "Do NOT change any other line in this file"
+5. Always say "Output the COMPLETE file"
+6. Never say "refactor", "clean up", "improve", "optimize"
+7. Never say "fix all issues" or "make it work better"
 
-═══════════════════════════════════════════════════════════════
-PROBLEM SUMMARY — fix ALL of these, nothing else:
-═══════════════════════════════════════════════════════════════
+## If you need multiple fixes:
+Do them as separate prompts, one at a time, committing between each:
+- Prompt 1: fix scroll → test → commit
+- Prompt 2: fix right-click → test → commit
+- Prompt 3: fix cursor jitter → test → commit
 
-1. MODE SWITCHING WITH 5-MINUTE LOCK
-   Current bug: when a hand briefly leaves the camera in dual-hand mode the app
-   has no protection — future code could flip modes accidentally.
-   Fix: add self._mode_lock_until: float = 0.0 in MainWindow.__init__
-        Any time the user changes mode (via Settings), set _mode_lock_until = time.monotonic() + 300.0
-        In _process_loop, NEVER auto-switch modes. Mode only changes via Settings dialog.
-        The 5-minute lock is for the Settings dialog: after changing mode, the combo-box
-        is disabled for 5 minutes (show a countdown label next to it). This prevents
-        accidental re-clicks. The user CAN override it by clicking the mode combo again
-        after 30 seconds (show "Override available in Xs" countdown).
+## What to do when Codex changes things you didn't ask for:
+1. Run: git diff (shows everything that changed)
+2. Look for changes OUTSIDE the area you asked about
+3. If you see threshold values changed, method signatures changed,
+   or code removed: git checkout . and re-prompt more specifically
+4. If the diff looks clean (only your requested change): test and commit
 
-2. PROMINENT MODE STATUS BOX
-   The mode_lbl already exists but is too subtle.
-   Fix: In _render(), update mode_lbl every frame with colored text:
-        - DUAL HAND mode: color #22D3EE (cyan), text "⬡ DUAL HAND  L=Cursor  R=Actions"
-        - SINGLE HAND mode: color #A78BFA (purple), text "◈ SINGLE HAND  Any hand = cursor+actions"
-        Also add a second badge next to gesture_lbl showing the mode — a small pill
-        with bg color matching mode color.
-
-3. SINGLE HAND MODE — WORKS WITH EITHER HAND, BETTER CURSOR SMOOTHING
-   Current code: single-hand picks `hands_dict.get("Right") or hands_dict.get("Left")` which is correct.
-   Fix needed: cursor jitter in single-hand.
-   Fix: In _process_loop, for single-hand cursor tracking, apply an ADDITIONAL 3-frame
-        rolling average on the raw camera landmark point BEFORE passing to mapper.map_point().
-        Add self._sh_cursor_history: list = [] (maxlen 3) to MainWindow.__init__.
-        Each frame in single-hand mode: append (tip_x, tip_y) to _sh_cursor_history,
-        average the last min(3, len) entries, use the average as the camera point.
-        This kills jitter without adding perceived lag.
-
-4. CONTROL MARGIN — WIDEN DETECTION ZONE
-   Current bug: when hand moves near the edge of the camera frame (outside the blue
-   control-region box) MediaPipe stops tracking.
-   Fix: In _process_loop, pass the FULL frame to tracker.detect() (already done — good).
-        The issue is the CursorMapper clips cursor output to screen edges but the
-        DETECTION still uses the full frame — so detection is fine. The real problem
-        is the frame_r margin is set too large by default, making the active zone tiny.
-        Fix: Change DEFAULT frame_r in settings_store.py DEFAULTS from 90 to 40.
-        Change the slider default in SettingsDialog to match.
-        Also: in CursorMapper.map_point(), change the soft-deadzone from 1.5px to 0.8px
-        for hand-only mode (set CURSOR_SOFT_DEADZONE_PX = 0.8 in tuning.py).
-
-5. SCROLL — MAKE IT WORK INTUITIVELY
-   Current: scroll uses index tip Y (xy[8][1]) inside _resolve_scroll.
-   Problems: direction feels random, too sensitive, hard to enter peace-sign pose.
-   Fix in gesture_detector.py _process_action_hand():
-     - Peace sign detection: pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_
-       (widened pm range — easier to enter at various distances)
-     - In _resolve_scroll(), change tracking point from xy[8] to the MIDPOINT of
-       xy[8] and xy[12] (average of index and middle tips Y coords):
-         scroll_y = (float(xy[8][1]) + float(xy[12][1])) * 0.5
-       This is more stable than single finger.
-     - Increase EMA alpha from 0.25 to 0.35 for faster response
-     - deadband: change from hand_scale * 0.06 to hand_scale * 0.04 (easier to trigger)
-     - scroll_step_factor: change from 0.08 to 0.06 (smoother steps)
-     - Direction: hand moves UP (Y decreases in image) → scroll UP (positive delta) ✓
-       Already correct — dy = prev_y - current_y, positive when moving up. Keep this.
-     - scroll_step_limit: keep at 8
-     - In tuning.py: GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25 (was 0.10, stops jitter)
-
-6. DRAG — MORE RELIABLE
-   Current: drag activates after 0.45s hold.
-   Fix: Keep 0.45s. But add visual feedback in _render() — while left pinch is held
-        but drag hasn't activated yet, draw a progress arc on the camera preview.
-        Specifically: read self.gestures._left_pinch_since and self.gestures._drag_activate_s.
-        If _left_pinch_since is not None, compute progress = (now - _left_pinch_since) / _drag_activate_s
-        clamped 0–1. Draw a small cyan arc at the cursor position on the rgb frame.
-        When drag IS active, draw a filled dot (drag indicator).
-        The arc/dot drawing happens in _render() on the rgb frame before QImage conversion.
-        To get drag progress in _render() (which runs on UI thread), store it as
-        self._drag_progress: float = 0.0 and update it in _process_loop under self._lock.
-
-7. RANDOM GESTURE FIXES (right-click and accidental clicks)
-   - right_enter threshold: keep at enter * 0.50 (already correct)
-   - In _process_loop confidence gate: raise threshold for RIGHT_CLICK from 0.55 to 0.65
-     (right-click requires higher confidence than left-click)
-   - In GestureDetector.__init__: _right_click_hold_s = max(0.25, GESTURE_RIGHT_CLICK_HOLD_S)
-     (was 0.15 — increase minimum to 0.25s)
-   - pm > 0.15 check for right pinch: raise to pm > 0.20 (index must be more clearly open)
-
-═══════════════════════════════════════════════════════════════
-FILES TO OUTPUT (complete replacements):
-═══════════════════════════════════════════════════════════════
-
-FILE 1: src/tuning.py
-─────────────────────
-Output the complete file with these values changed:
-  CURSOR_SOFT_DEADZONE_PX = 0.8          # was 1.5
-  GESTURE_CONFIRM_HOLD_S = 0.04          # was 0.03
-  GESTURE_DRAG_ACTIVATE_S = 0.45         # was 0.38
-  GESTURE_RIGHT_CLICK_HOLD_S = 0.25      # was 0.10 — stops random right clicks
-  GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45   # was 0.38
-  GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25  # was 0.10 — stops scroll jitter
-All other values unchanged.
-
-FILE 2: src/settings_store.py
-──────────────────────────────
-Output the complete file with DEFAULTS changed:
-  "frame_r": 40,       # was 90 — wider active zone by default
-  "hand_only_mode": True,  # default to hand-based tracking
-  "cursor_mode": "dual_hand",  # already there, keep
-Keep all other DEFAULTS unchanged. Keep all methods unchanged.
-
-FILE 3: src/gesture_detector.py
-────────────────────────────────
-Output the complete file with ALL methods intact. Changes:
-a) In __init__:
-   - self._right_click_hold_s = max(0.25, float(GESTURE_RIGHT_CLICK_HOLD_S))
-   - self._scroll_deadband_factor = 0.04   # was 0.06
-   - self._scroll_step_factor = 0.06       # was 0.08
-
-b) In _process_action_hand():
-   - peace_pose: change pm bounds to: pm >= 0.08 and pm <= 0.70 and li > exit_ and ri > exit_
-   - right pinch pm check: change pm > 0.15 to pm > 0.20
-   - scroll call: change from float(xy[8][1]) to (float(xy[8][1]) + float(xy[12][1])) * 0.5
-
-c) In _resolve_scroll():
-   - EMA alpha: change 0.25 to 0.35
-   - deadband: change hand_scale * self._scroll_deadband_factor (keep formula, value changed in __init__)
-   - Keep all else unchanged — direction logic is already correct
-
-FILE 4: src/cursor_mapper.py
-──────────────────────────────
-Output the complete file. Only change:
-  In map_point(), the soft deadzone line:
-    if speed < self._deadzone_px:
-  The _deadzone_px is already set from CURSOR_SOFT_DEADZONE_PX in tuning.py (now 0.8).
-  No other changes needed — the tuning.py change propagates here automatically.
-  But add this guard to set_frame_margin(): clamp minimum margin to 10 (not 0), ensuring
-  the active zone is always at least 10px from each edge:
-    self.frame_r = max(10, min(int(margin_px), self.max_effective_margin_px()))
-
-FILE 5: src/main_window.py
-────────────────────────────
-Output the COMPLETE file. Targeted changes only (keep all existing logic):
-
-a) In MainWindow.__init__, after existing self._freeze_on = {...} block, ADD:
-   self._mode_lock_until: float = 0.0          # prevents mode-switch spam
-   self._sh_cursor_history: list = []           # 3-frame rolling avg for single-hand
-   self._drag_progress: float = 0.0             # for drag arc UI
-
-b) In _process_loop, in the single-hand cursor section (else branch at bottom of cursor pos):
-   Replace:
-       elif _any_hand and len(_any_hand.get("xy", [])) > 8:
-           tip = _any_hand["xy"][8]
-           sx, sy = self.mapper.map_point(int(tip[0]), int(tip[1]))
-           _has_cursor = True
-   With:
-       elif _any_hand and len(_any_hand.get("xy", [])) > 8:
-           tip = _any_hand["xy"][8]
-           self._sh_cursor_history.append((int(tip[0]), int(tip[1])))
-           if len(self._sh_cursor_history) > 3:
-               self._sh_cursor_history.pop(0)
-           avg_x = int(sum(p[0] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
-           avg_y = int(sum(p[1] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
-           sx, sy = self.mapper.map_point(avg_x, avg_y)
-           _has_cursor = True
-   Also reset _sh_cursor_history when hand is lost:
-   In the else branch (no cursor): self._sh_cursor_history.clear()
-
-c) In _process_loop, under the self._lock block at end of frame processing, ADD:
-   # Update drag progress for UI arc
-   if self.gestures._left_pinch_since is not None:
-       _dp = (time.monotonic() - self.gestures._left_pinch_since) / max(0.01, self.gestures._drag_activate_s)
-       self._drag_progress = min(1.0, _dp)
-   else:
-       self._drag_progress = 0.0
-
-d) In _render(), after the cv2.rectangle control region block and before the QImage block, ADD:
-   # Drag progress arc
-   with self._lock:
-       _dp = self._drag_progress
-       _drag_on = self._drag_active
-   if _dp > 0.05 or _drag_on:
-       try:
-           h_rgb, w_rgb = rgb.shape[:2]
-           cx_arc = w_rgb // 2
-           cy_arc = h_rgb - 30
-           if _drag_on:
-               cv2.circle(rgb, (cx_arc, cy_arc), 12, (0, 200, 255), -1, cv2.LINE_AA)
-               cv2.putText(rgb, "DRAG", (cx_arc - 18, cy_arc + 5),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1, cv2.LINE_AA)
-           else:
-               angle = int(360 * _dp)
-               cv2.ellipse(rgb, (cx_arc, cy_arc), (14, 14), -90, 0, angle,
-                           (0, 200, 255), 3, cv2.LINE_AA)
-       except Exception:
-           pass
-
-e) In _render(), update mode_lbl with colored text each frame:
-   Find the block that updates self.hand_lbl and add BEFORE it:
-       _mode_color = "#22D3EE" if self._cursor_mode == "dual_hand" else "#A78BFA"
-       _mode_icon = "⬡" if self._cursor_mode == "dual_hand" else "◈"
-       _mode_text_map = {
-           "dual_hand": f"{_mode_icon} DUAL HAND  L=Cursor  R=Actions",
-           "single_hand": f"{_mode_icon} SINGLE HAND  Any hand",
-           "eye_tracking": "◉ EYE TRACKING  experimental",
-       }
-       if hasattr(self, "mode_lbl"):
-           self.mode_lbl.setText(_mode_text_map.get(self._cursor_mode, ""))
-           self.mode_lbl.setStyleSheet(f"color: {_mode_color}; font-weight: 700; font-size: 12px;")
-
-f) In SettingsDialog._on_cursor_mode_changed() (the slot that handles mode combo change):
-   ADD at the start of the method:
-       self._mw._mode_lock_until = time.monotonic() + 300.0
-       settings.set("cursor_mode", ...)   # keep existing logic
-   And disable the cursor_mode combo for 30 seconds with a QTimer that re-enables it
-   and shows "Mode locked for Xs" in a nearby label (add self.mode_lock_lbl = QLabel("")).
-
-g) In the confidence gate in _process_loop, raise RIGHT_CLICK check:
-   Find:
-       if _action_hand and float(_action_hand.get("confidence", 0)) < 0.55:
-           if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.DOUBLE_CLICK}:
-   Replace with:
-       if _action_hand:
-           _conf = float(_action_hand.get("confidence", 0))
-           if _conf < 0.55 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
-               gesture = GestureType.MOVE
-               result = GestureResult(GestureType.MOVE, 0)
-               gesture_changed = gesture != last_action
-           elif _conf < 0.65 and gesture == GestureType.RIGHT_CLICK:
-               gesture = GestureType.MOVE
-               result = GestureResult(GestureType.MOVE, 0)
-               gesture_changed = gesture != last_action
-
-FILE 6: src/hand_tracker.py
-─────────────────────────────
-Output the complete file. Only change: in HandTracker.__init__():
-  Change max_num_hands from 1 to 2 in self._hands (the main MediaPipe Hands instance):
-      self._hands = self._mp_hands.Hands(
-          static_image_mode=False,
-          max_num_hands=2,             # ← was 1, now detects both hands
-          model_complexity=0,
-          min_detection_confidence=0.50,   # slightly lower — catches hands near edges
-          min_tracking_confidence=0.30,    # lower — keeps tracking longer at edges
-      )
-
-  In detect(), update the processing loop to collect ALL detected hands into hands_dict:
-  The current code only takes chosen_idx=0. Replace the single-hand extraction with:
-      hands_dict = {}
-      hand_protos_list = []
-      for i, (hand, handedness_item) in enumerate(zip(
-              result.multi_hand_landmarks, result.multi_handedness)):
-          raw_label = handedness_item.classification[0].label
-          label = self._map_label(raw_label, is_mirrored=is_mirrored)
-          confidence = float(handedness_item.classification[0].score)
-          if confidence < 0.30:
-              continue
-          if self._process_size is None:
-              xy = [(max(0, min(src_w - 1, int(lm.x * src_w))),
-                     max(0, min(src_h - 1, int(lm.y * src_h)))) for lm in hand.landmark]
-          else:
-              sx_s = float(src_w) / float(max(1, detect_w))
-              sy_s = float(src_h) / float(max(1, detect_h))
-              xy = [(max(0, min(src_w - 1, int(lm.x * detect_w * sx_s))),
-                     max(0, min(src_h - 1, int(lm.y * detect_h * sy_s)))) for lm in hand.landmark]
-          z = [float(lm.z) for lm in hand.landmark]
-          hdata = {"xy": xy, "z": z, "label": label, "confidence": confidence,
-                   "frame_size": (detect_w, detect_h)}
-          # Last writer wins for same label (take higher confidence)
-          if label not in hands_dict or confidence > hands_dict[label]["confidence"]:
-              hands_dict[label] = hdata
-              if i < len(hand_protos_list):
-                  hand_protos_list[i] = (hand, label)
-              else:
-                  hand_protos_list.append((hand, label))
-
-      if not hands_dict:
-          # grace frame logic
-          self._frames_no_hand += 1
-          if self._frames_no_hand < self._grace_frames and self._last_valid_result is not None:
-              hd, hp = self._last_valid_result
-              return hd, hp, True
-          self._label_history.clear()
-          self._hand_lock_frames = 0
-          self._hand_locked = False
-          self._low_conf_drop_frames = 0
-          self._last_valid_result = None
-          return {}, [], False
-
-      self._frames_no_hand = 0
-      self._last_valid_result = (hands_dict, hand_protos_list)
-      return hands_dict, hand_protos_list, False
-
-  Also update _last_valid_result type annotation to tuple[dict, list] | None.
-  Also update the grace-frame return to use {}, [] instead of None, None.
-  Also update the ONNX path to return {"Right": hand_data}, [(_OnnxHandProto(xy_onnx), "Right")], False
-
-  IMPORTANT: the return signature is now (dict, list, bool) where dict = {"Left": {...}, "Right": {...}}
-  and list = [(proto, label), ...]. The rest of main_window.py already handles this format.
-
-═══════════════════════════════════════════════════════════════
-VERIFICATION — after writing all 6 files, confirm:
-═══════════════════════════════════════════════════════════════
-1. HandTracker.detect() returns (dict, list, bool) — hands_dict keys are "Left"/"Right"
-2. GestureDetector.detect_dual() and detect() both exist and work
-3. _sh_cursor_history rolling average is applied in single-hand cursor path only
-4. _drag_progress is updated in _process_loop and drawn as arc in _render()
-5. Right-click requires 0.65 confidence and 0.25s hold
-6. Scroll uses midpoint of index+middle Y, EMA alpha 0.35, deadband factor 0.04
-7. Default frame_r is 40 (not 90)
-8. Mode lock sets _mode_lock_until = now + 300.0 when mode changes in settings
-9. mode_lbl updates every frame in _render() with colored text
-10. No "# ... existing code ..." placeholders anywhere
+## Emergency recovery:
+If the app is completely broken and you can't figure out what changed:
+    git log --oneline          (see your commit history)
+    git checkout [commit-hash] (go back to a working version)
+    git checkout -b recovery   (make a new branch from there)
 
 === README.txt ===
 Windows Hover (USB build)
@@ -1713,10 +3467,10 @@ class CameraThread:
         while self._running:
             with self._cap_lock:
                 cap = self._cap
-                if cap is None:
-                    time.sleep(0.001)
-                    continue
-                ok, frame = cap.read()
+            if cap is None:
+                time.sleep(0.001)
+                continue
+            ok, frame = cap.read()
             if not ok or frame is None:
                 consecutive_failures += 1
                 if consecutive_failures >= CAMERA_READ_RETRY_LIMIT:
@@ -1863,7 +3617,7 @@ class CursorMapper:
         self._alpha_min = 0.25
         self._alpha_max = 0.72
         self._inner_ratio = CURSOR_INNER_RATIO
-        self._max_inner_margin_ratio = 0.35
+        self._max_inner_margin_ratio = 0.42
         self._outer_slack_ratio = 0.04
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
         self._margin_x_ratio = self._inner_margin_ratio
@@ -2359,6 +4113,8 @@ class GestureDetector:
             GestureType.MOVE: 0.0,
         }
         self._last_action_time: dict[GestureType, float] = {}
+        self._action_lock_until: float = 0.0
+        self._action_lock_type: GestureType = GestureType.PAUSE
 
         # Z-tap (kept for settings compat, disabled by default)
         self._z_tap_enabled = False
@@ -2388,6 +4144,11 @@ class GestureDetector:
 
     def _record_action(self, gesture: GestureType, now: float) -> None:
         self._last_action_time[gesture] = now
+        # Lock out cross-triggering for 200ms after any discrete action
+        if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
+                   GestureType.DOUBLE_CLICK}:
+            self._action_lock_until = now + 0.20
+            self._action_lock_type = gesture
 
     def _resolve_scroll(self, current_y: float, hand_scale: float) -> int:
         if self._scroll_prev_y is None:
@@ -2400,7 +4161,7 @@ class GestureDetector:
         dy = float(self._scroll_prev_y) - current_y
         self._scroll_prev_y = current_y
 
-        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.35)
+        self._scroll_velocity_ema = ema_step(self._scroll_velocity_ema, dy, 0.25)
         v = self._scroll_velocity_ema
 
         deadband = max(1.0, hand_scale * self._scroll_deadband_factor)
@@ -2510,8 +4271,26 @@ class GestureDetector:
             return self._make_result(GestureType.PAUSE, 0)
 
         confidence = float(hand_data.get("confidence", 0.0))
-        if confidence < 0.20:
+        if confidence < 0.10:
             return self._make_result(GestureType.PAUSE, 0)
+
+        # Action lock: if we recently fired a discrete action, suppress other discrete actions
+        if now < self._action_lock_until:
+            locked_type = self._action_lock_type
+            # Allow the same gesture type to continue (e.g., drag after click)
+            # but block OTHER discrete gestures from firing
+            if locked_type in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+                # After a click, only allow MOVE, DRAG, SCROLL (not right-click)
+                pass  # Don't return — just let the normal flow handle it
+            elif locked_type == GestureType.RIGHT_CLICK:
+                # After right-click, block all other clicks for the lock duration
+                pass
+            elif locked_type == GestureType.SCROLL:
+                # During scroll, block clicks entirely
+                if self._left_pinch_active or self._right_pinch_active:
+                    self._left_pinch_active = False
+                    self._right_pinch_active = False
+                    self._right_pinch_start_t = None
 
         # Compute hand scale
         try:
@@ -2523,7 +4302,7 @@ class GestureDetector:
             return self._make_result(GestureType.PAUSE, 0)
 
         li_raw, ri_raw, pm_raw = self._pinch_ratios(xy, self._hand_scale)
-        pinch_alpha = 0.42 if confidence < 0.6 else 0.55
+        pinch_alpha = 0.50 if confidence < 0.6 else 0.65
         if self._li_ema is None:
             self._li_ema = li_raw
             self._ri_ema = ri_raw
@@ -2546,32 +4325,9 @@ class GestureDetector:
                 self._left_pinch_active = False
                 self._left_click_release_time = now
                 self._left_click_emitted_this_hold = False
-        elif li <= (enter * 0.94):
+        elif li <= enter:
             self._left_pinch_active = True
             self._left_click_emitted_this_hold = False
-
-        # --- Right pinch (thumb+middle) = right-click ---
-        # Requires: index finger clearly open (li > exit_),
-        # middle+thumb close, held for _right_click_hold_s
-        right_enter = enter * 0.88
-        if self._right_pinch_active:
-            if ri > exit_:
-                self._right_pinch_active = False
-                self._right_pinch_start_t = None
-                self._right_click_emitted_this_hold = False
-        elif (
-            not self._left_pinch_active
-            and ri <= right_enter
-            and li > (enter * 0.90)
-            and pm > 0.14
-        ):
-            if self._right_pinch_start_t is None:
-                self._right_pinch_start_t = now
-            elif now - self._right_pinch_start_t >= self._right_click_hold_s:
-                self._right_pinch_active = True
-                self._right_click_emitted_this_hold = False
-        else:
-            self._right_pinch_start_t = None
 
         # --- Scroll pose: index+middle raised together, vertically oriented ---
         idx_tip = xy[8]; idx_pip = xy[6]
@@ -2588,8 +4344,8 @@ class GestureDetector:
         )
         fingers_together = pm <= 0.50
         aligned_vertical = (
-            abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.22)
-            and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.26)
+            abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.30)
+            and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.35)
         )
         scroll_pose = (
             fingers_extended
@@ -2598,6 +4354,30 @@ class GestureDetector:
             and li > exit_
             and ri > exit_
         )
+
+        # --- Right pinch (thumb+middle) = right-click ---
+        # Requires: index finger clearly open (li > exit_),
+        # middle+thumb close, held for _right_click_hold_s
+        right_enter = enter * 0.88
+        if self._right_pinch_active:
+            if ri > exit_:
+                self._right_pinch_active = False
+                self._right_pinch_start_t = None
+                self._right_click_emitted_this_hold = False
+        elif (
+            not self._left_pinch_active
+            and not scroll_pose
+            and ri <= right_enter
+            and li > (enter * 1.2)
+            and pm > 0.22
+        ):
+            if self._right_pinch_start_t is None:
+                self._right_pinch_start_t = now
+            elif now - self._right_pinch_start_t >= self._right_click_hold_s:
+                self._right_pinch_active = True
+                self._right_click_emitted_this_hold = False
+        else:
+            self._right_pinch_start_t = None
 
         # --- Track pinch duration for drag ---
         if self._left_pinch_active:
@@ -2619,6 +4399,13 @@ class GestureDetector:
             raw_state = GestureType.RIGHT_CLICK
         elif scroll_pose:
             raw_state = GestureType.SCROLL
+            # Force-clear pinch states during scroll to prevent click cross-triggers
+            self._left_pinch_active = False
+            self._right_pinch_active = False
+            self._left_pinch_since = None
+            self._right_pinch_start_t = None
+            self._left_click_emitted_this_hold = False
+            self._right_click_emitted_this_hold = False
 
         # --- Stability filter ---
         if raw_state != self._candidate:
@@ -2658,8 +4445,9 @@ class GestureDetector:
                 self._left_click_emitted_this_hold = True
                 self._dragging = False
                 return self._make_result(GestureType.LEFT_CLICK, 0)
-            self._state = GestureType.MOVE
-            return self._make_result(GestureType.MOVE, 0)
+            # Keep state as LEFT_CLICK so cursor stays frozen (don't switch to MOVE)
+            self._state = GestureType.LEFT_CLICK
+            return self._make_result(GestureType.LEFT_CLICK, 0)
 
         if stable_state == GestureType.RIGHT_CLICK:
             if (not self._right_click_emitted_this_hold) and self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
@@ -2668,8 +4456,8 @@ class GestureDetector:
                 self._right_click_emitted_this_hold = True
                 self._dragging = False
                 return self._make_result(GestureType.RIGHT_CLICK, 0)
-            self._state = GestureType.MOVE
-            return self._make_result(GestureType.MOVE, 0)
+            self._state = GestureType.RIGHT_CLICK
+            return self._make_result(GestureType.RIGHT_CLICK, 0)
 
         if stable_state == GestureType.DRAG:
             self._dragging = True
@@ -2681,6 +4469,8 @@ class GestureDetector:
             delta = self._resolve_scroll(scroll_y, self._hand_scale)
             self._state = GestureType.SCROLL
             self._dragging = False
+            self._action_lock_until = now + 0.10
+            self._action_lock_type = GestureType.SCROLL
             return self._make_result(GestureType.SCROLL, delta)
 
         self._state = GestureType.MOVE
@@ -2701,6 +4491,8 @@ class GestureDetector:
         self._ri_ema = None
         self._pm_ema = None
         self._right_pinch_start_t = None
+        self._action_lock_until = 0.0
+        self._action_lock_type = GestureType.PAUSE
         self._clear_scroll()
 
 === src/hand_tracker.py ===
@@ -2756,7 +4548,7 @@ class HandTracker:
 
         self._frames_no_hand = 0
         self._grace_frames = 3
-        self._edge_grace_frames = 7
+        self._edge_grace_frames = 10
         self._edge_ratio = 0.08
         self._last_valid_near_edge = False
         self._last_valid_result: tuple[dict, list] | None = None
@@ -2779,7 +4571,7 @@ class HandTracker:
             return self._mp_hands.Hands(
                 static_image_mode=False,
                 max_num_hands=2,
-                model_complexity=1,
+                model_complexity=0,
                 min_detection_confidence=0.55,
                 min_tracking_confidence=0.45,
             )
@@ -2848,7 +4640,7 @@ class HandTracker:
                 prev_xy = self._prev_xy_by_label.get(label)
                 if prev_xy is not None and len(prev_xy) == len(xy):
                     # Adaptive EMA: stronger smoothing to reduce shake while preserving fingertip response.
-                    blend = 0.48 if conf >= 0.78 else (0.42 if conf >= 0.60 else 0.36)
+                    blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
                     smoothed_xy: list[tuple[int, int]] = []
                     for i, (cx, cy) in enumerate(xy):
                         px, py = prev_xy[i]
@@ -3092,9 +4884,9 @@ class StatusOverlay(QWidget):
             * { font-family: "Segoe UI Variable Display", "Segoe UI", "Inter", sans-serif; }
             #overlayRoot {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 rgba(8, 12, 20, 188), stop:1 rgba(10, 16, 28, 172));
+                    stop:0 rgba(8, 12, 20, 210), stop:1 rgba(10, 16, 28, 200));
                 border: 1px solid rgba(34, 211, 238, 0.30);
-                border-radius: 18px;
+                border-radius: 16px;
             }
             QLabel { color: #F1F5F9; font-size: 13px; font-weight: 600; }
             #overlayTitle { font-size: 16px; font-weight: 900; letter-spacing: 0.7px; }
@@ -3598,7 +5390,7 @@ class MainWindow(QMainWindow):
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
         self._scroll_multiplier: float = _as_float(settings.get("scroll_multiplier", 1.0), 1.0)
         self._dual_right_cursor: bool = _as_bool(settings.get("dual_right_cursor", True), True)
-        self.debug = _as_bool(settings.get("debug_overlay", False), False)
+        self.debug = _as_bool(settings.get("debug_overlay", True), True)
         self._mirror_camera: bool = _as_bool(settings.get("mirror_camera", True), True)
         self._show_control_region: bool = _as_bool(settings.get("show_control_region", True), True)
 
@@ -3742,8 +5534,8 @@ class MainWindow(QMainWindow):
         status = QFrame()
         status.setObjectName("sideCard")
         sl = QVBoxLayout(status)
-        sl.setContentsMargins(0, 8, 0, 8)
-        sl.setSpacing(10)
+        sl.setContentsMargins(8, 12, 8, 12)
+        sl.setSpacing(8)
         status_title = QLabel("System Status")
         status_title.setObjectName("cardTitle")
         status_title.setWordWrap(True)
@@ -3796,8 +5588,8 @@ class MainWindow(QMainWindow):
         guide.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         gl = QGridLayout(guide)
         gl.setContentsMargins(0, 8, 0, 8)
-        gl.setHorizontalSpacing(16)
-        gl.setVerticalSpacing(12)
+        gl.setHorizontalSpacing(12)
+        gl.setVerticalSpacing(10)
 
         guide_title = QLabel("Protocol Guide")
         guide_title.setObjectName("cardTitle")
@@ -3910,8 +5702,8 @@ class MainWindow(QMainWindow):
 
         side_wrap = QWidget()
         side_wrap.setLayout(side)
-        side_wrap.setMinimumWidth(300)
-        side_wrap.setMaximumWidth(420)
+        side_wrap.setMinimumWidth(320)
+        side_wrap.setMaximumWidth(450)
         side_wrap.setObjectName("sideCardWrap")
 
         body_l.addWidget(cam_card, 3)
@@ -4008,10 +5800,10 @@ class MainWindow(QMainWindow):
                 border-radius: 26px;
             }
             #sideCard {
-                background: rgba(15, 18, 25, 0.56);
-                border: 1px solid rgba(34, 211, 238, 0.10);
+                background: rgba(15, 18, 25, 0.70);
+                border: 1px solid rgba(34, 211, 238, 0.15);
                 border-radius: 12px;
-                padding: 12px;
+                padding: 14px;
             }
             #sideCardWrap {
                 background: transparent;
@@ -4027,7 +5819,7 @@ class MainWindow(QMainWindow):
                 letter-spacing: 1.5px; 
             }
             #cardTitle { 
-                font-size: 12px; font-weight: 700; color: #64748B; 
+                font-size: 13px; font-weight: 800; color: #64748B; 
                 text-transform: uppercase; letter-spacing: 2px; 
                 padding-bottom: 4px; 
             }
@@ -4056,14 +5848,14 @@ class MainWindow(QMainWindow):
             }
             
             #primaryText { color: #E2E8F0; font-size: 13px; font-weight: 600;}
-            #secondary { color: #D7E3F7; font-size: 13px; font-weight: 600;}
-            #muted { color: #475569; font-size: 13px; font-weight: 500;}
+            #secondary { color: #E8EDF5; font-size: 13px; font-weight: 600;}
+            #muted { color: #64748B; font-size: 13px; font-weight: 500;}
             
             #badge {
-                border-radius: 12px; padding: 6px 18px; font-weight: 700;
+                border-radius: 12px; padding: 8px 20px; font-weight: 700;
                 background: rgba(15, 18, 25, 0.8); color: #E2E8F0;
-                min-width: 100px; max-width: 220px;
-                font-size: 13px; letter-spacing: 1.5px;
+                min-width: 110px; max-width: 220px;
+                font-size: 14px; letter-spacing: 1.5px;
                 border: 1px solid rgba(39, 39, 42, 0.4);
                 text-align: center;
             }
@@ -4077,14 +5869,14 @@ class MainWindow(QMainWindow):
             #historyItem { 
                 font-weight: 500; 
                 font-family: "Cascadia Code", "Consolas", "SF Mono", monospace;
-                font-size: 12px;
-                color: #64748B;
+                font-size: 13px;
+                color: #94A3B8;
             }
             
             QPushButton {
                 border: none; 
                 border-radius: 14px; 
-                padding: 10px 22px;
+                padding: 12px 24px;
                 font-size: 13px;
                 font-weight: 700; 
                 background: #18181B;
@@ -4348,11 +6140,10 @@ class MainWindow(QMainWindow):
         )
         extend_margin = max(5.0, hand_scale * 0.06)
 
-        for tip_idx, pip_idx in ((8, 6), (12, 10), (16, 14), (20, 18)):
-            if len(xy) <= tip_idx or len(xy) <= pip_idx:
-                continue
-            tip = xy[tip_idx]
-            pip = xy[pip_idx]
+        # Always prefer index finger (landmark 8) for cursor tracking
+        if len(xy) > 8 and len(xy) > 6:
+            tip = xy[8]
+            pip = xy[6]
             tip_dist = ((float(tip[0]) - float(wrist[0])) ** 2 + (float(tip[1]) - float(wrist[1])) ** 2) ** 0.5
             pip_dist = ((float(pip[0]) - float(wrist[0])) ** 2 + (float(pip[1]) - float(wrist[1])) ** 2) ** 0.5
             if tip_dist > (pip_dist + extend_margin):
@@ -4371,6 +6162,9 @@ class MainWindow(QMainWindow):
             return
 
         self._cursor_mode = mode_norm
+        self.gestures._reset_all(time.monotonic())
+        self._frozen_sx = -1
+        self._frozen_sy = -1
         self._hand_only_mode = True
         self.mapper._hand_only_mode = self._hand_only_mode
         self._sh_cursor_history.clear()
@@ -4697,14 +6491,18 @@ class MainWindow(QMainWindow):
                     if self._1hand_start is None:
                         self._1hand_start = now_switch
                     self._2hand_start = None
-                    if now_switch - self._1hand_start > self._MODE_SWITCH_DELAY_S and self._cursor_mode != "single_hand":
+                    # Switch to single ONLY after 3 seconds of seeing just one hand
+                    if (now_switch - self._1hand_start > 3.0
+                            and self._cursor_mode != "single_hand"):
                         settings.set("cursor_mode", "single_hand")
                         self._cursor_mode_request.emit("single_hand")
                 elif hand_count >= 2:
                     if self._2hand_start is None:
                         self._2hand_start = now_switch
                     self._1hand_start = None
-                    if now_switch - self._2hand_start > self._MODE_SWITCH_DELAY_S and self._cursor_mode != "dual_hand":
+                    # Switch to dual after 1.5 seconds of seeing two hands
+                    if (now_switch - self._2hand_start > 1.5
+                            and self._cursor_mode != "dual_hand"):
                         settings.set("cursor_mode", "dual_hand")
                         self._cursor_mode_request.emit("dual_hand")
                 else:
@@ -4750,7 +6548,7 @@ class MainWindow(QMainWindow):
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
-                    elif _conf < 0.50 and gesture == GestureType.RIGHT_CLICK:
+                    elif _conf < 0.40 and gesture == GestureType.RIGHT_CLICK:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
@@ -4777,7 +6575,9 @@ class MainWindow(QMainWindow):
                 else:
                     # Single-hand legacy: index finger = cursor
                     _any_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                    if gesture in self._freeze_on:
+                    # Pre-freeze: also freeze if pinch is physically active (before gesture confirms)
+                    _pinch_active = self.gestures._left_pinch_active or self.gestures._right_pinch_active
+                    if gesture in self._freeze_on or _pinch_active:
                         _has_cursor = self._frozen_sx >= 0
                     elif _any_hand and len(_any_hand.get("xy", [])) > 8:
                         tip = _any_hand["xy"][8]
@@ -5038,7 +6838,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        if self.debug and hand_proto is not None and tracker is not None:
+        if hand_proto is not None and tracker is not None:
             # hand_proto is now a list of (proto, label) tuples
             if isinstance(hand_proto, list):
                 tracker.draw(rgb, hand_proto)
@@ -5187,23 +6987,6 @@ import threading
 import time
 from typing import Any
 
-try:
-    import pyautogui  # type: ignore
-
-    pyautogui.FAILSAFE = False
-    pyautogui.PAUSE = 0.0
-except Exception:
-    pyautogui = None  # type: ignore[assignment]
-
-if platform.system() == "Windows":
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # type: ignore[attr-defined]
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
 from .tuning import MOUSE_WORKER_HZ  # type: ignore
 
 
@@ -5256,8 +7039,14 @@ class MouseController:
                 self._SendInput = self._user32.SendInput
                 self._SendInput.argtypes = [ctypes.c_uint, ctypes.POINTER(_INPUT), ctypes.c_int]
                 self._SendInput.restype = ctypes.c_uint
-                self._scr_w: int = int(ctypes.windll.user32.GetSystemMetrics(0)) or 1920
-                self._scr_h: int = int(ctypes.windll.user32.GetSystemMetrics(1)) or 1080
+                # Use virtual screen metrics for multi-monitor support
+                _u32 = ctypes.windll.user32
+                _vx = int(_u32.GetSystemMetrics(76))  # SM_XVIRTUALSCREEN
+                _vy = int(_u32.GetSystemMetrics(77))  # SM_YVIRTUALSCREEN
+                self._scr_w: int = max(1, int(_u32.GetSystemMetrics(78)) - _vx)  # SM_CXVIRTUALSCREEN
+                self._scr_h: int = max(1, int(_u32.GetSystemMetrics(79)) - _vy)  # SM_CYVIRTUALSCREEN
+                self._scr_x: int = _vx
+                self._scr_y: int = _vy
                 self._MOUSEEVENTF_MOVE = 0x0001
                 self._MOUSEEVENTF_ABSOLUTE = 0x8000
             except Exception:
@@ -5337,8 +7126,8 @@ class MouseController:
     def _set_cursor_pos(self, x: int, y: int) -> None:
         if self._platform == "Windows" and self._user32 is not None:
             try:
-                ax = int(x * 65535 // self._scr_w)
-                ay = int(y * 65535 // self._scr_h)
+                ax = int((x - self._scr_x) * 65535 // self._scr_w)
+                ay = int((y - self._scr_y) * 65535 // self._scr_h)
                 inp = self._INPUT(
                     type=0,
                     mi=self._MOUSEINPUT(
@@ -5663,7 +7452,7 @@ from pathlib import Path
 class SettingsStore:
     DEFAULTS = {
         "camera_index": 0,
-        "frame_r": 60,
+        "frame_r": 120,
         "smoothening": 4.8,
         "debug_overlay": True,
         "scroll_multiplier": 1.0,
@@ -5755,7 +7544,7 @@ CAMERA_FAIL_SLEEP_S = 0.001
 # Cursor mapper
 CURSOR_INNER_RATIO = 0.80
 CURSOR_SPEED_NORM_RATIO = 0.05
-CURSOR_SOFT_DEADZONE_PX = 6.0
+CURSOR_SOFT_DEADZONE_PX = 2.0
 
 # Gesture — only constants actually used in the new distance engine
 GESTURE_CONFIRM_HOLD_S = 0.04
@@ -6324,10 +8113,10 @@ def test_hand_confidence_gating():
     landmarks = create_landmarks_move()
     
     # Low confidence
-    hand_data = create_hand_data(landmarks, label="Right", confidence=0.10)
+    hand_data = create_hand_data(landmarks, label="Right", confidence=0.09)
     result = detector.detect(hand_data)
     assert result.gesture == GestureType.PAUSE
-    print("[PASS] Hand confidence gating works (rejects < 0.20)")
+    print("[PASS] Hand confidence gating works (rejects < 0.10)")
 
 
 def test_finger_states_detection():

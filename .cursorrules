@@ -17,6 +17,7 @@ Change ONLY the lines described in the task. Do NOT:
 
 ## FROZEN VALUES (never change without explicit instruction)
 # src/tuning.py:
+CURSOR_SOFT_DEADZONE_PX = 2.0
 GESTURE_CONFIRM_HOLD_S = 0.04
 GESTURE_ACTION_COOLDOWN_S = 0.18
 GESTURE_DRAG_ACTIVATE_S = 0.45
@@ -41,8 +42,17 @@ LEFT_CLICK: 0.25, RIGHT_CLICK: 0.50, DOUBLE_CLICK: 0.50
 
 # src/hand_tracker.py Hands config:
 max_num_hands = 2
+model_complexity = 0
 min_detection_confidence = 0.55
 min_tracking_confidence = 0.45
+self._edge_grace_frames = 10
+blend = 0.55 / 0.48 / 0.40 (confidence-adaptive)
+
+# src/gesture_detector.py _process_action_hand (updated by Prompt 2):
+confidence < 0.10  (minimum acceptance threshold)
+pinch_alpha = 0.50 if confidence < 0.6 else 0.65
+li <= enter  (left pinch entry, no 0.94 multiplier)
+right-click requires: not scroll_pose, li > enter*1.2, pm > 0.22
 
 ## FROZEN INTERFACES
 - HandTracker.detect() returns (hands_dict, hand_protos_list, is_grace)
