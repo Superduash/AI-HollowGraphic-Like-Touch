@@ -229,7 +229,7 @@ class GestureDetector:
             return self._make_result(GestureType.PAUSE, 0)
 
         confidence = float(hand_data.get("confidence", 0.0))
-        if confidence < 0.20:
+        if confidence < 0.10:
             return self._make_result(GestureType.PAUSE, 0)
 
         # Compute hand scale
@@ -242,7 +242,7 @@ class GestureDetector:
             return self._make_result(GestureType.PAUSE, 0)
 
         li_raw, ri_raw, pm_raw = self._pinch_ratios(xy, self._hand_scale)
-        pinch_alpha = 0.42 if confidence < 0.6 else 0.55
+        pinch_alpha = 0.50 if confidence < 0.6 else 0.65
         if self._li_ema is None:
             self._li_ema = li_raw
             self._ri_ema = ri_raw
@@ -265,32 +265,9 @@ class GestureDetector:
                 self._left_pinch_active = False
                 self._left_click_release_time = now
                 self._left_click_emitted_this_hold = False
-        elif li <= (enter * 0.94):
+        elif li <= enter:
             self._left_pinch_active = True
             self._left_click_emitted_this_hold = False
-
-        # --- Right pinch (thumb+middle) = right-click ---
-        # Requires: index finger clearly open (li > exit_),
-        # middle+thumb close, held for _right_click_hold_s
-        right_enter = enter * 0.88
-        if self._right_pinch_active:
-            if ri > exit_:
-                self._right_pinch_active = False
-                self._right_pinch_start_t = None
-                self._right_click_emitted_this_hold = False
-        elif (
-            not self._left_pinch_active
-            and ri <= right_enter
-            and li > (enter * 0.90)
-            and pm > 0.14
-        ):
-            if self._right_pinch_start_t is None:
-                self._right_pinch_start_t = now
-            elif now - self._right_pinch_start_t >= self._right_click_hold_s:
-                self._right_pinch_active = True
-                self._right_click_emitted_this_hold = False
-        else:
-            self._right_pinch_start_t = None
 
         # --- Scroll pose: index+middle raised together, vertically oriented ---
         idx_tip = xy[8]; idx_pip = xy[6]
@@ -307,8 +284,8 @@ class GestureDetector:
         )
         fingers_together = pm <= 0.50
         aligned_vertical = (
-            abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.22)
-            and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.26)
+            abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.30)
+            and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.35)
         )
         scroll_pose = (
             fingers_extended
@@ -317,6 +294,30 @@ class GestureDetector:
             and li > exit_
             and ri > exit_
         )
+
+        # --- Right pinch (thumb+middle) = right-click ---
+        # Requires: index finger clearly open (li > exit_),
+        # middle+thumb close, held for _right_click_hold_s
+        right_enter = enter * 0.88
+        if self._right_pinch_active:
+            if ri > exit_:
+                self._right_pinch_active = False
+                self._right_pinch_start_t = None
+                self._right_click_emitted_this_hold = False
+        elif (
+            not self._left_pinch_active
+            and not scroll_pose
+            and ri <= right_enter
+            and li > (enter * 1.2)
+            and pm > 0.22
+        ):
+            if self._right_pinch_start_t is None:
+                self._right_pinch_start_t = now
+            elif now - self._right_pinch_start_t >= self._right_click_hold_s:
+                self._right_pinch_active = True
+                self._right_click_emitted_this_hold = False
+        else:
+            self._right_pinch_start_t = None
 
         # --- Track pinch duration for drag ---
         if self._left_pinch_active:
