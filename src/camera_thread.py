@@ -326,10 +326,10 @@ class CameraThread:
         while self._running:
             with self._cap_lock:
                 cap = self._cap
-                if cap is None:
-                    time.sleep(0.001)
-                    continue
-                ok, frame = cap.read()
+            if cap is None:
+                time.sleep(0.001)
+                continue
+            ok, frame = cap.read()
             if not ok or frame is None:
                 consecutive_failures += 1
                 if consecutive_failures >= CAMERA_READ_RETRY_LIMIT:

@@ -410,8 +410,9 @@ class GestureDetector:
                 self._left_click_emitted_this_hold = True
                 self._dragging = False
                 return self._make_result(GestureType.LEFT_CLICK, 0)
-            self._state = GestureType.MOVE
-            return self._make_result(GestureType.MOVE, 0)
+            # Keep state as LEFT_CLICK so cursor stays frozen (don't switch to MOVE)
+            self._state = GestureType.LEFT_CLICK
+            return self._make_result(GestureType.LEFT_CLICK, 0)
 
         if stable_state == GestureType.RIGHT_CLICK:
             if (not self._right_click_emitted_this_hold) and self._check_action_cooldown(GestureType.RIGHT_CLICK, now):
@@ -420,8 +421,8 @@ class GestureDetector:
                 self._right_click_emitted_this_hold = True
                 self._dragging = False
                 return self._make_result(GestureType.RIGHT_CLICK, 0)
-            self._state = GestureType.MOVE
-            return self._make_result(GestureType.MOVE, 0)
+            self._state = GestureType.RIGHT_CLICK
+            return self._make_result(GestureType.RIGHT_CLICK, 0)
 
         if stable_state == GestureType.DRAG:
             self._dragging = True

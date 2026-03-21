@@ -8,23 +8,6 @@ import threading
 import time
 from typing import Any
 
-try:
-    import pyautogui  # type: ignore
-
-    pyautogui.FAILSAFE = False
-    pyautogui.PAUSE = 0.0
-except Exception:
-    pyautogui = None  # type: ignore[assignment]
-
-if platform.system() == "Windows":
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # type: ignore[attr-defined]
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
 from .tuning import MOUSE_WORKER_HZ  # type: ignore
 
 
@@ -77,8 +60,14 @@ class MouseController:
                 self._SendInput = self._user32.SendInput
                 self._SendInput.argtypes = [ctypes.c_uint, ctypes.POINTER(_INPUT), ctypes.c_int]
                 self._SendInput.restype = ctypes.c_uint
-                self._scr_w: int = int(ctypes.windll.user32.GetSystemMetrics(0)) or 1920
-                self._scr_h: int = int(ctypes.windll.user32.GetSystemMetrics(1)) or 1080
+                # Use virtual screen metrics for multi-monitor support
+                _u32 = ctypes.windll.user32
+                _vx = int(_u32.GetSystemMetrics(76))  # SM_XVIRTUALSCREEN
+                _vy = int(_u32.GetSystemMetrics(77))  # SM_YVIRTUALSCREEN
+                self._scr_w: int = max(1, int(_u32.GetSystemMetrics(78)) - _vx)  # SM_CXVIRTUALSCREEN
+                self._scr_h: int = max(1, int(_u32.GetSystemMetrics(79)) - _vy)  # SM_CYVIRTUALSCREEN
+                self._scr_x: int = _vx
+                self._scr_y: int = _vy
                 self._MOUSEEVENTF_MOVE = 0x0001
                 self._MOUSEEVENTF_ABSOLUTE = 0x8000
             except Exception:
@@ -158,8 +147,8 @@ class MouseController:
     def _set_cursor_pos(self, x: int, y: int) -> None:
         if self._platform == "Windows" and self._user32 is not None:
             try:
-                ax = int(x * 65535 // self._scr_w)
-                ay = int(y * 65535 // self._scr_h)
+                ax = int((x - self._scr_x) * 65535 // self._scr_w)
+                ay = int((y - self._scr_y) * 65535 // self._scr_h)
                 inp = self._INPUT(
                     type=0,
                     mi=self._MOUSEINPUT(

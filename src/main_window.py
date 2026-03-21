@@ -1402,11 +1402,10 @@ class MainWindow(QMainWindow):
         )
         extend_margin = max(5.0, hand_scale * 0.06)
 
-        for tip_idx, pip_idx in ((8, 6), (12, 10), (16, 14), (20, 18)):
-            if len(xy) <= tip_idx or len(xy) <= pip_idx:
-                continue
-            tip = xy[tip_idx]
-            pip = xy[pip_idx]
+        # Always prefer index finger (landmark 8) for cursor tracking
+        if len(xy) > 8 and len(xy) > 6:
+            tip = xy[8]
+            pip = xy[6]
             tip_dist = ((float(tip[0]) - float(wrist[0])) ** 2 + (float(tip[1]) - float(wrist[1])) ** 2) ** 0.5
             pip_dist = ((float(pip[0]) - float(wrist[0])) ** 2 + (float(pip[1]) - float(wrist[1])) ** 2) ** 0.5
             if tip_dist > (pip_dist + extend_margin):
@@ -1425,6 +1424,9 @@ class MainWindow(QMainWindow):
             return
 
         self._cursor_mode = mode_norm
+        self.gestures._reset_all(time.monotonic())
+        self._frozen_sx = -1
+        self._frozen_sy = -1
         self._hand_only_mode = True
         self.mapper._hand_only_mode = self._hand_only_mode
         self._sh_cursor_history.clear()
@@ -1835,7 +1837,9 @@ class MainWindow(QMainWindow):
                 else:
                     # Single-hand legacy: index finger = cursor
                     _any_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                    if gesture in self._freeze_on:
+                    # Pre-freeze: also freeze if pinch is physically active (before gesture confirms)
+                    _pinch_active = self.gestures._left_pinch_active or self.gestures._right_pinch_active
+                    if gesture in self._freeze_on or _pinch_active:
                         _has_cursor = self._frozen_sx >= 0
                     elif _any_hand and len(_any_hand.get("xy", [])) > 8:
                         tip = _any_hand["xy"][8]
