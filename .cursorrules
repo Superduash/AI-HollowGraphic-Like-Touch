@@ -1,0 +1,102 @@
+# ═══════════════════════════════════════════════════════════════
+# .cursorrules — Holographic Touch
+# This file is READ by the AI agent before every edit.
+# NEVER modify this file. NEVER ignore these rules.
+# ═══════════════════════════════════════════════════════════════
+
+## GOLDEN RULE
+When asked to fix ONE thing, change ONLY the lines related to that fix.
+Do NOT "clean up", "refactor", "simplify", "improve", or "normalize"
+any code that is NOT directly part of the requested fix.
+
+## OUTPUT FORMAT
+- Always output COMPLETE files — no "# ... existing code ..." placeholders
+- If a method is not being changed, copy it EXACTLY as-is, character for character
+- Never rename variables, methods, classes, or parameters unless explicitly asked
+
+## FROZEN VALUES — NEVER CHANGE THESE WITHOUT EXPLICIT INSTRUCTION
+These values have been carefully tuned through testing. Changing any of them
+will break gesture detection. Copy them exactly as-is in every file output.
+
+### src/tuning.py — frozen constants:
+CURSOR_SOFT_DEADZONE_PX = 6.0
+GESTURE_CONFIRM_HOLD_S = 0.04
+GESTURE_ACTION_COOLDOWN_S = 0.18
+GESTURE_DRAG_ACTIVATE_S = 0.45
+GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45
+GESTURE_RIGHT_CLICK_HOLD_S = 0.25
+GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25
+MOUSE_WORKER_HZ = 240.0
+
+### src/gesture_detector.py — frozen thresholds in __init__:
+self._pinch_enter = 0.22
+self._pinch_exit = 0.36
+self._scroll_step_factor = 0.06
+self._scroll_deadband_factor = 0.04
+self._scroll_step_limit = 8
+self._scroll_gain = 1.0
+self._right_click_hold_s = max(0.14, float(GESTURE_RIGHT_CLICK_HOLD_S))
+self._right_click_hold_s = min(self._right_click_hold_s, 0.18)
+right_enter = enter * 0.88  (inside _process_action_hand)
+
+### src/gesture_detector.py — frozen per-action cooldowns:
+GestureType.LEFT_CLICK: 0.25
+GestureType.RIGHT_CLICK: 0.50
+GestureType.DOUBLE_CLICK: 0.50
+
+### src/settings_store.py — frozen DEFAULTS:
+"frame_r": 60
+"pinch_sensitivity": 0.22
+"pinch_exit_sensitivity": 0.38
+"confirm_hold_s": 0.03
+
+### src/hand_tracker.py — frozen MediaPipe config:
+max_num_hands=2
+model_complexity=1
+min_detection_confidence=0.55
+min_tracking_confidence=0.45
+
+## FROZEN INTERFACES — NEVER CHANGE SIGNATURES
+- HandTracker.detect(frame_bgr, is_mirrored) → (hands_dict, hand_protos_list, is_grace)
+  where hands_dict = {"Left": {...}, "Right": {...}}
+  and hand_protos_list = [(proto, label), ...]
+- GestureDetector.detect_dual(hands_dict, is_grace, cursor_label) → GestureResult
+- GestureDetector.detect(hand_data, is_grace_frame) → GestureResult  (legacy single-hand)
+- GestureResult has .gesture (GestureType) and .scroll_delta (int)
+- CursorMapper.map_point(cam_x, cam_y) → (int, int)
+- MouseController: .move(), .left_click(), .right_click(), .double_click(),
+  .scroll(), .start_drag(), .end_drag(), .is_dragging
+
+## FROZEN ARCHITECTURE — NEVER MERGE OR SPLIT THESE FILES
+- src/hand_tracker.py → ONLY hand detection, returns landmarks
+- src/gesture_detector.py → ONLY gesture classification from landmarks
+- src/cursor_mapper.py → ONLY coordinate mapping + smoothing
+- src/mouse.py → ONLY OS-level input simulation
+- src/main_window.py → UI + wiring (process loop, render, settings)
+- src/tuning.py → ONLY numeric constants
+- src/models.py → ONLY data classes (GestureType, GestureResult, FingerStates)
+
+## FEATURES THAT EXIST AND MUST NOT BE REMOVED
+- Dual-hand mode (detect_dual) — cursor_label parameter controls which hand steers
+- Single-hand mode fallback
+- Auto mode switching (1-hand → single, 2-hand → dual) with delay
+- Cursor freeze during click gestures (self._freeze_on set)
+- Grace frame handling (is_grace flag from hand_tracker)
+- Right-click hold timer (prevents accidental triggers)
+- EMA-smoothed pinch ratios (self._li_ema, _ri_ema, _pm_ema)
+- Scroll accumulator with direction-switch cooldown
+- Drag progress arc in _render()
+- Status overlay (StatusOverlay class)
+- Settings dialog with all current controls
+- System tray integration
+- Ctrl+Shift+H hotkey
+
+## GestureType ENUM — NEVER REMOVE ANY VALUE
+NONE, MOVE, LEFT_CLICK, RIGHT_CLICK, DOUBLE_CLICK, SCROLL, DRAG,
+TASK_VIEW, PAUSE, KEYBOARD, MEDIA_VOL_UP, MEDIA_VOL_DOWN, MEDIA_NEXT, MEDIA_PREV
+
+## WHAT TO DO WHEN UNCERTAIN
+- If unsure whether to change a value: DON'T. Keep the existing value.
+- If unsure whether to remove code: DON'T. Keep it.
+- If a method seems unused: keep it anyway — it may be called dynamically.
+- If a threshold seems wrong: keep it — it was tuned by testing.
