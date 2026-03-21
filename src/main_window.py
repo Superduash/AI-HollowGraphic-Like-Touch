@@ -652,7 +652,7 @@ class MainWindow(QMainWindow):
         self.gestures._z_tap_enabled = _as_bool(settings.get("z_tap_enabled", False), False)
         self._scroll_multiplier: float = _as_float(settings.get("scroll_multiplier", 1.0), 1.0)
         self._dual_right_cursor: bool = _as_bool(settings.get("dual_right_cursor", True), True)
-        self.debug = _as_bool(settings.get("debug_overlay", False), False)
+        self.debug = _as_bool(settings.get("debug_overlay", True), True)
         self._mirror_camera: bool = _as_bool(settings.get("mirror_camera", True), True)
         self._show_control_region: bool = _as_bool(settings.get("show_control_region", True), True)
 
@@ -1745,9 +1745,29 @@ class MainWindow(QMainWindow):
                     frame, is_mirrored=self._mirror_camera)
                 _face_tracked = bool(hands_dict)
 
-                # Mode switching disabled - use Settings to change.
-                self._1hand_start = None
-                self._2hand_start = None
+                hand_count = len(hands_dict)
+                now_switch = time.monotonic()
+                if hand_count == 1:
+                    if self._1hand_start is None:
+                        self._1hand_start = now_switch
+                    self._2hand_start = None
+                    # Switch to single ONLY after 3 seconds of seeing just one hand
+                    if (now_switch - self._1hand_start > 3.0
+                            and self._cursor_mode != "single_hand"):
+                        settings.set("cursor_mode", "single_hand")
+                        self._cursor_mode_request.emit("single_hand")
+                elif hand_count >= 2:
+                    if self._2hand_start is None:
+                        self._2hand_start = now_switch
+                    self._1hand_start = None
+                    # Switch to dual after 1.5 seconds of seeing two hands
+                    if (now_switch - self._2hand_start > 1.5
+                            and self._cursor_mode != "dual_hand"):
+                        settings.set("cursor_mode", "dual_hand")
+                        self._cursor_mode_request.emit("dual_hand")
+                else:
+                    self._1hand_start = None
+                    self._2hand_start = None
 
                 rgb_cached = getattr(tracker, '_last_rgb_frame', None)
 
@@ -1788,7 +1808,7 @@ class MainWindow(QMainWindow):
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
-                    elif _conf < 0.50 and gesture == GestureType.RIGHT_CLICK:
+                    elif _conf < 0.40 and gesture == GestureType.RIGHT_CLICK:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
@@ -2076,7 +2096,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        if self.debug and hand_proto is not None and tracker is not None:
+        if hand_proto is not None and tracker is not None:
             # hand_proto is now a list of (proto, label) tuples
             if isinstance(hand_proto, list):
                 tracker.draw(rgb, hand_proto)

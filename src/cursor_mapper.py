@@ -52,7 +52,7 @@ class CursorMapper:
         self._alpha_min = 0.25
         self._alpha_max = 0.72
         self._inner_ratio = CURSOR_INNER_RATIO
-        self._max_inner_margin_ratio = 0.35
+        self._max_inner_margin_ratio = 0.42
         self._outer_slack_ratio = 0.04
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
         self._margin_x_ratio = self._inner_margin_ratio
