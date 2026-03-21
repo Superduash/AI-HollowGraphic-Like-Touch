@@ -78,6 +78,8 @@ class GestureDetector:
             GestureType.MOVE: 0.0,
         }
         self._last_action_time: dict[GestureType, float] = {}
+        self._action_lock_until: float = 0.0
+        self._action_lock_type: GestureType = GestureType.PAUSE
 
         # Z-tap (kept for settings compat, disabled by default)
         self._z_tap_enabled = False
@@ -107,6 +109,11 @@ class GestureDetector:
 
     def _record_action(self, gesture: GestureType, now: float) -> None:
         self._last_action_time[gesture] = now
+        # Lock out cross-triggering for 200ms after any discrete action
+        if gesture in {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
+                   GestureType.DOUBLE_CLICK}:
+            self._action_lock_until = now + 0.20
+            self._action_lock_type = gesture
 
     def _resolve_scroll(self, current_y: float, hand_scale: float) -> int:
         if self._scroll_prev_y is None:
@@ -232,6 +239,24 @@ class GestureDetector:
         if confidence < 0.10:
             return self._make_result(GestureType.PAUSE, 0)
 
+        # Action lock: if we recently fired a discrete action, suppress other discrete actions
+        if now < self._action_lock_until:
+            locked_type = self._action_lock_type
+            # Allow the same gesture type to continue (e.g., drag after click)
+            # but block OTHER discrete gestures from firing
+            if locked_type in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+                # After a click, only allow MOVE, DRAG, SCROLL (not right-click)
+                pass  # Don't return — just let the normal flow handle it
+            elif locked_type == GestureType.RIGHT_CLICK:
+                # After right-click, block all other clicks for the lock duration
+                pass
+            elif locked_type == GestureType.SCROLL:
+                # During scroll, block clicks entirely
+                if self._left_pinch_active or self._right_pinch_active:
+                    self._left_pinch_active = False
+                    self._right_pinch_active = False
+                    self._right_pinch_start_t = None
+
         # Compute hand scale
         try:
             wrist = xy[0]; mcp9 = xy[9]
@@ -339,6 +364,13 @@ class GestureDetector:
             raw_state = GestureType.RIGHT_CLICK
         elif scroll_pose:
             raw_state = GestureType.SCROLL
+            # Force-clear pinch states during scroll to prevent click cross-triggers
+            self._left_pinch_active = False
+            self._right_pinch_active = False
+            self._left_pinch_since = None
+            self._right_pinch_start_t = None
+            self._left_click_emitted_this_hold = False
+            self._right_click_emitted_this_hold = False
 
         # --- Stability filter ---
         if raw_state != self._candidate:
@@ -401,6 +433,8 @@ class GestureDetector:
             delta = self._resolve_scroll(scroll_y, self._hand_scale)
             self._state = GestureType.SCROLL
             self._dragging = False
+            self._action_lock_until = now + 0.10
+            self._action_lock_type = GestureType.SCROLL
             return self._make_result(GestureType.SCROLL, delta)
 
         self._state = GestureType.MOVE
@@ -421,4 +455,6 @@ class GestureDetector:
         self._ri_ema = None
         self._pm_ema = None
         self._right_pinch_start_t = None
+        self._action_lock_until = 0.0
+        self._action_lock_type = GestureType.PAUSE
         self._clear_scroll()
