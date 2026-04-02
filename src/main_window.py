@@ -572,6 +572,7 @@ class SettingsDialog(QDialog):
 
 class MainWindow(QMainWindow):
     _camera_start_result = Signal(bool)
+    _camera_switch_result = Signal(bool, int, str)
     _cursor_mode_request = Signal(str)
     _CURSOR_GESTURES = frozenset({
         GestureType.MOVE, GestureType.LEFT_CLICK,
@@ -701,9 +702,12 @@ class MainWindow(QMainWindow):
         self._sh_cursor_history: list = []
         self._drag_progress: float = 0.0
         self._start_worker: threading.Thread | None = None
+        self._camera_switch_worker: threading.Thread | None = None
+        self._pending_camera_index: int | None = None
 
         self._build_ui()
         self._camera_start_result.connect(self._on_camera_start_done)
+        self._camera_switch_result.connect(self._on_camera_switch_done)
         self._cursor_mode_request.connect(self.set_cursor_mode)
         self._setup_tray()
         self._start_hotkey_listener()
@@ -1301,13 +1305,51 @@ class MainWindow(QMainWindow):
 
         if not self.running:
             self.camera.camera_index = index
+            self._last_processed_frame = None
             return
 
-        ok = self.camera.switch_camera(index)
-        if not ok:
-            detail = self.camera.last_error or f"Cannot open selected camera index {index}"
-            self.cam_status.setText("Camera switch failed")
-            self.preview.setText(detail)
+        if self._camera_switch_worker is not None and self._camera_switch_worker.is_alive():
+            self._pending_camera_index = index
+            self.cam_status.setText(f"Camera switch queued (#{index})...")
+            return
+
+        self._start_camera_switch(index)
+
+    def _start_camera_switch(self, index: int) -> None:
+        self.cam_status.setText(f"Switching camera to #{index}...")
+
+        def _worker(target_index: int) -> None:
+            ok = self.camera.switch_camera(target_index)
+            detail = self.camera.last_error or ""
+            self._camera_switch_result.emit(ok, target_index, detail)
+
+        self._camera_switch_worker = threading.Thread(
+            target=_worker, args=(int(index),), daemon=True
+        )
+        self._camera_switch_worker.start()
+
+    @Slot(bool, int, str)
+    def _on_camera_switch_done(self, ok: bool, requested_index: int, detail: str) -> None:
+        self._camera_switch_worker = None
+        self._last_processed_frame = None
+
+        active_index = int(self.camera.camera_index)
+        settings.set("camera_index", active_index)
+
+        if ok:
+            self.cam_status.setText(f"Camera Active (#{active_index})")
+            self._camera_error_text = ""
+        else:
+            self.cam_status.setText("Camera switch failed; kept previous stream")
+            if detail:
+                self._camera_error_text = detail
+
+        if self._pending_camera_index is not None and self.running:
+            next_index = int(self._pending_camera_index)
+            self._pending_camera_index = None
+            if next_index != active_index:
+                settings.set("camera_index", next_index)
+                self._start_camera_switch(next_index)
 
     def apply_settings(self, data: dict[str, object]) -> None:
         index = _as_int(data.get("camera_index", self.camera.camera_index), self.camera.camera_index)
@@ -1867,7 +1909,7 @@ class MainWindow(QMainWindow):
                     elif _any_hand and len(_any_hand.get("xy", [])) > 8:
                         tip = _any_hand["xy"][8]
                         self._sh_cursor_history.append((int(tip[0]), int(tip[1])))
-                        if len(self._sh_cursor_history) > 2:
+                        if len(self._sh_cursor_history) > 4:
                             self._sh_cursor_history.pop(0)
                         avg_x = int(sum(p[0] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
                         avg_y = int(sum(p[1] for p in self._sh_cursor_history) / len(self._sh_cursor_history))

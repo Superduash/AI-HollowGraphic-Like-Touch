@@ -336,7 +336,9 @@ class CameraThread:
         return True
 
     def switch_camera(self, camera_index: int) -> bool:
-        self.camera_index = int(camera_index)
+        target_index = int(camera_index)
+        previous_index = int(self.camera_index)
+        self.camera_index = target_index
 
         if not self._running:
             cap = self._open_capture(self.camera_index)
@@ -354,15 +356,31 @@ class CameraThread:
                 old_cap.release()
             except Exception:
                 pass
+        with self._frame_lock:
+            self._frame = None
         time.sleep(0.08)
 
         cap = self._open_capture(self.camera_index)
         if cap is None:
-            print("[ERROR] No valid camera found after scanning")
+            # Keep stream alive by restoring previous camera if target switch fails.
+            self.camera_index = previous_index
+            fallback_cap = self._open_capture(previous_index)
+            if fallback_cap is not None:
+                with self._cap_lock:
+                    self._cap = fallback_cap
+                with self._frame_lock:
+                    self._frame = None
+                self._last_error = (
+                    f"Camera switch failed for index={target_index}; restored index={previous_index}"
+                )
+            else:
+                print("[ERROR] No valid camera found after scanning")
             return False
 
         with self._cap_lock:
             self._cap = cap
+        with self._frame_lock:
+            self._frame = None
         return True
 
     def _loop(self) -> None:
@@ -370,10 +388,15 @@ class CameraThread:
         while self._running:
             with self._cap_lock:
                 cap = self._cap
+                if cap is None:
+                    ok, frame = False, None
+                else:
+                    ok, frame = cap.read()
+
             if cap is None:
                 time.sleep(0.001)
                 continue
-            ok, frame = cap.read()
+
             if not ok or frame is None:
                 consecutive_failures += 1
                 if consecutive_failures >= CAMERA_READ_RETRY_LIMIT:
