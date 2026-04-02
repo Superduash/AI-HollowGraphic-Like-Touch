@@ -662,6 +662,7 @@ class MainWindow(QMainWindow):
         self._fps_ui_value = 0.0
         self.running = False
         self.proc_thread: threading.Thread | None = None
+        self._last_processed_frame = None
         self.mouse_enabled = False
         self._overlay: StatusOverlay | None = None
         self._dimmer: QWidget | None = None
@@ -1744,7 +1745,12 @@ class MainWindow(QMainWindow):
             try:
                 frame = self.camera.latest()
                 if frame is None:
+                    time.sleep(0.002)
                     continue
+                if frame is self._last_processed_frame:
+                    time.sleep(0.002)  # Same frame — yield CPU until next camera frame
+                    continue
+                self._last_processed_frame = frame
 
                 if self._mirror_camera:
                     frame = cv2.flip(frame, 1)
@@ -1822,11 +1828,11 @@ class MainWindow(QMainWindow):
                 _action_hand = hands_dict.get("Right") or hands_dict.get("Left")
                 if _action_hand:
                     _conf = float(_action_hand.get("confidence", 0))
-                    if _conf < 0.45 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+                    if _conf < 0.28 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
-                    elif _conf < 0.40 and gesture == GestureType.RIGHT_CLICK:
+                    elif _conf < 0.28 and gesture == GestureType.RIGHT_CLICK:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
@@ -1861,7 +1867,7 @@ class MainWindow(QMainWindow):
                     elif _any_hand and len(_any_hand.get("xy", [])) > 8:
                         tip = _any_hand["xy"][8]
                         self._sh_cursor_history.append((int(tip[0]), int(tip[1])))
-                        if len(self._sh_cursor_history) > 4:
+                        if len(self._sh_cursor_history) > 2:
                             self._sh_cursor_history.pop(0)
                         avg_x = int(sum(p[0] for p in self._sh_cursor_history) / len(self._sh_cursor_history))
                         avg_y = int(sum(p[1] for p in self._sh_cursor_history) / len(self._sh_cursor_history))

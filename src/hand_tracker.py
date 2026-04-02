@@ -145,7 +145,7 @@ class HandTracker:
                     # weaker blend (stronger smoothing) on tips to kill shake.
                     _tip_indices = {4, 8, 12, 16, 20}
                     base_blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
-                    tip_blend = base_blend * 0.55  # Tips get ~half the responsiveness = much less jitter
+                    tip_blend = base_blend * 0.65  # Tips: slightly more responsive while keeping anti-shake
                     smoothed_xy: list[tuple[int, int]] = []
                     for i, (cx, cy) in enumerate(xy):
                         px, py = prev_xy[i]

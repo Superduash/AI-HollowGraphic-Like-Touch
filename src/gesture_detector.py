@@ -268,7 +268,16 @@ class GestureDetector:
             return self._make_result(GestureType.PAUSE, 0)
 
         li_raw, ri_raw, pm_raw = self._pinch_ratios(xy, self._hand_scale)
-        pinch_alpha = 0.50 if confidence < 0.6 else 0.65
+        # Boost EMA alpha when approaching pinch threshold so entry is detected
+        # in 1 frame instead of 2–3 frames. This is the primary fix for missed clicks.
+        _approaching_left = li_raw < self._pinch_enter * 1.6
+        _approaching_right = ri_raw < self._pinch_enter * 1.6
+        if _approaching_left or _approaching_right:
+            pinch_alpha = 0.88  # snap toward pinch instantly
+        elif confidence < 0.6:
+            pinch_alpha = 0.55
+        else:
+            pinch_alpha = 0.70
         if self._li_ema is None:
             self._li_ema = li_raw
             self._ri_ema = ri_raw
@@ -302,7 +311,7 @@ class GestureDetector:
                 if hasattr(self, '_prev_wrist_pos') and self._prev_wrist_pos is not None:
                     _pw = self._prev_wrist_pos
                     _wrist_move = ((_wrist_x - _pw[0])**2 + (_wrist_y - _pw[1])**2)**0.5
-                    if _wrist_move > self._hand_scale * 0.08:
+                    if _wrist_move > self._hand_scale * 0.20:
                         _movement_suppress = True
             self._prev_wrist_pos = (_wrist_x, _wrist_y)
         else:
@@ -311,13 +320,19 @@ class GestureDetector:
         # --- Left pinch (thumb+index) = click/drag ---
         prev_left = self._left_pinch_active
         if self._left_pinch_active:
+            # EXIT: use EMA (stable) to prevent false releases on camera noise
             if li > exit_:
                 self._left_pinch_active = False
                 self._left_click_release_time = now
                 self._left_click_emitted_this_hold = False
-        elif li <= enter and not _movement_suppress:
+        elif li_raw <= enter and not _movement_suppress:
+            # ENTRY: use RAW ratio for 1-frame response (was: EMA li, caused 2-3 frame lag)
             self._left_pinch_active = True
             self._left_click_emitted_this_hold = False
+            # Pre-age the stability timer so confirm_hold elapses on THIS frame,
+            # not 40ms later. This eliminates dropped quick taps.
+            self._candidate = GestureType.LEFT_CLICK
+            self._stable_start_t = now - self._confirm_hold_s - 0.001
 
         # --- Scroll pose: index+middle raised together, vertically oriented ---
         idx_tip = xy[8]; idx_pip = xy[6]
@@ -332,7 +347,7 @@ class GestureDetector:
             idx_tip_dist > (idx_pip_dist + extend_margin)
             and mid_tip_dist > (mid_pip_dist + extend_margin)
         )
-        fingers_together = pm <= 0.50
+        fingers_together = pm_raw <= 0.55
         aligned_vertical = (
             abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.30)
             and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.35)
@@ -358,7 +373,7 @@ class GestureDetector:
             not self._left_pinch_active
             and not scroll_pose
             and not _movement_suppress
-            and ri <= right_enter
+            and ri_raw <= right_enter
             and li > (enter * 1.2)
             and pm > 0.22
         ):

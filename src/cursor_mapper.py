@@ -53,7 +53,7 @@ class CursorMapper:
         self._alpha_max = 0.72
         self._inner_ratio = CURSOR_INNER_RATIO
         self._max_inner_margin_ratio = 0.42
-        self._outer_slack_ratio = 0.10
+        self._outer_slack_ratio = 0.22
         self._inner_margin_ratio = (1.0 - self._inner_ratio) * 0.5
         self._margin_x_ratio = self._inner_margin_ratio
         self._margin_y_ratio = self._inner_margin_ratio
@@ -66,7 +66,7 @@ class CursorMapper:
         self._alpha_min_face: float = 0.18
         self._alpha_max_face: float = 0.60
         # Hand-only: faster EMA for fingertip responsiveness
-        self._alpha_min_hand: float = 0.28
+        self._alpha_min_hand: float = 0.35
         self._alpha_max_hand: float = 0.75
         self._hand_only_mode: bool = False
 
@@ -128,8 +128,8 @@ class CursorMapper:
             t = (v - 1.0) / 9.0
             self._alpha_min_face = 0.18 + t * 0.07
             self._alpha_max_face = 0.60 + t * 0.10
-            self._alpha_min_hand = 0.20 + t * 0.10
-            self._alpha_max_hand = 0.68 + t * 0.18
+            self._alpha_min_hand = 0.35 + t * 0.08
+            self._alpha_max_hand = 0.72 + t * 0.14
             self._alpha_min = self._alpha_min_face
             self._alpha_max = self._alpha_max_face
 
