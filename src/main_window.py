@@ -688,6 +688,7 @@ class MainWindow(QMainWindow):
         self._gesture_history: collections.deque = collections.deque(maxlen=6)
         self._last_debug_print_ts = 0.0
         self._last_debug_label: str = ""
+        self._last_history_cache: list[tuple[str, str]] = [("" , "") for _ in range(6)]
         self._drag_active = False
         self._cursor_frozen = False
         self._frozen_sx: int = -1
@@ -734,7 +735,7 @@ class MainWindow(QMainWindow):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._render)
-        self.timer.start(20)
+        self.timer.start(16)
         if _as_bool(settings.get("mouse_on_startup", False), False):
             QTimer.singleShot(450, self._enable_mouse_on_startup)
 
@@ -1627,6 +1628,7 @@ class MainWindow(QMainWindow):
         self.preview.style().polish(self.preview)
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self._sync_margin_controls()
 
     def stop_camera(self) -> None:
         self.running = False
@@ -1798,6 +1800,12 @@ class MainWindow(QMainWindow):
                     frame = cv2.flip(frame, 1)
 
                 h, w = frame.shape[:2]
+                # Cap large frames to 640×480 before processing to reduce CPU/MediaPipe cost.
+                # The RGB conversion happens here (once per frame, on the worker thread, not UI).
+                if w > 640 or h > 480:
+                    frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_LINEAR)
+                    h, w = 480, 640
+
                 self.mapper.set_camera_size(w, h)
 
                 _face_tracked = False
@@ -1809,6 +1817,8 @@ class MainWindow(QMainWindow):
 
                 hands_dict, hand_protos, is_grace = tracker.detect(
                     frame, is_mirrored=self._mirror_camera)
+                # Convert BGR→RGB once here on the worker thread so _render() never needs to.
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 _face_tracked = bool(hands_dict)
 
                 hand_count = len(hands_dict)
@@ -1994,7 +2004,7 @@ class MainWindow(QMainWindow):
 
                 with self._lock:
                     self._frame = frame
-                    self._rgb_frame = rgb_cached
+                    self._rgb_frame = rgb_frame
                     self._gesture = gesture
                     self._overlay_text = overlay
                     self._hand_proto = hand_protos  # Now a list of (proto, label)
@@ -2113,14 +2123,22 @@ class MainWindow(QMainWindow):
             if i < len(self._gesture_history):
                 g, ts = self._gesture_history[i]
                 color = _gesture_accent(g)
-                lbl.setText(f"  {g.value}  {ts}")
-                lbl.setStyleSheet(
+                new_text = f"  {g.value}  {ts}"
+                new_style = (
                     f"background: transparent; color: {color}; border-radius: 6px;"
                     f"padding: 2px 0px; font-size: 13px; font-weight: 600;"
                 )
-                lbl.setVisible(True)
+                cached_text, cached_color = self._last_history_cache[i]
+                if new_text != cached_text or color != cached_color:
+                    lbl.setText(new_text)
+                    lbl.setStyleSheet(new_style)
+                    self._last_history_cache[i] = (new_text, color)
+                if not lbl.isVisible():
+                    lbl.setVisible(True)
             else:
-                lbl.setVisible(False)
+                if lbl.isVisible():
+                    lbl.setVisible(False)
+                    self._last_history_cache[i] = ("", "")
 
         if self._overlay is not None:
             try:
@@ -2131,15 +2149,12 @@ class MainWindow(QMainWindow):
         if self.isMinimized() or frame is None:
             return
 
-        self._sync_margin_controls()
-
         tracker = self.tracker
         if rgb_cached is not None:
             rgb = rgb_cached
-        elif tracker is not None and hasattr(tracker, '_last_rgb_frame') and tracker._last_rgb_frame is not None:
-            rgb = tracker._last_rgb_frame
         else:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # rgb_cached not available yet (e.g. first frame) — skip this render tick
+            return
 
         if self._show_control_region:
             left, top, right, bottom = self.mapper.control_region()
@@ -2174,13 +2189,14 @@ class MainWindow(QMainWindow):
                 tracker.draw(rgb, hand_proto, label)
 
         h, w, _ = rgb.shape
-        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
+        bytes_per_line = 3 * w
+        qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
         self.preview.setPixmap(
             pix.scaled(
                 self.preview.contentsRect().size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
+                Qt.TransformationMode.FastTransformation,
             )
         )
 

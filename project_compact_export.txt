@@ -1,309 +1,83 @@
 PROJECT: AI HollowGraphic Like Touch
-ROOT: C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch
-FILES: 40
-
-=== .cursorrules ===
-# Holographic Touch — AI Agent Rules
-# This file is read automatically by VS Code Copilot/Codex.
-
-## GOLDEN RULE
-Change ONLY the lines described in the task. Do NOT:
-- rename variables, methods, classes, or parameters
-- remove code that is not explicitly mentioned
-- change threshold values not explicitly mentioned
-- add new imports unless explicitly told to
-- "clean up", "refactor", or "simplify" anything
-- change any method signature or return type
-
-## OUTPUT FORMAT
-- Always output the COMPLETE file — never use "# ... existing code ..."
-- Copy every unchanged method CHARACTER FOR CHARACTER
-- If unsure whether to change something: DON'T
-
-## FROZEN VALUES (never change without explicit instruction)
-# src/tuning.py:
-CURSOR_SOFT_DEADZONE_PX = 2.0
-GESTURE_CONFIRM_HOLD_S = 0.04
-GESTURE_ACTION_COOLDOWN_S = 0.18
-GESTURE_DRAG_ACTIVATE_S = 0.45
-GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45
-GESTURE_RIGHT_CLICK_HOLD_S = 0.25
-GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25
-MOUSE_WORKER_HZ = 240.0
-
-# src/gesture_detector.py __init__:
-self._pinch_enter = 0.22
-self._pinch_exit = 0.36
-self._scroll_step_limit = 8
-self._scroll_gain = 1.0
-
-# src/gesture_detector.py per-action cooldowns:
-LEFT_CLICK: 0.25, RIGHT_CLICK: 0.50, DOUBLE_CLICK: 0.50
-
-# src/settings_store.py DEFAULTS:
-"pinch_sensitivity": 0.22
-"pinch_exit_sensitivity": 0.38
-"confirm_hold_s": 0.03
-
-# src/hand_tracker.py Hands config:
-max_num_hands = 2
-model_complexity = 0
-min_detection_confidence = 0.55
-min_tracking_confidence = 0.45
-self._edge_grace_frames = 10
-blend = 0.55 / 0.48 / 0.40 (confidence-adaptive)
-
-# src/hand_tracker.py (fingertip smoothing):
-_tip_indices = {4, 8, 12, 16, 20}
-tip_blend = base_blend * 0.55
-
-# src/gesture_detector.py _process_action_hand (updated by Prompt 2):
-confidence < 0.10  (minimum acceptance threshold)
-pinch_alpha = 0.50 if confidence < 0.6 else 0.65
-li <= enter  (left pinch entry, no 0.94 multiplier)
-right-click requires: not scroll_pose, li > enter*1.2, pm > 0.22
-
-# src/cursor_mapper.py:
-self._outer_slack_ratio = 0.10
-max_jump = scr_diag * 0.25
-(NO edge alpha reduction - those 3 lines were deleted)
-
-# src/gesture_detector.py:
-_movement_suppress logic (prevents clicks during fast hand movement)
-self._prev_wrist_pos tracking
-
-# src/main_window.py:
-_dual_cursor_point uses 70/30 blend of index tip + palm center
-Dual-hand cursor freezes on _pinch_active_dual (matches single-hand behavior)
-
-## FROZEN INTERFACES
-- HandTracker.detect() returns (hands_dict, hand_protos_list, is_grace)
-- GestureDetector.detect_dual(hands_dict, is_grace, cursor_label) returns GestureResult
-- GestureDetector.detect(hand_data, is_grace_frame) returns GestureResult
-- CursorMapper.map_point(cam_x, cam_y) returns (int, int)
-
-## FEATURES THAT MUST NOT BE REMOVED
-- Dual-hand mode, single-hand mode, auto mode switching
-- Cursor freeze during clicks (self._freeze_on)
-- Grace frame handling
-- Right-click hold timer
-- EMA-smoothed pinch ratios (self._li_ema, _ri_ema, _pm_ema)
-- Scroll accumulator with direction-switch cooldown
-- Drag progress arc, status overlay, system tray, Ctrl+Shift+H hotkey
-- All GestureType enum values
-- Fingertip-specific smoothing in hand_tracker (tip_blend = base_blend * 0.55)
-- Movement suppression in gesture_detector (_movement_suppress)
-- Palm+fingertip blend in _dual_cursor_point (0.7 tip + 0.3 palm)
-- Dual-hand pinch pre-freeze (_pinch_active_dual)
+ROOT: D:\Projects 2\AI HollowGraphic Like Touch
+FILES: 33
 
 === .gitignore ===
-# Byte-compiled / optimized / DLL files
+# ─── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
-*.py[codz]
+*.py[cod]
 *$py.class
-
-# C extensions
 *.so
 
-# Distribution / packaging
-.Python
+# ─── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ─── Distribution / packaging ─────────────────────────────────────────────────
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
 *.egg-info/
-.installed.cfg
 *.egg
 MANIFEST
+wheels/
+share/python-wheels/
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
+# ─── Testing / coverage ───────────────────────────────────────────────────────
 .tox/
 .nox/
 .coverage
 .coverage.*
-.cache
+htmlcov/
+.pytest_cache/
 nosetests.xml
 coverage.xml
 *.cover
 *.py.cover
 .hypothesis/
-.pytest_cache/
-cover/
 
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#uv.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
-#poetry.toml
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
-#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
-#pdm.lock
-#pdm.toml
-.pdm-python
-.pdm-build/
-
-# pixi
-#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
-#pixi.lock
-#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
-#   in the .venv directory. It is recommended not to include this directory in version control.
-.pixi
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
+# ─── Type checkers ────────────────────────────────────────────────────────────
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
-# Pyre type checker
 .pyre/
-
-# pytype static type analyzer
 .pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
-
-# Abstra
-# Abstra is an AI-powered process automation framework.
-# Ignore directories containing user credentials, local state, and settings.
-# Learn more at https://abstra.io/docs
-.abstra/
-
-# Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#  you could uncomment the following to ignore the entire vscode folder
-# .vscode/
-
-# Ruff stuff:
 .ruff_cache/
 
-# PyPI configuration file
-.pypirc
-
-# Cursor
-#  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
-#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
-#  refer to https://docs.cursor.com/context/ignore-files
+# ─── Editors & IDEs ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.cursorrules
 .cursorignore
 .cursorindexingignore
 
-# Marimo
-marimo/_static/
-marimo/_lsp/
-__marimo__/
+# ─── OS-generated ─────────────────────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+$RECYCLE.BIN/
+
+# ─── Project-specific generated files ─────────────────────────────────────────
+# Snapshot export — regenerate with: python export.py
+project_compact_export.txt
+
+# pip hash cache written by run.bat
+.venv/.requirements.sha256
+
+# Logs
+*.log
+
+# ─── Installer / build artifacts ──────────────────────────────────────────────
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
 
 === app.py ===
 """Windows Hover: holographic touch mouse entry point.
@@ -378,362 +152,27 @@ if __name__ == "__main__":
   <circle cx="128" cy="128" r="96" fill="none" stroke="#22D3EE" stroke-opacity="0.18" stroke-width="3"/>
 </svg>
 
-=== final_tracking_prompt.md ===
-# FINAL PROMPT — Tracking, Smoothness, and Movement Priority
-#
-# Apply this AFTER all previous prompts (0-5).
-# This fixes: skeleton shake, cursor zigzag, cursor pausing during finger contact,
-# movement priority over clicking, margin-to-screen-edge mapping, and dual-hand
-# cursor point selection.
-#
-# git add . && git commit -m "before: final tracking prompt"
-# Then paste the prompt below into Codex.
-# After: test, then git add . && git commit -m "fixed: tracking smoothness final"
+=== export.py ===
+"""Root-level convenience wrapper for the project export tool.
 
-════════════════════════════════════════════════════════════════
-THE PROMPT — paste everything between the ``` marks into Codex
-════════════════════════════════════════════════════════════════
+Usage:
+    python export.py                     # default output: project_compact_export.txt
+    python export.py --output out.txt    # custom output path
+    python export.py --max-bytes-per-file 50000
+"""
 
-```
-Read .cursorrules first. Follow every rule in it.
+from __future__ import annotations
 
-TASK: Fix cursor tracking smoothness, skeleton shake, movement priority, and margin-to-edge mapping. 
-Changes across 4 files. Each change is precisely described — do NOT change anything else.
+import sys
+from pathlib import Path
 
-=== FILE 1: src/hand_tracker.py ===
-Output the COMPLETE file with these changes ONLY:
+# Ensure tools/ is importable regardless of cwd
+sys.path.insert(0, str(Path(__file__).resolve().parent / "tools"))
 
-CHANGE A — Fingertip-specific stronger smoothing to kill index finger shake:
-The current landmark smoothing applies the SAME blend factor to all 21 landmarks.
-Fingertips (landmarks 4,8,12,16,20) jitter 3-5x more than palm landmarks because
-they're at the extremity of the hand. This jitter on landmark 8 directly causes
-cursor zigzag/U-V patterns.
+from export_project_compact import main  # type: ignore
 
-In the detect method, find the smoothing block:
-                prev_xy = self._prev_xy_by_label.get(label)
-                if prev_xy is not None and len(prev_xy) == len(xy):
-                    # Adaptive EMA: stronger smoothing to reduce shake while preserving fingertip response.
-                    blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
-                    smoothed_xy: list[tuple[int, int]] = []
-                    for i, (cx, cy) in enumerate(xy):
-                        px, py = prev_xy[i]
-                        sx_i = int(px + (cx - px) * blend)
-                        sy_i = int(py + (cy - py) * blend)
-                        smoothed_xy.append((sx_i, sy_i))
-                    xy = smoothed_xy
-
-Replace with:
-                prev_xy = self._prev_xy_by_label.get(label)
-                if prev_xy is not None and len(prev_xy) == len(xy):
-                    # Fingertip indices jitter much more than palm/wrist — use 
-                    # weaker blend (stronger smoothing) on tips to kill shake.
-                    _tip_indices = {4, 8, 12, 16, 20}
-                    base_blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
-                    tip_blend = base_blend * 0.55  # Tips get ~half the responsiveness = much less jitter
-                    smoothed_xy: list[tuple[int, int]] = []
-                    for i, (cx, cy) in enumerate(xy):
-                        px, py = prev_xy[i]
-                        b = tip_blend if i in _tip_indices else base_blend
-                        sx_i = int(px + (cx - px) * b)
-                        sy_i = int(py + (cy - py) * b)
-                        smoothed_xy.append((sx_i, sy_i))
-                    xy = smoothed_xy
-
-This makes palm/wrist landmarks responsive (0.55 blend) while fingertips get 
-heavy smoothing (0.30 blend), eliminating the index finger shake that causes 
-cursor zigzag.
-
-DO NOT change any other code in this file. Keep model_complexity=0, 
-min_detection_confidence=0.55, min_tracking_confidence=0.45, 
-_edge_grace_frames=10, and all other values exactly as they are.
-Output the COMPLETE file.
-
-
-=== FILE 2: src/cursor_mapper.py ===
-Output the COMPLETE file with these changes ONLY:
-
-CHANGE A — Increase outer slack so margin edge maps to screen edge:
-In __init__, find:
-        self._outer_slack_ratio = 0.04
-Change to:
-        self._outer_slack_ratio = 0.10
-Reason: 0.04 maps only 4% of camera space past the control box to the screen
-edges. At 120px margin on 480p, this is ~19 pixels — not enough to reliably
-reach screen corners. 0.10 gives 48 pixels of overshoot, which maps the full
-screen edge zone comfortably.
-
-CHANGE B — Reduce max_jump clamp to prevent cursor pausing:
-In map_point, find:
-        max_jump = scr_diag * 0.14
-Change to:
-        max_jump = scr_diag * 0.25
-Reason: When fingers touch (during pinch approach), MediaPipe landmarks 
-teleport slightly. The 0.14 clamp catches these as "jumps" and limits them,
-which creates visible cursor pausing as the EMA has to catch up over multiple
-frames. 0.25 allows larger movements through instantly — actual teleports 
-(hand appearing on opposite side of camera) are >0.3 of screen diagonal, 
-so 0.25 still catches those.
-
-CHANGE C — Remove the edge alpha reduction that slows cursor near screen edges:
-In map_point, find and DELETE these 3 lines entirely:
-        margin_px = 15
-        if (raw_x <= self._screen_x + margin_px) or (raw_x >= self._screen_x + self.scr_w - margin_px) or \
-           (raw_y <= self._screen_y + margin_px) or (raw_y >= self._screen_y + self.scr_h - margin_px):
-            alpha *= 0.75
-Reason: This reduces smoothing speed by 25% when cursor is near screen edges,
-making cursor feel "sticky" at the edges. The user specifically wants cursor
-to reach edges easily. The outer_slack_ratio already handles edge mapping.
-
-DO NOT change any EMA alpha values, deadzone, prediction strength, or any 
-other method. Keep set_smoothening, set_frame_margin, _virtual_screen_bounds,
-control_region, and reset exactly as they are.
-Output the COMPLETE file.
-
-
-=== FILE 3: src/gesture_detector.py ===
-Output the COMPLETE file with these changes ONLY:
-
-CHANGE A — Suppress click detection during active cursor movement:
-When the hand is actively moving (large landmark displacement between frames),
-the user is MOVING the cursor, not trying to click. Finger proximity during
-fast movement is incidental contact, not intentional pinch.
-
-In _process_action_hand, right AFTER the hand_scale computation block (after
-the line: self._hand_scale = max(24.0, scale)), ADD:
-
-        # Movement priority: if hand moved significantly, suppress click entry.
-        # This prevents accidental clicks during fast cursor movement when 
-        # thumb brushes against index/middle finger.
-        _movement_suppress = False
-        if self._li_ema is not None:
-            # Compare current pinch ratios to previous — if hand geometry
-            # is changing rapidly, likely moving not pinching
-            li_raw_now, ri_raw_now, pm_raw_now = self._pinch_ratios(xy, self._hand_scale)
-            _wrist_x, _wrist_y = float(xy[0][0]), float(xy[0][1])
-            _tip8_x, _tip8_y = float(xy[8][0]), float(xy[8][1])
-            # If index tip is far from thumb AND hand is big (close to camera),
-            # trust the pinch detection. Otherwise, if pinch ratios are near
-            # the threshold boundary, apply movement suppression.
-            if li_raw_now > (enter * 0.7) and li_raw_now < (exit_ * 1.1):
-                # In the ambiguous zone — check if wrist is moving fast
-                if hasattr(self, '_prev_wrist_pos') and self._prev_wrist_pos is not None:
-                    _pw = self._prev_wrist_pos
-                    _wrist_move = ((_wrist_x - _pw[0])**2 + (_wrist_y - _pw[1])**2)**0.5
-                    if _wrist_move > self._hand_scale * 0.08:
-                        _movement_suppress = True
-            self._prev_wrist_pos = (_wrist_x, _wrist_y)
-        else:
-            self._prev_wrist_pos = (float(xy[0][0]), float(xy[0][1]))
-
-Wait — this needs the enter/exit_ variables which are defined later. Instead, 
-place this block AFTER the line:
-        exit_ = float(self._pinch_exit)
-
-And BEFORE the left pinch detection block.
-
-Then, in the left pinch ENTRY condition, change:
-        elif li <= enter:
-            self._left_pinch_active = True
-            self._left_click_emitted_this_hold = False
-To:
-        elif li <= enter and not _movement_suppress:
-            self._left_pinch_active = True
-            self._left_click_emitted_this_hold = False
-
-And in the right pinch ENTRY condition (the elif block that starts right-click detection),
-add _movement_suppress to the guard. Change:
-        elif (
-            not self._left_pinch_active
-            and not scroll_pose
-            and ri <= right_enter
-            and li > (enter * 1.2)
-            and pm > 0.22
-        ):
-To:
-        elif (
-            not self._left_pinch_active
-            and not scroll_pose
-            and not _movement_suppress
-            and ri <= right_enter
-            and li > (enter * 1.2)
-            and pm > 0.22
-        ):
-
-Also add to __init__, after the line self._z_tap_enabled = False:
-        self._prev_wrist_pos: tuple[float, float] | None = None
-
-And add to _reset_all:
-        self._prev_wrist_pos = None
-
-DO NOT change any threshold values, cooldown values, the _resolve_scroll method,
-the _record_action method, or any return signatures.
-Output the COMPLETE file.
-
-
-=== FILE 4: src/main_window.py ===
-Output the COMPLETE file with these changes ONLY:
-
-CHANGE A — Fix _dual_cursor_point to use palm center as primary cursor point:
-The current implementation uses index fingertip (landmark 8) when extended,
-which means cursor position changes when fingers curl/extend. Palm center
-(landmark 9 = middle finger MCP) is much more stable because it barely moves
-when fingers open/close.
-
-Find the _dual_cursor_point method. Replace the ENTIRE method body with:
-
-    def _dual_cursor_point(self, hand_data: dict | None) -> tuple[int, int] | None:
-        """Return cursor tracking point for the cursor hand in dual mode.
-        
-        Uses weighted blend of palm center (landmark 9) and index tip (landmark 8):
-        - When index finger is extended: 70% index tip + 30% palm center
-          (responsive to pointing direction)
-        - When fingers are curled/closed: 100% palm center
-          (stable, no jump when fingers touch)
-        
-        This eliminates cursor jumping when fingers contact each other during
-        movement, while still allowing precise pointing when index is extended.
-        """
-        if hand_data is None:
-            return None
-        xy = hand_data.get("xy", [])
-        if not xy or len(xy) < 13:
-            return None
-
-        wrist = xy[0]
-        mcp9 = xy[9]  # Palm center — most stable point
-        
-        # Always have palm center as baseline
-        palm_x, palm_y = float(mcp9[0]), float(mcp9[1])
-        
-        # Check if index finger is extended
-        if len(xy) > 8:
-            tip8 = xy[8]
-            pip6 = xy[6]
-            hand_scale = max(
-                12.0,
-                ((float(wrist[0]) - palm_x) ** 2 + (float(wrist[1]) - palm_y) ** 2) ** 0.5,
-            )
-            extend_margin = max(5.0, hand_scale * 0.06)
-            tip_dist = ((float(tip8[0]) - float(wrist[0])) ** 2 + (float(tip8[1]) - float(wrist[1])) ** 2) ** 0.5
-            pip_dist = ((float(pip6[0]) - float(wrist[0])) ** 2 + (float(pip6[1]) - float(wrist[1])) ** 2) ** 0.5
-            
-            if tip_dist > (pip_dist + extend_margin):
-                # Index extended — blend toward fingertip for precision
-                return int(0.7 * float(tip8[0]) + 0.3 * palm_x), int(0.7 * float(tip8[1]) + 0.3 * palm_y)
-        
-        # Fallback: pure palm center (most stable when fingers are closed/touching)
-        return int(palm_x), int(palm_y)
-
-CHANGE B — Also add pinch pre-freeze in dual-hand mode:
-Currently dual mode only freezes on gesture in self._freeze_on. But like 
-single mode, it should also freeze when pinch is PHYSICALLY active to prevent
-the cursor point from shifting as fingers approach thumb.
-
-In _process_loop, find the dual-hand cursor section:
-                if self._cursor_mode == "dual_hand":
-                    # Dual-hand: cursor hand is configurable (default right).
-                    cursor_hand_label = "Right" if self._dual_right_cursor else "Left"
-                    cursor_hand = hands_dict.get(cursor_hand_label)
-                    if gesture in self._freeze_on:
-                        # Freeze cursor during clicks
-                        _has_cursor = self._frozen_sx >= 0
-
-Change the freeze condition to also check pinch state (matching single-hand logic):
-                if self._cursor_mode == "dual_hand":
-                    # Dual-hand: cursor hand is configurable (default right).
-                    cursor_hand_label = "Right" if self._dual_right_cursor else "Left"
-                    cursor_hand = hands_dict.get(cursor_hand_label)
-                    _pinch_active_dual = self.gestures._left_pinch_active or self.gestures._right_pinch_active
-                    if gesture in self._freeze_on or _pinch_active_dual:
-                        # Freeze cursor during clicks and active pinches
-                        _has_cursor = self._frozen_sx >= 0
-
-DO NOT change any UI code, stylesheet, settings dialog, overlay, or any 
-other method. Keep all existing logic exactly as-is except these two changes.
-Output the COMPLETE file.
-
-
-=== ALSO UPDATE: .cursorrules ===
-Add these lines under ## FROZEN VALUES:
-
-# src/hand_tracker.py (fingertip smoothing):
-_tip_indices = {4, 8, 12, 16, 20}
-tip_blend = base_blend * 0.55
-
-# src/cursor_mapper.py:
-self._outer_slack_ratio = 0.10
-max_jump = scr_diag * 0.25
-(NO edge alpha reduction — those 3 lines were deleted)
-
-# src/gesture_detector.py:
-_movement_suppress logic (prevents clicks during fast hand movement)
-self._prev_wrist_pos tracking
-
-# src/main_window.py:
-_dual_cursor_point uses 70/30 blend of index tip + palm center
-Dual-hand cursor freezes on _pinch_active_dual (matches single-hand behavior)
-
-Add under ## FEATURES THAT MUST NOT BE REMOVED:
-- Fingertip-specific smoothing in hand_tracker (tip_blend = base_blend * 0.55)
-- Movement suppression in gesture_detector (_movement_suppress)
-- Palm+fingertip blend in _dual_cursor_point (0.7 tip + 0.3 palm)
-- Dual-hand pinch pre-freeze (_pinch_active_dual)
-
-=== ALSO UPDATE: PROMPTING_GUIDE.md ===
-Add to the "Rules for writing prompts" section:
-8. Never change the fingertip smoothing multiplier (tip_blend = base_blend * 0.55)
-9. Never change the outer_slack_ratio (0.10) or max_jump (scr_diag * 0.25)  
-10. Never remove the _movement_suppress logic from gesture_detector
-11. Never change _dual_cursor_point blend ratio (0.7 tip + 0.3 palm)
-```
-
-════════════════════════════════════════════════════════════════
-WHAT EACH FIX DOES — summary for testing
-════════════════════════════════════════════════════════════════
-
-SKELETON SHAKE FIX (hand_tracker.py):
-  Fingertips get 55% of the base blend → much heavier smoothing on tips 
-  while palm/wrist stay responsive. Index finger shake becomes invisible.
-
-CURSOR ZIGZAG FIX (hand_tracker.py + cursor_mapper.py):
-  Smoother index landmark + larger max_jump allowance + no edge slowdown
-  = cursor follows hand without U/V patterns or pausing.
-
-CURSOR PAUSES DURING FINGER CONTACT (cursor_mapper.py + gesture_detector.py):
-  max_jump increased from 0.14 to 0.25 → stops clamping normal movements.
-  Movement suppression → prevents accidental click ENTRY during fast movement.
-  Palm-center blend → cursor point barely moves when fingers touch.
-
-MOVEMENT PRIORITY (gesture_detector.py):
-  When wrist is moving fast AND pinch ratio is in the ambiguous zone,
-  click entry is suppressed. Clicking only activates when hand is 
-  relatively stationary or pinch is clearly deliberate.
-
-MARGIN → SCREEN EDGE (cursor_mapper.py):
-  outer_slack_ratio 0.10 means 10% of camera beyond the control box
-  still maps to screen edges. Edge alpha reduction removed.
-
-DUAL-HAND CURSOR POINT (main_window.py):
-  70% index tip + 30% palm center when pointing. 100% palm center when
-  fingers are closed. No more cursor jumps when switching finger poses.
-  Pinch pre-freeze added to dual mode (was only in single mode).
-
-════════════════════════════════════════════════════════════════
-TEST AFTER APPLYING:
-════════════════════════════════════════════════════════════════
-□ Hold hand still, palm open → cursor doesn't shake/zigzag
-□ Hold hand still, palm closed (fist) → cursor doesn't shake
-□ Move hand slowly left-right → smooth line, no U/V pattern
-□ Move hand fast → cursor follows without pausing
-□ Touch thumb to index while moving → cursor does NOT pause or click
-□ Deliberately pinch (stationary hand) → left click fires
-□ Move to screen corners → cursor reaches all 4 corners
-□ Move past control box edge → cursor reaches screen edge
-□ Dual mode: right hand skeleton stable, left hand gestures work
-□ Single mode: same hand does both, no random clicks during movement
-□ Scroll with peace sign → no cursor movement, no clicks triggered
-
-git add . && git commit -m "fixed: tracking smoothness final"
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 === get_hand_model.py ===
 """Download the hand landmark ONNX model from PINTO0309's model zoo.
@@ -749,833 +188,135 @@ print(f"Downloading {URL} ...")
 urllib.request.urlretrieve(URL, OUT)
 print(f"Saved to {OUT} ({OUT.stat().st_size // 1024} KB)")
 
-=== project_compact_export.txt ===
-PROJECT: AI HollowGraphic Like Touch
-ROOT: C:\Users\Superduash\Downloads\AI HollowGraphic Like Touch
-FILES: 40
-
-=== .cursorrules ===
-# Holographic Touch — AI Agent Rules
-# This file is read automatically by VS Code Copilot/Codex.
-
-## GOLDEN RULE
-Change ONLY the lines described in the task. Do NOT:
-- rename variables, methods, classes, or parameters
-- remove code that is not explicitly mentioned
-- change threshold values not explicitly mentioned
-- add new imports unless explicitly told to
-- "clean up", "refactor", or "simplify" anything
-- change any method signature or return type
-
-## OUTPUT FORMAT
-- Always output the COMPLETE file — never use "# ... existing code ..."
-- Copy every unchanged method CHARACTER FOR CHARACTER
-- If unsure whether to change something: DON'T
-
-## FROZEN VALUES (never change without explicit instruction)
-# src/tuning.py:
-CURSOR_SOFT_DEADZONE_PX = 2.0
-GESTURE_CONFIRM_HOLD_S = 0.04
-GESTURE_ACTION_COOLDOWN_S = 0.18
-GESTURE_DRAG_ACTIVATE_S = 0.45
-GESTURE_DOUBLE_CLICK_WINDOW_S = 0.45
-GESTURE_RIGHT_CLICK_HOLD_S = 0.25
-GESTURE_SCROLL_DIR_SWITCH_COOLDOWN_S = 0.25
-MOUSE_WORKER_HZ = 240.0
-
-# src/gesture_detector.py __init__:
-self._pinch_enter = 0.22
-self._pinch_exit = 0.36
-self._scroll_step_limit = 8
-self._scroll_gain = 1.0
-
-# src/gesture_detector.py per-action cooldowns:
-LEFT_CLICK: 0.25, RIGHT_CLICK: 0.50, DOUBLE_CLICK: 0.50
-
-# src/settings_store.py DEFAULTS:
-"pinch_sensitivity": 0.22
-"pinch_exit_sensitivity": 0.38
-"confirm_hold_s": 0.03
-
-# src/hand_tracker.py Hands config:
-max_num_hands = 2
-model_complexity = 0
-min_detection_confidence = 0.55
-min_tracking_confidence = 0.45
-self._edge_grace_frames = 10
-blend = 0.55 / 0.48 / 0.40 (confidence-adaptive)
-
-# src/hand_tracker.py (fingertip smoothing):
-_tip_indices = {4, 8, 12, 16, 20}
-tip_blend = base_blend * 0.55
-
-# src/gesture_detector.py _process_action_hand (updated by Prompt 2):
-confidence < 0.10  (minimum acceptance threshold)
-pinch_alpha = 0.50 if confidence < 0.6 else 0.65
-li <= enter  (left pinch entry, no 0.94 multiplier)
-right-click requires: not scroll_pose, li > enter*1.2, pm > 0.22
-
-# src/cursor_mapper.py:
-self._outer_slack_ratio = 0.10
-max_jump = scr_diag * 0.25
-(NO edge alpha reduction - those 3 lines were deleted)
-
-# src/gesture_detector.py:
-_movement_suppress logic (prevents clicks during fast hand movement)
-self._prev_wrist_pos tracking
-
-# src/main_window.py:
-_dual_cursor_point uses 70/30 blend of index tip + palm center
-Dual-hand cursor freezes on _pinch_active_dual (matches single-hand behavior)
-
-## FROZEN INTERFACES
-- HandTracker.detect() returns (hands_dict, hand_protos_list, is_grace)
-- GestureDetector.detect_dual(hands_dict, is_grace, cursor_label) returns GestureResult
-- GestureDetector.detect(hand_data, is_grace_frame) returns GestureResult
-- CursorMapper.map_point(cam_x, cam_y) returns (int, int)
-
-## FEATURES THAT MUST NOT BE REMOVED
-- Dual-hand mode, single-hand mode, auto mode switching
-- Cursor freeze during clicks (self._freeze_on)
-- Grace frame handling
-- Right-click hold timer
-- EMA-smoothed pinch ratios (self._li_ema, _ri_ema, _pm_ema)
-- Scroll accumulator with direction-switch cooldown
-- Drag progress arc, status overlay, system tray, Ctrl+Shift+H hotkey
-- All GestureType enum values
-- Fingertip-specific smoothing in hand_tracker (tip_blend = base_blend * 0.55)
-- Movement suppression in gesture_detector (_movement_suppress)
-- Palm+fingertip blend in _dual_cursor_point (0.7 tip + 0.3 palm)
-- Dual-hand pinch pre-freeze (_pinch_active_dual)
-
-=== .gitignore ===
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[codz]
-*$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py.cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#uv.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
-#poetry.toml
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
-#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
-#pdm.lock
-#pdm.toml
-.pdm-python
-.pdm-build/
-
-# pixi
-#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
-#pixi.lock
-#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
-#   in the .venv directory. It is recommended not to include this directory in version control.
-.pixi
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
-
-# Abstra
-# Abstra is an AI-powered process automation framework.
-# Ignore directories containing user credentials, local state, and settings.
-# Learn more at https://abstra.io/docs
-.abstra/
-
-# Visual Studio Code
-#  Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#  that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#  and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#  you could uncomment the following to ignore the entire vscode folder
-# .vscode/
-
-# Ruff stuff:
-.ruff_cache/
-
-# PyPI configuration file
-.pypirc
-
-# Cursor
-#  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
-#  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
-#  refer to https://docs.cursor.com/context/ignore-files
-.cursorignore
-.cursorindexingignore
-
-# Marimo
-marimo/_static/
-marimo/_lsp/
-__marimo__/
-
-=== app.py ===
-"""Windows Hover: holographic touch mouse entry point.
-
-Designed for USB portability: one main Python file driving an integrated package.
-"""
-
-from __future__ import annotations
-
-import os
-from pathlib import Path
-
-# Keep OpenCV backend probing quiet in production startup logs.
-os.environ.setdefault("OPENCV_LOG_LEVEL", "SILENT")
-os.environ.setdefault("OPENCV_VIDEOIO_DEBUG", "0")
-
-# Keep Qt/MediaPipe/TFLite startup logs quiet for end users.
-os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.window=false")
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
-os.environ.setdefault("GLOG_minloglevel", "3")
-os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "3")
-
-from PySide6.QtGui import QIcon  # type: ignore
-from PySide6.QtWidgets import QApplication  # type: ignore
-from src import MainWindow  # type: ignore
-
-
-def main() -> None:
-    existing = QApplication.instance()
-    app = existing if isinstance(existing, QApplication) else QApplication([])
-    icon_path = Path(__file__).resolve().parent / "assets" / "icons" / "holographic_touch.svg"
-    app_icon = QIcon(str(icon_path))
-    if not app_icon.isNull():
-        app.setWindowIcon(app_icon)
-    w = MainWindow()
-    w.show()
-    app.exec()
-
-
-if __name__ == "__main__":
-    main()
-
-=== assets/icons/holographic_touch.svg ===
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0B1220"/>
-      <stop offset="1" stop-color="#111827"/>
-    </linearGradient>
-    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#22D3EE"/>
-      <stop offset="1" stop-color="#34D399"/>
-    </linearGradient>
-    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#67E8F9"/>
-      <stop offset="1" stop-color="#2DD4BF"/>
-    </linearGradient>
-  </defs>
-
-  <rect x="12" y="12" width="232" height="232" rx="52" fill="url(#bg)"/>
-  <rect x="12" y="12" width="232" height="232" rx="52" fill="none" stroke="#1F2937" stroke-width="4"/>
-
-  <circle cx="128" cy="128" r="74" fill="none" stroke="url(#ring)" stroke-width="12"/>
-  <circle cx="128" cy="128" r="50" fill="none" stroke="#22D3EE" stroke-opacity="0.45" stroke-width="5"/>
-  <circle cx="128" cy="128" r="20" fill="url(#core)"/>
-
-  <path d="M128 44 L128 16" stroke="#34D399" stroke-width="8" stroke-linecap="round"/>
-  <path d="M128 240 L128 212" stroke="#34D399" stroke-width="8" stroke-linecap="round"/>
-  <path d="M44 128 L16 128" stroke="#22D3EE" stroke-width="8" stroke-linecap="round"/>
-  <path d="M240 128 L212 128" stroke="#22D3EE" stroke-width="8" stroke-linecap="round"/>
-
-  <circle cx="128" cy="128" r="96" fill="none" stroke="#22D3EE" stroke-opacity="0.18" stroke-width="3"/>
-</svg>
-
-=== final_tracking_prompt.md ===
-# FINAL PROMPT — Tracking, Smoothness, and Movement Priority
-#
-# Apply this AFTER all previous prompts (0-5).
-# This fixes: skeleton shake, cursor zigzag, cursor pausing during finger contact,
-# movement priority over clicking, margin-to-screen-edge mapping, and dual-hand
-# cursor point selection.
-#
-# git add . && git commit -m "before: final tracking prompt"
-# Then paste the prompt below into Codex.
-# After: test, then git add . && git commit -m "fixed: tracking smoothness final"
-
-════════════════════════════════════════════════════════════════
-THE PROMPT — paste everything between the ``` marks into Codex
-════════════════════════════════════════════════════════════════
-
-```
-Read .cursorrules first. Follow every rule in it.
-
-TASK: Fix cursor tracking smoothness, skeleton shake, movement priority, and margin-to-edge mapping. 
-Changes across 4 files. Each change is precisely described — do NOT change anything else.
-
-=== FILE 1: src/hand_tracker.py ===
-Output the COMPLETE file with these changes ONLY:
-
-CHANGE A — Fingertip-specific stronger smoothing to kill index finger shake:
-The current landmark smoothing applies the SAME blend factor to all 21 landmarks.
-Fingertips (landmarks 4,8,12,16,20) jitter 3-5x more than palm landmarks because
-they're at the extremity of the hand. This jitter on landmark 8 directly causes
-cursor zigzag/U-V patterns.
-
-In the detect method, find the smoothing block:
-                prev_xy = self._prev_xy_by_label.get(label)
-                if prev_xy is not None and len(prev_xy) == len(xy):
-                    # Adaptive EMA: stronger smoothing to reduce shake while preserving fingertip response.
-                    blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
-                    smoothed_xy: list[tuple[int, int]] = []
-                    for i, (cx, cy) in enumerate(xy):
-                        px, py = prev_xy[i]
-                        sx_i = int(px + (cx - px) * blend)
-                        sy_i = int(py + (cy - py) * blend)
-                        smoothed_xy.append((sx_i, sy_i))
-                    xy = smoothed_xy
-
-Replace with:
-                prev_xy = self._prev_xy_by_label.get(label)
-                if prev_xy is not None and len(prev_xy) == len(xy):
-                    # Fingertip indices jitter much more than palm/wrist — use 
-                    # weaker blend (stronger smoothing) on tips to kill shake.
-                    _tip_indices = {4, 8, 12, 16, 20}
-                    base_blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
-                    tip_blend = base_blend * 0.55  # Tips get ~half the responsiveness = much less jitter
-                    smoothed_xy: list[tuple[int, int]] = []
-                    for i, (cx, cy) in enumerate(xy):
-                        px, py = prev_xy[i]
-                        b = tip_blend if i in _tip_indices else base_blend
-                        sx_i = int(px + (cx - px) * b)
-                        sy_i = int(py + (cy - py) * b)
-                        smoothed_xy.append((sx_i, sy_i))
-                    xy = smoothed_xy
-
-This makes palm/wrist landmarks responsive (0.55 blend) while fingertips get 
-heavy smoothing (0.30 blend), eliminating the index finger shake that causes 
-cursor zigzag.
-
-DO NOT change any other code in this file. Keep model_complexity=0, 
-min_detection_confidence=0.55, min_tracking_confidence=0.45, 
-_edge_grace_frames=10, and all other values exactly as they are.
-Output the COMPLETE file.
-
-
-=== FILE 2: src/cursor_mapper.py ===
-Output the COMPLETE file with these changes ONLY:
-
-CHANGE A — Increase outer slack so margin edge maps to screen edge:
-In __init__, find:
-        self._outer_slack_ratio = 0.04
-Change to:
-        self._outer_slack_ratio = 0.10
-Reason: 0.04 maps only 4% of camera space past the control box to the screen
-edges. At 120px margin on 480p, this is ~19 pixels — not enough to reliably
-reach screen corners. 0.10 gives 48 pixels of overshoot, which maps the full
-screen edge zone comfortably.
-
-CHANGE B — Reduce max_jump clamp to prevent cursor pausing:
-In map_point, find:
-        max_jump = scr_diag * 0.14
-Change to:
-        max_jump = scr_diag * 0.25
-Reason: When fingers touch (during pinch approach), MediaPipe landmarks 
-teleport slightly. The 0.14 clamp catches these as "jumps" and limits them,
-which creates visible cursor pausing as the EMA has to catch up over multiple
-frames. 0.25 allows larger movements through instantly — actual teleports 
-(hand appearing on opposite side of camera) are >0.3 of screen diagonal, 
-so 0.25 still catches those.
-
-CHANGE C — Remove the edge alpha reduction that slows cursor near screen edges:
-In map_point, find and DELETE these 3 lines entirely:
-        margin_px = 15
-        if (raw_x <= self._screen_x + margin_px) or (raw_x >= self._screen_x + self.scr_w - margin_px) or \
-           (raw_y <= self._screen_y + margin_px) or (raw_y >= self._screen_y + self.scr_h - margin_px):
-            alpha *= 0.75
-Reason: This reduces smoothing speed by 25% when cursor is near screen edges,
-making cursor feel "sticky" at the edges. The user specifically wants cursor
-to reach edges easily. The outer_slack_ratio already handles edge mapping.
-
-DO NOT change any EMA alpha values, deadzone, prediction strength, or any 
-other method. Keep set_smoothening, set_frame_margin, _virtual_screen_bounds,
-control_region, and reset exactly as they are.
-Output the COMPLETE file.
-
-
-=== FILE 3: src/gesture_detector.py ===
-Output the COMPLETE file with these changes ONLY:
-
-CHANGE A — Suppress click detection during active cursor movement:
-When the hand is actively moving (large landmark displacement between frames),
-the user is MOVING the cursor, not trying to click. Finger proximity during
-fast movement is incidental contact, not intentional pinch.
-
-In _process_action_hand, right AFTER the hand_scale computation block (after
-the line: self._hand_scale = max(24.0, scale)), ADD:
-
-        # Movement priority: if hand moved significantly, suppress click entry.
-        # This prevents accidental clicks during fast cursor movement when 
-        # thumb brushes against index/middle finger.
-        _movement_suppress = False
-        if self._li_ema is not None:
-            # Compare current pinch ratios to previous — if hand geometry
-            # is changing rapidly, likely moving not pinching
-            li_raw_now, ri_raw_now, pm_raw_now = self._pinch_ratios(xy, self._hand_scale)
-            _wrist_x, _wrist_y = float(xy[0][0]), float(xy[0][1])
-            _tip8_x, _tip8_y = float(xy[8][0]), float(xy[8][1])
-            # If index tip is far from thumb AND hand is big (close to camera),
-            # trust the pinch detection. Otherwise, if pinch ratios are near
-            # the threshold boundary, apply movement suppression.
-            if li_raw_now > (enter * 0.7) and li_raw_now < (exit_ * 1.1):
-                # In the ambiguous zone — check if wrist is moving fast
-                if hasattr(self, '_prev_wrist_pos') and self._prev_wrist_pos is not None:
-                    _pw = self._prev_wrist_pos
-                    _wrist_move = ((_wrist_x - _pw[0])**2 + (_wrist_y - _pw[1])**2)**0.5
-                    if _wrist_move > self._hand_scale * 0.08:
-                        _movement_suppress = True
-            self._prev_wrist_pos = (_wrist_x, _wrist_y)
-        else:
-            self._prev_wrist_pos = (float(xy[0][0]), float(xy[0][1]))
-
-Wait — this needs the enter/exit_ variables which are defined later. Instead, 
-place this block AFTER the line:
-        exit_ = float(self._pinch_exit)
-
-And BEFORE the left pinch detection block.
-
-Then, in the left pinch ENTRY condition, change:
-        elif li <= enter:
-            self._left_pinch_active = True
-            self._left_click_emitted_this_hold = False
-To:
-        elif li <= enter and not _movement_suppress:
-            self._left_pinch_active = True
-            self._left_click_emitted_this_hold = False
-
-And in the right pinch ENTRY condition (the elif block that starts right-click detection),
-add _movement_suppress to the guard. Change:
-        elif (
-            not self._left_pinch_active
-            and not scroll_pose
-            and ri <= right_enter
-            and li > (enter * 1.2)
-            and pm > 0.22
-        ):
-To:
-        elif (
-            not self._left_pinch_active
-            and not scroll_pose
-            and not _movement_suppress
-            and ri <= right_enter
-            and li > (enter * 1.2)
-            and pm > 0.22
-        ):
-
-Also add to __init__, after the line self._z_tap_enabled = False:
-        self._prev_wrist_pos: tuple[float, float] | None = None
-
-And add to _reset_all:
-        self._prev_wrist_pos = None
-
-DO NOT change any threshold values, cooldown values, the _resolve_scroll method,
-the _record_action method, or any return signatures.
-Output the COMPLETE file.
-
-
-=== FILE 4: src/main_window.py ===
-Output the COMPLETE file with these changes ONLY:
-
-CHANGE A — Fix _dual_cursor_point to use palm center as primary cursor point:
-The current implementation uses index fingertip (landmark 8) when extended,
-which means cursor position changes when fingers curl/extend. Palm center
-(landmark 9 = middle finger MCP) is much more stable because it barely moves
-when fingers open/close.
-
-Find the _dual_cursor_point method. Replace the ENTIRE method body with:
-
-    def _dual_cursor_point(self, hand_data: dict | None) -> tuple[int, int] | None:
-        """Return cursor tracking point for the cursor hand in dual mode.
-        
-        Uses weighted blend of palm center (landmark 9) and index tip (landmark 8):
-        - When index finger is extended: 70% index tip + 30% palm center
-          (responsive to pointing direction)
-        - When fingers are curled/closed: 100% palm center
-          (stable, no jump when fingers touch)
-        
-        This eliminates cursor jumping when fingers contact each other during
-        movement, while still allowing precise pointing when index is extended.
-        """
-        if hand_data is None:
-            return None
-        xy = hand_data.get("xy", [])
-        if not xy or len(xy) < 13:
-            return None
-
-        wrist = xy[0]
-        mcp9 = xy[9]  # Palm center — most stable point
-        
-        # Always have palm center as baseline
-        palm_x, palm_y = float(mcp9[0]), float(mcp9[1])
-        
-        # Check if index finger is extended
-        if len(xy) > 8:
-            tip8 = xy[8]
-            pip6 = xy[6]
-            hand_scale = max(
-                12.0,
-                ((float(wrist[0]) - palm_x) ** 2 + (float(wrist[1]) - palm_y) ** 2) ** 0.5,
-            )
-            extend_margin = max(5.0, hand_scale * 0.06)
-            tip_dist = ((float(tip8[0]) - float(wrist[0])) ** 2 + (float(tip8[1]) - float(wrist[1])) ** 2) ** 0.5
-            pip_dist = ((float(pip6[0]) - float(wrist[0])) ** 2 + (float(pip6[1]) - float(wrist[1])) ** 2) ** 0.5
-            
-            if tip_dist > (pip_dist + extend_margin):
-                # Index extended — blend toward fingertip for precision
-                return int(0.7 * float(tip8[0]) + 0.3 * palm_x), int(0.7 * float(tip8[1]) + 0.3 * palm_y)
-        
-        # Fallback: pure palm center (most stable when fingers are closed/touching)
-        return int(palm_x), int(palm_y)
-
-CHANGE B — Also add pinch pre-freeze in dual-hand mode:
-Currently dual mode only freezes on gesture in self._freeze_on. But like 
-single mode, it should also freeze when pinch is PHYSICALLY active to prevent
-the cursor point from shifting as fingers approach thumb.
-
-In _process_loop, find the dual-hand cursor section:
-                if self._cursor_mode == "dual_hand":
-                    # Dual-hand: cursor hand is configurable (default right).
-                    cursor_hand_label = "Right" if self._dual_right_cursor else "Left"
-                    cursor_hand = hands_dict.get(cursor_hand_label)
-                    if gesture in self._freeze_on:
-                        # Freeze cursor during clicks
-                        _has_cursor = self._frozen_sx >= 0
-
-Change the freeze condition to also check pinch state (matching single-hand logic):
-                if self._cursor_mode == "dual_hand":
-                    # Dual-hand: cursor hand is configurable (default right).
-                    cursor_hand_label = "Right" if self._dual_right_cursor else "Left"
-                    cursor_hand = hands_dict.get(cursor_hand_label)
-                    _pinch_active_dual = self.gestures._left_pinch_active or self.gestures._right_pinch_active
-                    if gesture in self._freeze_on or _pinch_active_dual:
-                        # Freeze cursor during clicks and active pinches
-                        _has_cursor = self._frozen_sx >= 0
-
-DO NOT change any UI code, stylesheet, settings dialog, overlay, or any 
-other method. Keep all existing logic exactly as-is except these two changes.
-Output the COMPLETE file.
-
-
-=== ALSO UPDATE: .cursorrules ===
-Add these lines under ## FROZEN VALUES:
-
-# src/hand_tracker.py (fingertip smoothing):
-_tip_indices = {4, 8, 12, 16, 20}
-tip_blend = base_blend * 0.55
-
-# src/cursor_mapper.py:
-self._outer_slack_ratio = 0.10
-max_jump = scr_diag * 0.25
-(NO edge alpha reduction — those 3 lines were deleted)
-
-# src/gesture_detector.py:
-_movement_suppress logic (prevents clicks during fast hand movement)
-self._prev_wrist_pos tracking
-
-# src/main_window.py:
-_dual_cursor_point uses 70/30 blend of index tip + palm center
-Dual-hand cursor freezes on _pinch_active_dual (matches single-hand behavior)
-
-Add under ## FEATURES THAT MUST NOT BE REMOVED:
-- Fingertip-specific smoothing in hand_tracker (tip_blend = base_blend * 0.55)
-- Movement suppression in gesture_detector (_movement_suppress)
-- Palm+fingertip blend in _dual_cursor_point (0.7 tip + 0.3 palm)
-- Dual-hand pinch pre-freeze (_pinch_active_dual)
-
-=== ALSO UPDATE: PROMPTING_GUIDE.md ===
-Add to the "Rules for writing prompts" section:
-8. Never change the fingertip smoothing multiplier (tip_blend = base_blend * 0.55)
-9. Never change the outer_slack_ratio (0.10) or max_jump (scr_diag * 0.25)  
-10. Never remove the _movement_suppress logic from gesture_detector
-11. Never change _dual_cursor_point blend ratio (0.7 tip + 0.3 palm)
-```
-
-════════════════════════════════════════════════════════════════
-WHAT EACH FIX DOES — summary for testing
-════════════════════════════════════════════════════════════════
-
-SKELETON SHAKE FIX (hand_tracker.py):
-  Fingertips get 55% of the base blend → much heavier smoothing on tips 
-  while palm/wrist stay responsive. Index finger shake becomes invisible.
-
-CURSOR ZIGZAG FIX (hand_tracker.py + cursor_mapper.py):
-  Smoother index landmark + larger max_jump allowance + no edge slowdown
-  = cursor follows hand without U/V patterns or pausing.
-
-CURSOR PAUSES DURING FINGER CONTACT (cursor_mapper.py + gesture_detector.py):
-  max_jump increased from 0.14 to 0.25 → stops clamping normal movements.
-  Movement suppression → prevents accidental click ENTRY during fast movement.
-  Palm-center blend → cursor point barely moves when fingers touch.
-
-MOVEMENT PRIORITY (gesture_detector.py):
-  When wrist is moving fast AND pinch ratio is in the ambiguous zone,
-  click entry is suppressed. Clicking only activates when hand is 
-  relatively stationary or pinch is clearly deliberate.
-
-MARGIN → SCREEN EDGE (cursor_mapper.py):
-  outer_slack_ratio 0.10 means 10% of camera beyond the control box
-  still maps to screen edges. Edge alpha reduction removed.
-
-DUAL-HAND CURSOR POINT (main_window.py):
-  70% index tip + 30% palm center when pointing. 100% palm center when
-  fingers are closed. No more cursor jumps when switching finger poses.
-  Pinch pre-freeze added to dual mode (was only in single mode).
-
-════════════════════════════════════════════════════════════════
-TEST AFTER APPLYING:
-════════════════════════════════════════════════════════════════
-□ Hold hand still, palm open → cursor doesn't shake/zigzag
-□ Hold hand still, palm closed (fist) → cursor doesn't shake
-□ Move hand slowly left-right → smooth line, no U/V pattern
-□ Move hand fast → cursor follows without pausing
-□ Touch thumb to index while moving → cursor does NOT pause or click
-□ Deliberately pinch (stationary hand) → left click fires
-□ Move to screen corners → cursor reaches all 4 corners
-□ Move past control box edge → cursor reaches screen edge
-□ Dual mode: right hand skeleton stable, left hand gestures work
-□ Single mode: same hand does both, no random clicks during movement
-□ Scroll with peace sign → no cursor movement, no clicks triggered
-
-git add . && git commit -m "fixed: tracking smoothness final"
-
-=== PROMPTING_GUIDE.md ===
-# How to prompt Codex/GPT to fix this app without regressions
-
-## Before EVERY prompt:
-1. git add . && git commit -m "before: [what you're about to fix]"
-2. Test the app — note what currently works
-3. Write the prompt following the rules below
-4. After applying: test ONLY the thing you changed
-5. If it works: git commit -m "fixed: [what you fixed]"
-6. If it broke something: git checkout . (reverts everything)
-
-## Prompt template (copy this structure every time):
-
-```
-Read .cursorrules first. Follow every rule in it.
-
-TASK: [one specific thing — e.g. "Fix scroll direction being inverted"]
-
-FILE TO CHANGE: src/gesture_detector.py
-
-EXACT CHANGE:
-In the _resolve_scroll method, on the line:
-    dy = float(self._scroll_prev_y) - current_y
-Change to:
-    dy = current_y - float(self._scroll_prev_y)
-
-Do NOT change any other line in this file.
-Do NOT change any threshold values.
-Do NOT change any other method.
-Output the COMPLETE file.
-```
-
-## Rules for writing prompts:
-1. ONE file per prompt. Never "fix gesture_detector.py AND main_window.py"
-2. NAME the exact method and line you want changed
-3. Say what to change it FROM and what to change it TO
-4. Always end with "Do NOT change any other line in this file"
-5. Always say "Output the COMPLETE file"
-6. Never say "refactor", "clean up", "improve", "optimize"
-7. Never say "fix all issues" or "make it work better"
-8. Never change the fingertip smoothing multiplier (tip_blend = base_blend * 0.55)
-9. Never change the outer_slack_ratio (0.10) or max_jump (scr_diag * 0.25)
-10. Never remove the _movement_suppress logic from gesture_detector
-11. Never change _dual_cursor_point blend ratio (0.7 tip + 0.3 palm)
-
-## If you need multiple fixes:
-Do them as separate prompts, one at a time, committing between each:
-- Prompt 1: fix scroll → test → commit
-- Prompt 2: fix right-click → test → commit
-- Prompt 3: fix cursor jitter → test → commit
-
-## What to do when Codex changes things you didn't ask for:
-1. Run: git diff (shows everything that changed)
-2. Look for changes OUTSIDE the area you asked about
-3. If you see threshold values changed, method signatures changed,
-   or code removed: git checkout . and re-prompt more specifically
-4. If the diff looks clean (only your requested change): test and commit
-
-## Emergency recovery:
-If the app is completely broken and you can't figure out what changed:
-    git log --oneline          (see your commit history)
-    git checkout [commit-hash] (go back to a working version)
-    git checkout -b recovery   (make a new branch from there)
-
 === README.txt ===
-Windows Hover (USB build)
+═══════════════════════════════════════════════════════════════
+ HOLOGRAPHIC TOUCH  —  AI Hand-Gesture Mouse Controller
+═══════════════════════════════════════════════════════════════
 
-Run on Windows:
-1) Double-click run.bat
+Control your Windows PC with your hands — no physical contact.
+Uses MediaPipe hand landmark detection + a custom gesture engine.
 
-Run tests:
-- Double-click QUICK_TEST.bat
-- Or run: python -X utf8 tests/run_tests.py
+───────────────────────────────────────────────────────────────
+ QUICK START
+───────────────────────────────────────────────────────────────
 
-Project layout:
-- docs/ contains reports, checklists, and verification notes
-- tools/ contains one-off helper scripts (exports, sanitizers, legacy scripts)
+Double-click  run.bat
+  → Creates a .venv, installs requirements, launches the app.
 
-Notes:
-- Uses the best available Python via the Windows 'py' launcher (prefers 3.12).
-- Creates a local .venv and installs requirements automatically on first run.
-- When you click "Enable Mouse", the main window minimizes and a small always-on-top status overlay stays visible.
+OR manually:
+  python -m venv .venv
+  .venv\Scripts\activate
+  pip install -r requirements.txt
+  python app.py
 
-This build is optimized for:
-- 720p/640x480 camera capture with backend fallback (MSMF, DSHOW, ANY)
-- full-resolution hand processing with MediaPipe Hands
-- multi-monitor virtual screen mapping with inner-region overshoot
-- gestures (Right hand): move, left click, double click, drag, right click, scroll, task view, keyboard
-- gestures (Left hand): media volume up/down and next/previous track only
+
+───────────────────────────────────────────────────────────────
+ REQUIREMENTS
+───────────────────────────────────────────────────────────────
+
+• Windows 10 / 11 (64-bit)
+• Python 3.10, 3.11, or 3.12  (https://python.org)
+• Webcam (USB, built-in, or virtual e.g. DroidCam / iVCam)
+
+
+───────────────────────────────────────────────────────────────
+ GESTURE REFERENCE
+───────────────────────────────────────────────────────────────
+
+ DUAL-HAND MODE (default when 2 hands visible)
+  Right hand  — Index finger raised  → moves cursor
+  Left hand:
+    Thumb + Index pinch              → Left Click
+    Quick double pinch               → Double Click
+    Hold pinch (0.5 s)               → Drag (hold until released)
+    Thumb + Middle pinch (hold)      → Right Click
+    Index + Middle raised together   → Scroll (move up/down)
+
+ SINGLE-HAND MODE (auto when only 1 hand visible)
+  Same hand does cursor movement AND all gestures above.
+
+ MODE SWITCHING
+  The app switches automatically:
+    2 hands seen for 1.5 s  →  Dual mode
+    1 hand seen for 3.0 s   →  Single mode
+
+ GLOBAL HOTKEY
+  Ctrl + Shift + H   →  Toggle mouse on/off from anywhere
+
+
+───────────────────────────────────────────────────────────────
+ SETTINGS
+───────────────────────────────────────────────────────────────
+
+Click the ⚙ gear icon in the main window to open Settings:
+
+• Camera           — select camera source
+• Smoothening      — cursor smoothness (1=raw, 10=very smooth)
+• Head/Hand Range  — size of the active control region box
+• Scroll Speed     — multiplier for scroll gesture
+• Pinch Sensitivity — how close fingers must be for a click
+• Confirm Hold     — minimum hold time before action fires
+• Mirror Camera    — flip feed left/right (usually ON)
+• Show Region Box  — display the cyan control boundary
+• Debug Overlay    — show hand skeleton on the feed
+
+
+───────────────────────────────────────────────────────────────
+ FILE STRUCTURE
+───────────────────────────────────────────────────────────────
+
+  app.py              Entry point
+  run.bat             One-click launcher (Windows)
+  requirements.txt    Python dependencies
+  export.py           Generate a single-file project snapshot
+  src/
+    main_window.py    Main GUI + processing orchestration
+    camera_thread.py  OpenCV capture thread
+    hand_tracker.py   MediaPipe hand landmark detection
+    gesture_detector.py  Pinch/scroll/drag gesture engine
+    cursor_mapper.py  Camera → screen coordinate mapping
+    mouse.py          Win32 SendInput mouse controller
+    settings_store.py Persistent JSON settings
+    fast_math.py      Numba-compiled math kernels
+    tuning.py         Performance/behaviour constants
+    constants.py      Overlay label strings
+    utils.py          Platform helpers
+    models.py         GestureType / GestureResult dataclasses
+  assets/
+    icons/            App icon SVG
+  tools/
+    export_project_compact.py   Project snapshot exporter
+
+
+───────────────────────────────────────────────────────────────
+ TROUBLESHOOTING
+───────────────────────────────────────────────────────────────
+
+Camera not found:
+  • Open DroidCam/iVCam BEFORE clicking Initialize.
+  • Try different Camera Index in Settings (0, 1, 2…).
+
+Hand not detected:
+  • Ensure adequate lighting (avoid strong backlight).
+  • Keep hand within the cyan control region box.
+  • Check confidence reading in the System Status panel.
+
+High CPU usage:
+  • The app uses CPU-based MediaPipe (model_complexity=0).
+  • Close other camera apps to free bandwidth.
+
+Mouse jumps:
+  • Increase Smoothening in Settings.
+  • Decrease Pinch Sensitivity (raise the threshold number).
+
+───────────────────────────────────────────────────────────────
+ EXPORT PROJECT SNAPSHOT
+───────────────────────────────────────────────────────────────
+
+  python export.py
+
+Writes project_compact_export.txt (all source files combined).
+Useful for sharing context with AI tools or for archiving.
 
 === requirements.txt ===
 mediapipe==0.10.21
@@ -1596,7 +337,9 @@ scikit-learn>=1.4.0
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
-rem Prefer Python 3.12 on Windows 11.
+title Holographic Touch — Launcher
+
+rem ── Find Python (prefer 3.12, fall back to 3.11 / 3.10 / 3) ──────────────
 set "PYEXE="
 set "PYVER="
 for %%V in (3.12 3.11 3.10 3) do (
@@ -1618,10 +361,11 @@ if not defined PYEXE (
   exit /b 1
 )
 
-echo Using Python %PYVER% (%PYEXE%)
+echo [launcher] Python %PYVER% ^(%PYEXE%^)
 
+rem ── Create venv if missing ────────────────────────────────────────────────
 if not exist ".venv\Scripts\python.exe" (
-  echo Creating virtual environment...
+  echo [launcher] Creating virtual environment...
   %PYEXE% -m venv .venv
   if errorlevel 1 goto :error
 )
@@ -1629,6 +373,7 @@ if not exist ".venv\Scripts\python.exe" (
 call ".venv\Scripts\activate.bat"
 if errorlevel 1 goto :error
 
+rem ── Install / skip requirements based on hash ─────────────────────────────
 set "REQ_HASH="
 for /f "usebackq delims=" %%H in (`python -c "import hashlib;print(hashlib.sha256(open('requirements.txt','rb').read()).hexdigest())"`) do set "REQ_HASH=%%H"
 set "HASH_FILE=.venv\.requirements.sha256"
@@ -1638,22 +383,22 @@ if exist "%HASH_FILE%" (
 )
 
 if "%REQ_HASH%"=="%OLD_HASH%" (
-  echo Requirements already installed. Skipping pip install.
+  echo [launcher] Requirements up to date.
 ) else (
-  echo Upgrading pip tooling...
+  echo [launcher] Upgrading pip tooling...
   python -m pip install --upgrade pip setuptools wheel
   if errorlevel 1 goto :error
 
-  echo Installing requirements...
+  echo [launcher] Installing requirements...
   python -m pip install -r requirements.txt
   if errorlevel 1 goto :error
 
   >"%HASH_FILE%" echo %REQ_HASH%
 )
 
-echo Launching Windows Hover...
+echo [launcher] Starting Holographic Touch...
 set "HT_SILENCE_NATIVE_STDERR=1"
-python app.py 2>nul
+python app.py
 if errorlevel 1 goto :error
 
 exit /b 0
@@ -2027,7 +772,9 @@ class CameraThread:
         return True
 
     def switch_camera(self, camera_index: int) -> bool:
-        self.camera_index = int(camera_index)
+        target_index = int(camera_index)
+        previous_index = int(self.camera_index)
+        self.camera_index = target_index
 
         if not self._running:
             cap = self._open_capture(self.camera_index)
@@ -2045,15 +792,31 @@ class CameraThread:
                 old_cap.release()
             except Exception:
                 pass
+        with self._frame_lock:
+            self._frame = None
         time.sleep(0.08)
 
         cap = self._open_capture(self.camera_index)
         if cap is None:
-            print("[ERROR] No valid camera found after scanning")
+            # Keep stream alive by restoring previous camera if target switch fails.
+            self.camera_index = previous_index
+            fallback_cap = self._open_capture(previous_index)
+            if fallback_cap is not None:
+                with self._cap_lock:
+                    self._cap = fallback_cap
+                with self._frame_lock:
+                    self._frame = None
+                self._last_error = (
+                    f"Camera switch failed for index={target_index}; restored index={previous_index}"
+                )
+            else:
+                print("[ERROR] No valid camera found after scanning")
             return False
 
         with self._cap_lock:
             self._cap = cap
+        with self._frame_lock:
+            self._frame = None
         return True
 
     def _loop(self) -> None:
@@ -2061,10 +824,15 @@ class CameraThread:
         while self._running:
             with self._cap_lock:
                 cap = self._cap
+                if cap is None:
+                    ok, frame = False, None
+                else:
+                    ok, frame = cap.read()
+
             if cap is None:
                 time.sleep(0.001)
                 continue
-            ok, frame = cap.read()
+
             if not ok or frame is None:
                 consecutive_failures += 1
                 if consecutive_failures >= CAMERA_READ_RETRY_LIMIT:
@@ -2531,99 +1299,6 @@ def fingertip_to_wrist_distances_np(xy: list) -> np.ndarray:
     diff = tips - wrist                           # (5, 2)
     return np.sqrt((diff * diff).sum(axis=1))     # (5,)
 
-=== src/gesture_classifier.py ===
-"""ML-based gesture classifier.
-
-Replaces threshold rules with a RandomForest trained on 63 landmark features.
-Falls back gracefully to None if model not trained yet.
-
-TRAINING: Run `python train_gesture_classifier.py` after collecting samples.
-INFERENCE: ~0.1ms per prediction (sklearn on 63 floats).
-"""
-from __future__ import annotations
-
-import json
-import pickle
-from pathlib import Path
-from typing import TYPE_CHECKING
-
-import numpy as np
-
-try:
-    import sklearn  # type: ignore  # noqa: F401
-    _SKLEARN_AVAILABLE = True
-except Exception:
-    _SKLEARN_AVAILABLE = False
-
-if TYPE_CHECKING:
-    from .models import GestureType
-
-MODEL_PATH = Path(__file__).parent.parent / "gesture_model.pkl"
-LABEL_PATH = Path(__file__).parent.parent / "gesture_labels.json"
-
-_clf = None
-_labels: list[str] = []
-_LOADED = False
-
-
-def load_model() -> bool:
-    """Load trained classifier. Returns True if successful."""
-    global _clf, _labels, _LOADED
-    if _LOADED:
-        return _clf is not None
-    _LOADED = True
-    try:
-        if not _SKLEARN_AVAILABLE:
-            return False
-        if not MODEL_PATH.exists():
-            return False
-        with open(MODEL_PATH, "rb") as f:
-            _clf = pickle.load(f)
-        if LABEL_PATH.exists():
-            _labels = json.loads(LABEL_PATH.read_text())
-        return True
-    except Exception:
-        _clf = None
-        return False
-
-
-def predict_gesture(xy: list, label: str = "Right") -> tuple[str | None, float]:
-    """Predict gesture from 21 landmarks.
-
-    Args:
-        xy: list of 21 (x, y) or (x, y, z) tuples - hand_data['xy']
-        label: "Right" or "Left" hand
-
-    Returns:
-        (gesture_name, confidence) or (None, 0.0) if model not loaded
-    """
-    if _clf is None:
-        return None, 0.0
-    try:
-        pts = np.asarray(xy[:21], dtype=np.float32).flatten()
-        if len(pts) < 42:
-            return None, 0.0
-
-        # Normalize: translate wrist to origin, scale by wrist-to-middle_mcp dist
-        wrist = pts[:2].copy()
-        pts_2d = pts[:42].reshape(21, 2)
-        pts_2d -= wrist
-        scale = float(np.linalg.norm(pts_2d[9] - pts_2d[0]) + 1e-6)
-        pts_2d /= scale
-
-        features = pts_2d.flatten().reshape(1, -1)
-        proba = _clf.predict_proba(features)[0]
-        idx = int(np.argmax(proba))
-        confidence = float(proba[idx])
-
-        if confidence < 0.70:   # Low confidence -> defer to rules engine
-            return None, confidence
-
-        gesture_name = _labels[idx] if idx < len(_labels) else None
-        return gesture_name, confidence
-    except Exception:
-        return None, 0.0
-
 === src/gesture_detector.py ===
 from __future__ import annotations
 
@@ -2895,7 +1570,16 @@ class GestureDetector:
             return self._make_result(GestureType.PAUSE, 0)
 
         li_raw, ri_raw, pm_raw = self._pinch_ratios(xy, self._hand_scale)
-        pinch_alpha = 0.50 if confidence < 0.6 else 0.65
+        # Boost EMA alpha when approaching pinch threshold so entry is detected
+        # in 1 frame instead of 2–3 frames. This is the primary fix for missed clicks.
+        _approaching_left = li_raw < self._pinch_enter * 1.6
+        _approaching_right = ri_raw < self._pinch_enter * 1.6
+        if _approaching_left or _approaching_right:
+            pinch_alpha = 0.88  # snap toward pinch instantly
+        elif confidence < 0.6:
+            pinch_alpha = 0.55
+        else:
+            pinch_alpha = 0.70
         if self._li_ema is None:
             self._li_ema = li_raw
             self._ri_ema = ri_raw
@@ -2929,7 +1613,7 @@ class GestureDetector:
                 if hasattr(self, '_prev_wrist_pos') and self._prev_wrist_pos is not None:
                     _pw = self._prev_wrist_pos
                     _wrist_move = ((_wrist_x - _pw[0])**2 + (_wrist_y - _pw[1])**2)**0.5
-                    if _wrist_move > self._hand_scale * 0.08:
+                    if _wrist_move > self._hand_scale * 0.20:
                         _movement_suppress = True
             self._prev_wrist_pos = (_wrist_x, _wrist_y)
         else:
@@ -2938,13 +1622,19 @@ class GestureDetector:
         # --- Left pinch (thumb+index) = click/drag ---
         prev_left = self._left_pinch_active
         if self._left_pinch_active:
+            # EXIT: use EMA (stable) to prevent false releases on camera noise
             if li > exit_:
                 self._left_pinch_active = False
                 self._left_click_release_time = now
                 self._left_click_emitted_this_hold = False
-        elif li <= enter and not _movement_suppress:
+        elif li_raw <= enter and not _movement_suppress:
+            # ENTRY: use RAW ratio for 1-frame response (was: EMA li, caused 2-3 frame lag)
             self._left_pinch_active = True
             self._left_click_emitted_this_hold = False
+            # Pre-age the stability timer so confirm_hold elapses on THIS frame,
+            # not 40ms later. This eliminates dropped quick taps.
+            self._candidate = GestureType.LEFT_CLICK
+            self._stable_start_t = now - self._confirm_hold_s - 0.001
 
         # --- Scroll pose: index+middle raised together, vertically oriented ---
         idx_tip = xy[8]; idx_pip = xy[6]
@@ -2959,7 +1649,7 @@ class GestureDetector:
             idx_tip_dist > (idx_pip_dist + extend_margin)
             and mid_tip_dist > (mid_pip_dist + extend_margin)
         )
-        fingers_together = pm <= 0.50
+        fingers_together = pm_raw <= 0.55
         aligned_vertical = (
             abs(float(idx_tip[0]) - float(mid_tip[0])) <= (self._hand_scale * 0.30)
             and abs(float(idx_tip[1]) - float(mid_tip[1])) <= (self._hand_scale * 0.35)
@@ -2985,7 +1675,7 @@ class GestureDetector:
             not self._left_pinch_active
             and not scroll_pose
             and not _movement_suppress
-            and ri <= right_enter
+            and ri_raw <= right_enter
             and li > (enter * 1.2)
             and pm > 0.22
         ):
@@ -3229,7 +1919,8 @@ class HandTracker:
 
         dh, dw = detect_frame.shape[:2]
         rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
-        self._last_rgb_frame = rgb
+        if rgb is not None and rgb.size > 0:
+            self._last_rgb_frame = rgb
         result = self._hands.process(rgb)
 
         hands_dict = {}
@@ -3258,11 +1949,11 @@ class HandTracker:
 
                 prev_xy = self._prev_xy_by_label.get(label)
                 if prev_xy is not None and len(prev_xy) == len(xy):
-                    # Fingertip indices jitter much more than palm/wrist - use
+                    # Fingertip indices jitter much more than palm/wrist — use
                     # weaker blend (stronger smoothing) on tips to kill shake.
                     _tip_indices = {4, 8, 12, 16, 20}
-                    base_blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
-                    tip_blend = base_blend * 0.55  # Tips get ~half the responsiveness = much less jitter
+                    base_blend = 0.65 if conf >= 0.78 else (0.55 if conf >= 0.60 else 0.42)
+                    tip_blend = base_blend * 0.70  # Tips: slightly more smoothed than palm
                     smoothed_xy: list[tuple[int, int]] = []
                     for i, (cx, cy) in enumerate(xy):
                         px, py = prev_xy[i]
@@ -3933,6 +2624,7 @@ class SettingsDialog(QDialog):
 
 class MainWindow(QMainWindow):
     _camera_start_result = Signal(bool)
+    _camera_switch_result = Signal(bool, int, str)
     _cursor_mode_request = Signal(str)
     _CURSOR_GESTURES = frozenset({
         GestureType.MOVE, GestureType.LEFT_CLICK,
@@ -4023,6 +2715,7 @@ class MainWindow(QMainWindow):
         self._fps_ui_value = 0.0
         self.running = False
         self.proc_thread: threading.Thread | None = None
+        self._last_processed_frame = None
         self.mouse_enabled = False
         self._overlay: StatusOverlay | None = None
         self._dimmer: QWidget | None = None
@@ -4047,6 +2740,7 @@ class MainWindow(QMainWindow):
         self._gesture_history: collections.deque = collections.deque(maxlen=6)
         self._last_debug_print_ts = 0.0
         self._last_debug_label: str = ""
+        self._last_history_cache: list[tuple[str, str]] = [("" , "") for _ in range(6)]
         self._drag_active = False
         self._cursor_frozen = False
         self._frozen_sx: int = -1
@@ -4061,9 +2755,12 @@ class MainWindow(QMainWindow):
         self._sh_cursor_history: list = []
         self._drag_progress: float = 0.0
         self._start_worker: threading.Thread | None = None
+        self._camera_switch_worker: threading.Thread | None = None
+        self._pending_camera_index: int | None = None
 
         self._build_ui()
         self._camera_start_result.connect(self._on_camera_start_done)
+        self._camera_switch_result.connect(self._on_camera_switch_done)
         self._cursor_mode_request.connect(self.set_cursor_mode)
         self._setup_tray()
         self._start_hotkey_listener()
@@ -4090,7 +2787,7 @@ class MainWindow(QMainWindow):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._render)
-        self.timer.start(20)
+        self.timer.start(16)
         if _as_bool(settings.get("mouse_on_startup", False), False):
             QTimer.singleShot(450, self._enable_mouse_on_startup)
 
@@ -4661,13 +3358,51 @@ class MainWindow(QMainWindow):
 
         if not self.running:
             self.camera.camera_index = index
+            self._last_processed_frame = None
             return
 
-        ok = self.camera.switch_camera(index)
-        if not ok:
-            detail = self.camera.last_error or f"Cannot open selected camera index {index}"
-            self.cam_status.setText("Camera switch failed")
-            self.preview.setText(detail)
+        if self._camera_switch_worker is not None and self._camera_switch_worker.is_alive():
+            self._pending_camera_index = index
+            self.cam_status.setText(f"Camera switch queued (#{index})...")
+            return
+
+        self._start_camera_switch(index)
+
+    def _start_camera_switch(self, index: int) -> None:
+        self.cam_status.setText(f"Switching camera to #{index}...")
+
+        def _worker(target_index: int) -> None:
+            ok = self.camera.switch_camera(target_index)
+            detail = self.camera.last_error or ""
+            self._camera_switch_result.emit(ok, target_index, detail)
+
+        self._camera_switch_worker = threading.Thread(
+            target=_worker, args=(int(index),), daemon=True
+        )
+        self._camera_switch_worker.start()
+
+    @Slot(bool, int, str)
+    def _on_camera_switch_done(self, ok: bool, requested_index: int, detail: str) -> None:
+        self._camera_switch_worker = None
+        self._last_processed_frame = None
+
+        active_index = int(self.camera.camera_index)
+        settings.set("camera_index", active_index)
+
+        if ok:
+            self.cam_status.setText(f"Camera Active (#{active_index})")
+            self._camera_error_text = ""
+        else:
+            self.cam_status.setText("Camera switch failed; kept previous stream")
+            if detail:
+                self._camera_error_text = detail
+
+        if self._pending_camera_index is not None and self.running:
+            next_index = int(self._pending_camera_index)
+            self._pending_camera_index = None
+            if next_index != active_index:
+                settings.set("camera_index", next_index)
+                self._start_camera_switch(next_index)
 
     def apply_settings(self, data: dict[str, object]) -> None:
         index = _as_int(data.get("camera_index", self.camera.camera_index), self.camera.camera_index)
@@ -4945,6 +3680,7 @@ class MainWindow(QMainWindow):
         self.preview.style().polish(self.preview)
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self._sync_margin_controls()
 
     def stop_camera(self) -> None:
         self.running = False
@@ -5105,12 +3841,23 @@ class MainWindow(QMainWindow):
             try:
                 frame = self.camera.latest()
                 if frame is None:
+                    time.sleep(0.002)
                     continue
+                if frame is self._last_processed_frame:
+                    time.sleep(0.002)  # Same frame — yield CPU until next camera frame
+                    continue
+                self._last_processed_frame = frame
 
                 if self._mirror_camera:
                     frame = cv2.flip(frame, 1)
 
                 h, w = frame.shape[:2]
+                # Cap large frames to 640×480 before processing to reduce CPU/MediaPipe cost.
+                # The RGB conversion happens here (once per frame, on the worker thread, not UI).
+                if w > 640 or h > 480:
+                    frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_LINEAR)
+                    h, w = 480, 640
+
                 self.mapper.set_camera_size(w, h)
 
                 _face_tracked = False
@@ -5122,6 +3869,8 @@ class MainWindow(QMainWindow):
 
                 hands_dict, hand_protos, is_grace = tracker.detect(
                     frame, is_mirrored=self._mirror_camera)
+                # Convert BGR→RGB once here on the worker thread so _render() never needs to.
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 _face_tracked = bool(hands_dict)
 
                 hand_count = len(hands_dict)
@@ -5183,11 +3932,11 @@ class MainWindow(QMainWindow):
                 _action_hand = hands_dict.get("Right") or hands_dict.get("Left")
                 if _action_hand:
                     _conf = float(_action_hand.get("confidence", 0))
-                    if _conf < 0.45 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
+                    if _conf < 0.28 and gesture in {GestureType.LEFT_CLICK, GestureType.DOUBLE_CLICK}:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
-                    elif _conf < 0.40 and gesture == GestureType.RIGHT_CLICK:
+                    elif _conf < 0.28 and gesture == GestureType.RIGHT_CLICK:
                         gesture = GestureType.MOVE
                         result = GestureResult(GestureType.MOVE, 0)
                         gesture_changed = gesture != last_action
@@ -5307,7 +4056,7 @@ class MainWindow(QMainWindow):
 
                 with self._lock:
                     self._frame = frame
-                    self._rgb_frame = rgb_cached
+                    self._rgb_frame = rgb_frame
                     self._gesture = gesture
                     self._overlay_text = overlay
                     self._hand_proto = hand_protos  # Now a list of (proto, label)
@@ -5426,14 +4175,22 @@ class MainWindow(QMainWindow):
             if i < len(self._gesture_history):
                 g, ts = self._gesture_history[i]
                 color = _gesture_accent(g)
-                lbl.setText(f"  {g.value}  {ts}")
-                lbl.setStyleSheet(
+                new_text = f"  {g.value}  {ts}"
+                new_style = (
                     f"background: transparent; color: {color}; border-radius: 6px;"
                     f"padding: 2px 0px; font-size: 13px; font-weight: 600;"
                 )
-                lbl.setVisible(True)
+                cached_text, cached_color = self._last_history_cache[i]
+                if new_text != cached_text or color != cached_color:
+                    lbl.setText(new_text)
+                    lbl.setStyleSheet(new_style)
+                    self._last_history_cache[i] = (new_text, color)
+                if not lbl.isVisible():
+                    lbl.setVisible(True)
             else:
-                lbl.setVisible(False)
+                if lbl.isVisible():
+                    lbl.setVisible(False)
+                    self._last_history_cache[i] = ("", "")
 
         if self._overlay is not None:
             try:
@@ -5444,15 +4201,12 @@ class MainWindow(QMainWindow):
         if self.isMinimized() or frame is None:
             return
 
-        self._sync_margin_controls()
-
         tracker = self.tracker
         if rgb_cached is not None:
             rgb = rgb_cached
-        elif tracker is not None and hasattr(tracker, '_last_rgb_frame') and tracker._last_rgb_frame is not None:
-            rgb = tracker._last_rgb_frame
         else:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # rgb_cached not available yet (e.g. first frame) — skip this render tick
+            return
 
         if self._show_control_region:
             left, top, right, bottom = self.mapper.control_region()
@@ -5487,13 +4241,14 @@ class MainWindow(QMainWindow):
                 tracker.draw(rgb, hand_proto, label)
 
         h, w, _ = rgb.shape
-        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888)
+        bytes_per_line = 3 * w
+        qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
         self.preview.setPixmap(
             pix.scaled(
                 self.preview.contentsRect().size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
+                Qt.TransformationMode.FastTransformation,
             )
         )
 
@@ -5971,116 +4726,6 @@ class MouseController:
             return True
         except Exception:
             return False
-
-=== src/onnx_hand_tracker.py ===
-"""ONNX Runtime hand landmark detector.
-
-Drop-in backend for hand_tracker.py. Uses the community-converted MediaPipe
-hand landmark model (float32, input 224x224 RGB, output 21x3 normalized coords).
-
-Model source: PINTO0309/PINTO_model_zoo — hand_landmark_lite.onnx
-Download: place hand_landmark_lite.onnx in the project root or set
-          HOLO_HAND_MODEL env var to the full path.
-
-Falls back to None (disables ONNX path) if model file not found or
-onnxruntime not installed — hand_tracker.py will use MediaPipe instead.
-"""
-from __future__ import annotations
-
-import os
-import platform
-import time
-from pathlib import Path
-from collections import deque
-
-import cv2
-import numpy as np
-
-_ONNX_SESSION = None
-_ONNX_AVAILABLE = False
-_INPUT_SIZE = 224
-
-
-def _get_model_path() -> Path | None:
-    env = os.environ.get("HOLO_HAND_MODEL", "").strip()
-    if env and Path(env).exists():
-        return Path(env)
-    candidates = [
-        Path("hand_landmark_lite.onnx"),
-        Path(__file__).parent.parent / "hand_landmark_lite.onnx",
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
-    return None
-
-
-def init_onnx() -> bool:
-    """Initialize ONNX Runtime session. Returns True if successful."""
-    global _ONNX_SESSION, _ONNX_AVAILABLE
-    if _ONNX_AVAILABLE:
-        return True
-    try:
-        import onnxruntime as ort  # type: ignore
-        model_path = _get_model_path()
-        if model_path is None:
-            return False
-        providers = (
-            ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            if platform.system() == "Windows"
-            else ["CPUExecutionProvider"]
-        )
-        opts = ort.SessionOptions()
-        opts.inter_op_num_threads = 1
-        opts.intra_op_num_threads = 2
-        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        _ONNX_SESSION = ort.InferenceSession(str(model_path), opts, providers=providers)
-        _ONNX_AVAILABLE = True
-        return True
-    except Exception:
-        return False
-
-
-def _preprocess(frame_bgr: np.ndarray) -> np.ndarray:
-    """Resize to 224x224, convert BGR→RGB, normalize to [0,1], add batch dim."""
-    img = cv2.resize(frame_bgr, (_INPUT_SIZE, _INPUT_SIZE), interpolation=cv2.INTER_LINEAR)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    return img[np.newaxis]  # (1, 224, 224, 3)
-
-
-def _postprocess(raw_landmarks: np.ndarray, frame_w: int, frame_h: int) -> list[tuple[float, float, float]]:
-    """Convert model output to list of 21 (x, y, z) in pixel coords."""
-    pts = raw_landmarks.reshape(21, 3)
-    xy = []
-    for lm in pts:
-        x = float(lm[0]) * frame_w / _INPUT_SIZE
-        y = float(lm[1]) * frame_h / _INPUT_SIZE
-        z = float(lm[2])
-        xy.append((x, y, z))
-    return xy
-
-
-def detect_onnx(frame_bgr: np.ndarray) -> tuple[list | None, float]:
-    """Run ONNX hand landmark detection.
-
-    Returns:
-        (landmarks_xy, confidence) where landmarks_xy is list of 21 (x,y,z) tuples
-        or (None, 0.0) if no hand detected or ONNX not available.
-    """
-    if not _ONNX_AVAILABLE or _ONNX_SESSION is None:
-        return None, 0.0
-    try:
-        h, w = frame_bgr.shape[:2]
-        inp = _preprocess(frame_bgr)
-        outputs = _ONNX_SESSION.run(None, {_ONNX_SESSION.get_inputs()[0].name: inp})
-        landmarks = outputs[0]           # shape: (1, 63) or (21, 3)
-        score = float(outputs[1]) if len(outputs) > 1 else 0.85
-        if score < 0.5:
-            return None, score
-        xy = _postprocess(landmarks, w, h)
-        return xy, score
-    except Exception:
-        return None, 0.0
 
 === src/settings_store.py ===
 from __future__ import annotations
@@ -7182,10 +5827,13 @@ DEFAULT_EXCLUDE_DIRS = {
     ".pytest_cache",
     ".vscode",
     "node_modules",
+    "legacy",
 }
 
 DEFAULT_EXCLUDE_FILES = {
     ".requirements.sha256",
+    "project_compact_export.txt",
+    ".cursorrules",
 }
 
 TEXT_EXTENSIONS = {
@@ -7290,7 +5938,7 @@ def main() -> int:
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
-        help="Output text file path (default: docs/artifacts/project_compact_export.txt)",
+        help="Output text file path (default: project_compact_export.txt in project root)",
     )
     parser.add_argument(
         "--max-bytes-per-file",
@@ -7312,204 +5960,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-=== tools/legacy/test_camera.py ===
-#!/usr/bin/env python3
-"""Quick test script for camera enumeration and detection."""
-
-import sys
-sys.path.insert(0, '.')
-
-from src.camera_thread import CameraThread
-
-def test_enumeration():
-    print("=" * 60)
-    print(" CAMERA ENUMERATION TEST")
-    print("=" * 60)
-    
-    cam = CameraThread(640, 480)
-    
-    # Test enumeration
-    print("\n[1] Enumerating cameras...")
-    devices = cam.enumerate_cameras(max_index=8)
-    
-    if not devices:
-        print("   ❌ NO CAMERAS FOUND")
-        return False
-    
-    print(f"   ✓ Found {len(devices)} camera(s):")
-    for dev in devices:
-        print(f"     - Index {dev.index}: {dev.name}")
-    
-    # Test find_working_camera
-    print("\n[2] Testing find_working_camera (auto-scan)...")
-    result = cam.find_working_camera(preferred_index=None, min_index=0, max_index=5)
-    
-    if result is None:
-        print("   ❌ No working camera found")
-        print(f"   Error: {cam.last_error}")
-        return False
-    
-    idx, backend, cap = result
-    print(f"   ✓ Found working camera:")
-    print(f"     - Index: {idx}")
-    print(f"     - Backend: {cam._backend_name(backend)}")
-    print(f"     - Resolution: {cam.actual_width}x{cam.actual_height}")
-    
-    if cap:
-        cap.release()
-    
-    # Test actual startup
-    print("\n[3] Testing camera startup...")
-    success = cam.start(camera_index=idx)
-    
-    if not success:
-        print("   ❌ Failed to start camera")
-        print(f"   Error: {cam.last_error}")
-        return False
-    
-    print(f"   ✓ Camera started successfully")
-    print(f"   Resolution: {cam.actual_width}x{cam.actual_height}")
-    
-    # Read a frame
-    import time
-    print("\n[4] Reading first frame...")
-    time.sleep(0.5)
-    frame = cam.latest()
-    
-    if frame is None:
-        print("   ⚠ No frame yet (give it a moment...)")
-    else:
-        print(f"   ✓ Frame received: {frame.shape}")
-    
-    cam.stop()
-    print("\n" + "=" * 60)
-    print(" ✓ ALL TESTS PASSED")
-    print("=" * 60)
-    return True
-
-if __name__ == "__main__":
-    success = test_enumeration()
-    sys.exit(0 if success else 1)
-
-=== tools/legacy/test_gestures.py ===
-#!/usr/bin/env python3
-"""Gesture Detection Test & Debug Tool."""
-
-import sys
-import time
-sys.path.insert(0, '.')
-
-from src.gesture_detector import GestureDetector, FingerStates
-from src.models import GestureType
-
-def test_gesture_detections():
-    """Test all gesture detection paths."""
-    detector = GestureDetector()
-    
-    # Simulate hand data
-    def make_hand(xy, label="Right", confidence=0.9):
-        return {
-            "xy": xy,
-            "z": [0.0] * 21,
-            "label": label,
-            "confidence": confidence,
-        }
-    
-    # MediaPipe hand landmarks (right hand):
-    # 0: wrist, 1-4: thumb, 5-8: index, 9-12: middle, 13-16: ring, 17-20: pinky
-    
-    print("=" * 60)
-    print("GESTURE DETECTION TEST")
-    print("=" * 60)
-    
-    # Test 1: Pointer upright (MOVE gesture)
-    print("\n[TEST 1] Index extended only = MOVE gesture")
-    detector = GestureDetector()
-    # Right hand with index pointing up, other fingers curled IN TOWARD PALM
-    hand_xy = [
-        (250, 400),  # 0: wrist
-        (220, 390), (200, 370), (190, 350), (180, 340),  # 1-4: thumb (tucked into palm)
-        (280, 350), (300, 300), (315, 200), (320, 120),  # 5-8: index (EXTENDED UP)
-        (290, 390), (300, 400), (305, 395), (306, 392),  # 9-12: middle (CURLED - tip very close to MCP)
-        (280, 390), (285, 400), (288, 395), (289, 392),  # 13-16: ring (CURLED - tip very close to MCP)
-        (270, 390), (270, 400), (271, 395), (271, 392),  # 17-20: pinky (CURLED - tip very close to MCP)
-    ]
-    
-    hand = make_hand(hand_xy)
-    for _ in range(5):
-        result = detector.detect(hand)
-        time.sleep(0.020)  # 20ms per frame = ~50 fps
-    print(f"   Expected: MOVE, Got: {result.gesture}")
-    
-    # Debug finger states
-    fs = detector._finger_states(hand_xy)
-    print(f"   Finger states: thumb={fs.thumb}, index={fs.index}, middle={fs.middle}, ring={fs.ring}, pinky={fs.pinky}")
-    print(f"   Hand scale: {detector._hand_scale:.1f}")
-    print(f"   Pose checks: move={fs.index and (not fs.middle) and (not fs.ring) and (not fs.pinky)}")
-    
-    # Test 2: Thumb-Index pinch (LEFT_CLICK)
-    print("\n[TEST 2] Thumb-Index pinch = LEFT_CLICK gesture")
-    detector = GestureDetector()
-    # Thumb and index tips VERY close together (pinch) - < 30% of hand scale
-    hand_xy = [
-        (250, 400),  # 0: wrist
-        (260, 350), (265, 330), (268, 310), (270, 295),  # 1-4: thumb tip
-        (280, 350), (290, 330), (300, 310), (278, 295),  # 5-8: index tip (VERY CLOSE to thumb ~8px)
-        (290, 360), (300, 380), (305, 375), (306, 372),  # 9-12: middle (CURLED - tip close to MCP)
-        (280, 365), (285, 380), (288, 375), (289, 372),  # 13-16: ring (CURLED - tip close to MCP)
-        (270, 370), (270, 385), (271, 380), (271, 377),  # 17-20: pinky (CURLED - tip close to MCP)
-    ]
-    
-    hand = make_hand(hand_xy)
-    for i in range(5):
-        result = detector.detect(hand)
-        print(f"   Frame {i+1}: gesture={result.gesture}, state={detector._state}, cand={detector._candidate}")
-        time.sleep(0.020)  # 20ms per frame = ~50 fps
-    print(f"   Expected: LEFT_CLICK, Got: {result.gesture}")
-    
-    # Debug
-    fs = detector._finger_states(hand_xy)
-    print(f"   Finger states: thumb={fs.thumb}, index={fs.index}, middle={fs.middle}, ring={fs.ring}, pinky={fs.pinky}")
-    print(f"   Pinch states: left={detector._left_pinch_active}, right={detector._right_pinch_active}")
-    
-    # Test 3: Index + Middle extended (SCROLL)
-    print("\n[TEST 3] Index + Middle extended = SCROLL gesture")
-    detector = GestureDetector()
-    hand_xy = [
-        (250, 400),  # 0: wrist
-        (220, 380), (200, 350), (190, 300), (180, 270),  # 1-4: thumb (tucked)
-        (280, 350), (300, 300), (315, 200), (320, 120),  # 5-8: index (EXTENDED)
-        (290, 350), (310, 300), (325, 200), (330, 120),  # 9-12: middle (EXTENDED)
-        (280, 365), (285, 380), (288, 375), (289, 372),  # 13-16: ring (CURLED - tip close to MCP)
-        (270, 370), (270, 385), (271, 380), (271, 377),  # 17-20: pinky (CURLED - tip close to MCP)
-    ]
-    
-    hand = make_hand(hand_xy)
-    for _ in range(5):
-        result = detector.detect(hand)
-        time.sleep(0.020)  # 20ms per frame = ~50 fps
-    print(f"   Expected: SCROLL, Got: {result.gesture}")
-    if result.gesture == GestureType.SCROLL:
-        print("   ✓ PASS")
-    else:
-        print(f"   ⚠ Got {result.gesture} instead")
-    
-    print("\n" + "=" * 60)
-    print("✅ Gesture detection test complete!")
-    print("=" * 60)
-    
-if __name__ == "__main__":
-    try:
-        test_gesture_detections()
-    except AssertionError as e:
-        print(f"\n❌ TEST FAILED: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n❌ ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
 
 === tools/sanitize_tests.py ===
 #!/usr/bin/env python3

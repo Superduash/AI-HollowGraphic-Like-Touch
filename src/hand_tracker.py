@@ -112,7 +112,8 @@ class HandTracker:
 
         dh, dw = detect_frame.shape[:2]
         rgb = cv2.cvtColor(detect_frame, cv2.COLOR_BGR2RGB)
-        self._last_rgb_frame = rgb
+        if rgb is not None and rgb.size > 0:
+            self._last_rgb_frame = rgb
         result = self._hands.process(rgb)
 
         hands_dict = {}
@@ -141,11 +142,11 @@ class HandTracker:
 
                 prev_xy = self._prev_xy_by_label.get(label)
                 if prev_xy is not None and len(prev_xy) == len(xy):
-                    # Fingertip indices jitter much more than palm/wrist - use
+                    # Fingertip indices jitter much more than palm/wrist — use
                     # weaker blend (stronger smoothing) on tips to kill shake.
                     _tip_indices = {4, 8, 12, 16, 20}
-                    base_blend = 0.55 if conf >= 0.78 else (0.48 if conf >= 0.60 else 0.40)
-                    tip_blend = base_blend * 0.65  # Tips: slightly more responsive while keeping anti-shake
+                    base_blend = 0.65 if conf >= 0.78 else (0.55 if conf >= 0.60 else 0.42)
+                    tip_blend = base_blend * 0.70  # Tips: slightly more smoothed than palm
                     smoothed_xy: list[tuple[int, int]] = []
                     for i, (cx, cy) in enumerate(xy):
                         px, py = prev_xy[i]

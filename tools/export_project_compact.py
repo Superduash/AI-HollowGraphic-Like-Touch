@@ -19,10 +19,13 @@ DEFAULT_EXCLUDE_DIRS = {
     ".pytest_cache",
     ".vscode",
     "node_modules",
+    "legacy",
 }
 
 DEFAULT_EXCLUDE_FILES = {
     ".requirements.sha256",
+    "project_compact_export.txt",
+    ".cursorrules",
 }
 
 TEXT_EXTENSIONS = {
@@ -127,7 +130,7 @@ def main() -> int:
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
-        help="Output text file path (default: docs/artifacts/project_compact_export.txt)",
+        help="Output text file path (default: project_compact_export.txt in project root)",
     )
     parser.add_argument(
         "--max-bytes-per-file",
