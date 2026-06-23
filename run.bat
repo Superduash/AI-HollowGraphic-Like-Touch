@@ -2,7 +2,7 @@
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
-title Holographic Touch — Launcher
+title HoloTouch — Launcher
 
 rem ── Find Python (prefer 3.12, fall back to 3.11 / 3.10 / 3) ──────────────
 set "PYEXE="
@@ -61,7 +61,7 @@ if "%REQ_HASH%"=="%OLD_HASH%" (
   >"%HASH_FILE%" echo %REQ_HASH%
 )
 
-echo [launcher] Starting Holographic Touch...
+echo [launcher] Starting HoloTouch...
 set "HT_SILENCE_NATIVE_STDERR=1"
 python app.py
 if errorlevel 1 goto :error

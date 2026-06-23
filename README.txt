@@ -1,5 +1,5 @@
 ═══════════════════════════════════════════════════════════════
- HOLOGRAPHIC TOUCH  —  AI Hand-Gesture Mouse Controller
+ HOLOTOUCH  —  AI Hand-Gesture Mouse Controller
 ═══════════════════════════════════════════════════════════════
 
 Control your Windows PC with your hands — no physical contact.

@@ -63,11 +63,11 @@ class CursorMapper:
         import threading as _th
         self._mapper_lock = _th.Lock()
         # Face tracking: slower EMA for stable nose movements
-        self._alpha_min_face: float = 0.12
-        self._alpha_max_face: float = 0.55
+        self._alpha_min_face: float = 0.18
+        self._alpha_max_face: float = 0.60
         # Hand-only: faster EMA for fingertip responsiveness
-        self._alpha_min_hand: float = 0.15
-        self._alpha_max_hand: float = 0.60
+        self._alpha_min_hand: float = 0.28
+        self._alpha_max_hand: float = 0.75
         self._hand_only_mode: bool = False
 
     @staticmethod
@@ -126,10 +126,10 @@ class CursorMapper:
         with self._mapper_lock:
             self.smoothening = v
             t = (v - 1.0) / 9.0
-            self._alpha_min_face = 0.12 + t * 0.06
-            self._alpha_max_face = 0.55 + t * 0.10
-            self._alpha_min_hand = 0.15 + t * 0.08
-            self._alpha_max_hand = 0.60 + t * 0.18
+            self._alpha_min_face = 0.18 + t * 0.07
+            self._alpha_max_face = 0.60 + t * 0.10
+            self._alpha_min_hand = 0.20 + t * 0.10
+            self._alpha_max_hand = 0.68 + t * 0.18
             self._alpha_min = self._alpha_min_face
             self._alpha_max = self._alpha_max_face
 

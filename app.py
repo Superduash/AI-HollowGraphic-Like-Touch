@@ -1,4 +1,4 @@
-"""Windows Hover: holographic touch mouse entry point.
+"""HoloTouch: hand gesture mouse entry point.
 
 Designed for USB portability: one main Python file driving an integrated package.
 """

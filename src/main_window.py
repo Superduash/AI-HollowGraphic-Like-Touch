@@ -86,7 +86,7 @@ class StatusOverlay(QWidget):
     def __init__(self, icons: dict[str, object]) -> None:
         super().__init__(None)  # type: ignore
         self._icons = icons
-        self.setWindowTitle("Windows Hover Status")
+        self.setWindowTitle("HoloTouch Status")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setWindowFlags(
             Qt.WindowType.Tool
@@ -108,7 +108,7 @@ class StatusOverlay(QWidget):
         top = QHBoxLayout()
         self._dot = QLabel("●")
         self._dot.setObjectName("statusOnline")
-        self._title = QLabel("Holographic Touch")
+        self._title = QLabel("HoloTouch")
         self._title.setObjectName("overlayTitle")
         self._fps = QLabel("FPS 0")
         self._fps.setObjectName("muted")
@@ -596,9 +596,9 @@ class MainWindow(QMainWindow):
 
         _configure_input_latency()
         if platform.system() != "Windows":
-            print("Holographic Touch is optimized for Windows.")
+            print("HoloTouch is optimized for Windows.")
 
-        self.setWindowTitle("Holographic Touch")
+        self.setWindowTitle("HoloTouch")
         self.setMinimumSize(960, 640)
         self._app_icon = QIcon(str(Path(__file__).resolve().parents[1] / "assets" / "icons" / "holographic_touch.svg"))
         if not self._app_icon.isNull():
@@ -1222,7 +1222,7 @@ class MainWindow(QMainWindow):
             tray.setIcon(self._app_icon)
         else:
             tray.setIcon(self.icons["enable_mouse"])
-        tray.setToolTip("Holographic Touch")
+        tray.setToolTip("HoloTouch")
 
         tray_menu = QMenu()
         action_show = QAction("Show Window", self)
@@ -1816,7 +1816,7 @@ class MainWindow(QMainWindow):
                 if tracker is None:
                     continue
 
-                hands_dict, hand_protos = tracker.detect(
+                hands_dict, hand_protos, is_grace = tracker.detect(
                     frame, is_mirrored=self._mirror_camera)
                 # Convert BGR→RGB once here on the worker thread so _render() never needs to.
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -1865,11 +1865,11 @@ class MainWindow(QMainWindow):
                 # ── GESTURE DETECTION ──────────────────────────────
                 if self._cursor_mode == "dual_hand":
                     cursor_label = "Right" if self._dual_right_cursor else "Left"
-                    result = self.gestures.detect_dual(hands_dict, cursor_label=cursor_label)
+                    result = self.gestures.detect_dual(hands_dict, is_grace, cursor_label=cursor_label)
                 else:
                     # Single-hand mode: one hand does cursor + actions
                     action_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                    result = self.gestures.detect(action_hand)
+                    result = self.gestures.detect(action_hand, is_grace)
 
                 if result is None:
                     result = GestureResult(GestureType.PAUSE, 0)
@@ -1894,7 +1894,12 @@ class MainWindow(QMainWindow):
                 _has_cursor = False
                 sx, sy = self._frozen_sx, self._frozen_sy
 
-                if self._cursor_mode == "dual_hand":
+                if is_grace:
+                    # In grace frame: immediately stop cursor movement and release drag state
+                    _has_cursor = False
+                    if self._cursor_mode != "dual_hand":
+                        self._sh_cursor_history.clear()
+                elif self._cursor_mode == "dual_hand":
                     # Dual-hand: cursor hand is configurable (default right).
                     cursor_hand_label = "Right" if self._dual_right_cursor else "Left"
                     cursor_hand = hands_dict.get(cursor_hand_label)
@@ -1934,7 +1939,7 @@ class MainWindow(QMainWindow):
                     self._frozen_sx, self._frozen_sy = sx, sy
 
                 # ── DISPATCH ACTIONS ───────────────────────────────
-                _allow_action = True
+                _allow_action = not is_grace
 
                 if self.mouse_enabled and _has_cursor and gesture in self._CURSOR_GESTURES:
                     if gesture != GestureType.SCROLL:

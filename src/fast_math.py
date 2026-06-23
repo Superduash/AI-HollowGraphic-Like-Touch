@@ -1,4 +1,4 @@
-"""JIT-compiled math kernels for the holographic touch hot path.
+"""JIT-compiled math kernels for the HoloTouch hot path.
 
 All functions decorated with @njit are compiled to native machine code
 on first call (cached to __pycache__) and run at C speed thereafter.

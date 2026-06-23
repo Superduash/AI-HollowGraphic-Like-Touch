@@ -33,7 +33,7 @@ class SettingsStore:
     }
 
     def __init__(self) -> None:
-        self._dir = Path.home() / ".holographic_touch"
+        self._dir = Path.home() / ".holotouch"
         self._path = self._dir / "settings.json"
         self._data: dict[str, object] = {}
         self.load()

@@ -176,6 +176,7 @@ class GestureDetector:
     def detect_dual(
         self,
         hands_dict: dict,
+        is_grace: bool = False,
         cursor_label: str = "Right",
     ) -> GestureResult:
         """Process gestures from dual-hand input.
@@ -212,24 +213,24 @@ class GestureDetector:
             return self._make_result(GestureType.MOVE, 0)
 
         # Process gestures from left action hand.
-        return self._process_action_hand(action_hand, now)
+        return self._process_action_hand(action_hand, now, is_grace)
 
     # =====================================================================
     # SINGLE-HAND MODE (legacy compat) — one hand does cursor + actions
     # =====================================================================
-    def detect(self, hand_data: dict | None) -> GestureResult:
+    def detect(self, hand_data: dict | None, is_grace: bool = False) -> GestureResult:
         """Legacy single-hand detect. Same hand does cursor + gestures."""
         now = time.monotonic()
         if hand_data is None:
             self._reset_all(now)
             return self._make_result(GestureType.PAUSE, 0)
 
-        return self._process_action_hand(hand_data, now)
+        return self._process_action_hand(hand_data, now, is_grace)
 
     # =====================================================================
     # SHARED ACTION ENGINE — processes one hand for click/scroll/drag
     # =====================================================================
-    def _process_action_hand(self, hand_data: dict, now: float) -> GestureResult:
+    def _process_action_hand(self, hand_data: dict, now: float, is_grace: bool = False) -> GestureResult:
         xy = hand_data.get("xy")
         if not xy or len(xy) < 21:
             return self._make_result(GestureType.PAUSE, 0)
@@ -417,7 +418,11 @@ class GestureDetector:
             self._stable_start_t = now
 
         hold_elapsed = max(0.0, now - self._stable_start_t)
-        if hold_elapsed >= self._confirm_hold_s:
+        if is_grace:
+            stable_state = self._state if self._state not in {
+                GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
+                GestureType.DOUBLE_CLICK} else GestureType.MOVE
+        elif hold_elapsed >= self._confirm_hold_s:
             stable_state = self._candidate
         else:
             stable_state = self._state

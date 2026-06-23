@@ -1,4 +1,4 @@
-"""Windows Hover package exports."""
+"""HoloTouch package exports."""
 
 from .main_window import MainWindow
 
