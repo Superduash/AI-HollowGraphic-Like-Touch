@@ -23,8 +23,6 @@
 
 ---
 
-## 📸 Demo
-
 <div align="center">
 
 <img width="1919" height="1029" alt="Screenshot 2026-06-23 141315-overlay" src="https://github.com/user-attachments/assets/9e304727-5bfe-4357-981a-263c4fe4d80e" />
