@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import cv2  # type: ignore
+import numpy as np
 
 import qtawesome as qta  # type: ignore
 from PySide6.QtCore import QEvent, QMetaObject, QSize, Signal, Slot, Qt, QTimer  # type: ignore
