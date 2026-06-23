@@ -73,3 +73,6 @@ project_compact_export.txt
 *.spec
 pip-log.txt
 pip-delete-this-directory.txt
+
+# Release binaries (must be uploaded to GitHub Releases, not tracked directly)
+release/*.exe
