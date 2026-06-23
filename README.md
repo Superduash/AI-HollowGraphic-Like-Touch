@@ -85,9 +85,9 @@ Floating PySide6 overlay with:
 ## 🔬 How It Works
 
 ```
-Webcam Frame
-     │
-     ▼
+        Webcam Frame
+              │
+              ▼
 ┌─────────────────────────────┐
 │   OpenCV — Frame Capture    │  Reads frames, flips + converts BGR→RGB
 └─────────────┬───────────────┘
