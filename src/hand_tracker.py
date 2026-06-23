@@ -48,12 +48,7 @@ class HandTracker:
         self._hands = self._create_hands_model()
         self._prev_xy_by_label: dict[str, list[tuple[int, int]]] = {}
 
-        self._frames_no_hand = 0
-        self._grace_frames = 3
-        self._edge_grace_frames = 10
-        self._edge_ratio = 0.08
-        self._last_valid_near_edge = False
-        self._last_valid_result: tuple[dict, list] | None = None
+        self._prev_xy_by_label: dict[str, list[tuple[int, int]]] = {}
 
     def _create_hands_model(self):
         """Build Hands model with temporary native stderr suppression to prevent startup spam."""
@@ -102,7 +97,7 @@ class HandTracker:
         self._process_size = (max(64, int(w)), max(64, int(h)))
 
     def detect(self, frame_bgr, is_mirrored: bool = False):
-        """Returns (hands_dict, hand_protos_list, is_grace_frame)."""
+        """Returns (hands_dict, hand_protos_list)."""
         src_h, src_w = frame_bgr.shape[:2]
 
         detect_frame = frame_bgr
@@ -146,7 +141,7 @@ class HandTracker:
                     # weaker blend (stronger smoothing) on tips to kill shake.
                     _tip_indices = {4, 8, 12, 16, 20}
                     base_blend = 0.65 if conf >= 0.78 else (0.55 if conf >= 0.60 else 0.42)
-                    tip_blend = base_blend * 0.70  # Tips: slightly more smoothed than palm
+                    tip_blend = base_blend * 0.45  # Increased smoothing for tips to kill jitter
                     smoothed_xy: list[tuple[int, int]] = []
                     for i, (cx, cy) in enumerate(xy):
                         px, py = prev_xy[i]
@@ -179,33 +174,11 @@ class HandTracker:
                 self._prev_xy_by_label[label] = list(xy)
                 protos.append((hand, label))
 
-                # Track whether a hand is near camera borders where detections can flap.
-                near_edge = any(
-                    lm.x * dw <= edge_margin_x
-                    or lm.x * dw >= (dw - edge_margin_x)
-                    or lm.y * dh <= edge_margin_y
-                    or lm.y * dh >= (dh - edge_margin_y)
-                    for lm in hand.landmark
-                )
-                detected_near_edge = detected_near_edge or near_edge
-
-            self._last_valid_near_edge = detected_near_edge
-
         if hands_dict:
-            self._frames_no_hand = 0
-            self._last_valid_result = (hands_dict, protos)
-            return hands_dict, protos, False
+            return hands_dict, protos
         else:
-            self._frames_no_hand += 1
-            grace_frames = self._edge_grace_frames if self._last_valid_near_edge else self._grace_frames
-            if (self._frames_no_hand < grace_frames
-                    and self._last_valid_result is not None):
-                cached_dict, cached_protos = self._last_valid_result
-                return cached_dict, cached_protos, True
-            self._last_valid_near_edge = False
-            self._last_valid_result = None
             self._prev_xy_by_label.clear()
-            return {}, [], False
+            return {}, []
 
     def draw(self, frame_rgb, hand_protos, label: str = "Right") -> None:
         """Draw hand landmarks. Accepts either:
@@ -224,16 +197,27 @@ class HandTracker:
         for proto, lbl in pairs:
             if proto is None:
                 continue
-            color = (0, 255, 120) if lbl == "Right" else (255, 180, 50)
-            try:
-                conn_spec = self._draw_utils.DrawingSpec(
-                    color=color, thickness=2, circle_radius=2)
-                lmk_spec = self._draw_styles.get_default_hand_landmarks_style()
-                self._draw_utils.draw_landmarks(
-                    frame_rgb, proto, self._mp_hands.HAND_CONNECTIONS,
-                    lmk_spec, conn_spec)
-            except Exception:
-                pass
+            
+            # Sleek custom rendering
+            h, w, _ = frame_rgb.shape
+            points = []
+            for lm in proto.landmark:
+                px, py = int(lm.x * w), int(lm.y * h)
+                points.append((px, py))
+            
+            # Draw connections (cyan, anti-aliased)
+            conn_color = (190, 230, 80) if lbl == "Right" else (240, 180, 80)
+            if self._mp_hands and self._mp_hands.HAND_CONNECTIONS:
+                for connection in self._mp_hands.HAND_CONNECTIONS:
+                    start_idx, end_idx = connection
+                    if start_idx < len(points) and end_idx < len(points):
+                        p1, p2 = points[start_idx], points[end_idx]
+                        cv2.line(frame_rgb, p1, p2, conn_color, 2, cv2.LINE_AA)
+                        
+            # Draw joints (white inside, thin cyan border)
+            for point in points:
+                cv2.circle(frame_rgb, point, 3, conn_color, -1, cv2.LINE_AA)
+                cv2.circle(frame_rgb, point, 2, (255, 255, 255), -1, cv2.LINE_AA)
 
     def close(self) -> None:
         try:

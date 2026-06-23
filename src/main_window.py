@@ -1816,7 +1816,7 @@ class MainWindow(QMainWindow):
                 if tracker is None:
                     continue
 
-                hands_dict, hand_protos, is_grace = tracker.detect(
+                hands_dict, hand_protos = tracker.detect(
                     frame, is_mirrored=self._mirror_camera)
                 # Convert BGR→RGB once here on the worker thread so _render() never needs to.
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -1865,11 +1865,11 @@ class MainWindow(QMainWindow):
                 # ── GESTURE DETECTION ──────────────────────────────
                 if self._cursor_mode == "dual_hand":
                     cursor_label = "Right" if self._dual_right_cursor else "Left"
-                    result = self.gestures.detect_dual(hands_dict, is_grace, cursor_label=cursor_label)
+                    result = self.gestures.detect_dual(hands_dict, cursor_label=cursor_label)
                 else:
                     # Single-hand mode: one hand does cursor + actions
                     action_hand = hands_dict.get("Right") or hands_dict.get("Left")
-                    result = self.gestures.detect(action_hand, is_grace)
+                    result = self.gestures.detect(action_hand)
 
                 if result is None:
                     result = GestureResult(GestureType.PAUSE, 0)
@@ -1934,7 +1934,7 @@ class MainWindow(QMainWindow):
                     self._frozen_sx, self._frozen_sy = sx, sy
 
                 # ── DISPATCH ACTIONS ───────────────────────────────
-                _allow_action = not is_grace
+                _allow_action = True
 
                 if self.mouse_enabled and _has_cursor and gesture in self._CURSOR_GESTURES:
                     if gesture != GestureType.SCROLL:

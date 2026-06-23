@@ -63,11 +63,11 @@ class CursorMapper:
         import threading as _th
         self._mapper_lock = _th.Lock()
         # Face tracking: slower EMA for stable nose movements
-        self._alpha_min_face: float = 0.18
-        self._alpha_max_face: float = 0.60
+        self._alpha_min_face: float = 0.12
+        self._alpha_max_face: float = 0.55
         # Hand-only: faster EMA for fingertip responsiveness
-        self._alpha_min_hand: float = 0.28
-        self._alpha_max_hand: float = 0.75
+        self._alpha_min_hand: float = 0.15
+        self._alpha_max_hand: float = 0.60
         self._hand_only_mode: bool = False
 
     @staticmethod
@@ -79,8 +79,8 @@ class CursorMapper:
                 user32 = ctypes.windll.user32
                 sx = int(user32.GetSystemMetrics(76))
                 sy = int(user32.GetSystemMetrics(77))
-                sw = max(1, int(user32.GetSystemMetrics(78) - sx - 1))
-                sh = max(1, int(user32.GetSystemMetrics(79) - sy - 1))
+                sw = max(1, int(user32.GetSystemMetrics(78) - 1))
+                sh = max(1, int(user32.GetSystemMetrics(79) - 1))
                 return sx, sy, sw, sh
             except Exception:
                 pass
@@ -126,10 +126,10 @@ class CursorMapper:
         with self._mapper_lock:
             self.smoothening = v
             t = (v - 1.0) / 9.0
-            self._alpha_min_face = 0.18 + t * 0.07
-            self._alpha_max_face = 0.60 + t * 0.10
-            self._alpha_min_hand = 0.20 + t * 0.10
-            self._alpha_max_hand = 0.68 + t * 0.18
+            self._alpha_min_face = 0.12 + t * 0.06
+            self._alpha_max_face = 0.55 + t * 0.10
+            self._alpha_min_hand = 0.15 + t * 0.08
+            self._alpha_max_hand = 0.60 + t * 0.18
             self._alpha_min = self._alpha_min_face
             self._alpha_max = self._alpha_max_face
 
@@ -181,19 +181,19 @@ class CursorMapper:
         raw_nx = clamp(float(cam_x) / float(max(1, self.cam_w - 1)), 0.0, 1.0)
         raw_ny = clamp(float(cam_y) / float(max(1, self.cam_h - 1)), 0.0, 1.0)
 
-        # Keep control box visible as the primary guide, but allow a small
-        # outside spill zone so corners/sides are reachable without strain.
+        # Keep control box visible as the primary guide.
+        # Ensure the margin exactly maps to the edges of the PC screen.
         nx = map_range(
             raw_nx,
-            self._margin_x_ratio - self._outer_slack_ratio,
-            self._margin_x_ratio + self._inner_x_ratio + self._outer_slack_ratio,
+            self._margin_x_ratio,
+            self._margin_x_ratio + self._inner_x_ratio,
             0.0,
             1.0,
         )
         ny = map_range(
             raw_ny,
-            self._margin_y_ratio - self._outer_slack_ratio,
-            self._margin_y_ratio + self._inner_y_ratio + self._outer_slack_ratio,
+            self._margin_y_ratio,
+            self._margin_y_ratio + self._inner_y_ratio,
             0.0,
             1.0,
         )

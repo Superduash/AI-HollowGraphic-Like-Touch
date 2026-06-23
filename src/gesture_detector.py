@@ -176,7 +176,6 @@ class GestureDetector:
     def detect_dual(
         self,
         hands_dict: dict,
-        is_grace: bool = False,
         cursor_label: str = "Right",
     ) -> GestureResult:
         """Process gestures from dual-hand input.
@@ -213,25 +212,24 @@ class GestureDetector:
             return self._make_result(GestureType.MOVE, 0)
 
         # Process gestures from left action hand.
-        return self._process_action_hand(action_hand, now, is_grace)
+        return self._process_action_hand(action_hand, now)
 
     # =====================================================================
     # SINGLE-HAND MODE (legacy compat) — one hand does cursor + actions
     # =====================================================================
-    def detect(self, hand_data: dict | None, is_grace_frame: bool = False) -> GestureResult:
+    def detect(self, hand_data: dict | None) -> GestureResult:
         """Legacy single-hand detect. Same hand does cursor + gestures."""
         now = time.monotonic()
         if hand_data is None:
             self._reset_all(now)
             return self._make_result(GestureType.PAUSE, 0)
 
-        return self._process_action_hand(hand_data, now, is_grace_frame)
+        return self._process_action_hand(hand_data, now)
 
     # =====================================================================
     # SHARED ACTION ENGINE — processes one hand for click/scroll/drag
     # =====================================================================
-    def _process_action_hand(self, hand_data: dict, now: float,
-                              is_grace: bool = False) -> GestureResult:
+    def _process_action_hand(self, hand_data: dict, now: float) -> GestureResult:
         xy = hand_data.get("xy")
         if not xy or len(xy) < 21:
             return self._make_result(GestureType.PAUSE, 0)
@@ -311,7 +309,7 @@ class GestureDetector:
                 if hasattr(self, '_prev_wrist_pos') and self._prev_wrist_pos is not None:
                     _pw = self._prev_wrist_pos
                     _wrist_move = ((_wrist_x - _pw[0])**2 + (_wrist_y - _pw[1])**2)**0.5
-                    if _wrist_move > self._hand_scale * 0.20:
+                    if _wrist_move > self._hand_scale * 0.12:
                         _movement_suppress = True
             self._prev_wrist_pos = (_wrist_x, _wrist_y)
         else:
@@ -419,11 +417,7 @@ class GestureDetector:
             self._stable_start_t = now
 
         hold_elapsed = max(0.0, now - self._stable_start_t)
-        if is_grace:
-            stable_state = self._state if self._state not in {
-                GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
-                GestureType.DOUBLE_CLICK} else GestureType.MOVE
-        elif hold_elapsed >= self._confirm_hold_s:
+        if hold_elapsed >= self._confirm_hold_s:
             stable_state = self._candidate
         else:
             stable_state = self._state
