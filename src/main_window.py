@@ -730,8 +730,10 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(150, lambda: self._refresh_camera_cache(force=True))
 
         if self._mediapipe_error:
+            import sys
+            print(f"MediaPipe initialization error: {self._mediapipe_error}", file=sys.stderr)
             self.cam_status.setText("MediaPipe Error")
-            self.preview.setText(self._mediapipe_error)
+            self.preview.setText("Camera Initialization Failed\n\nPlease restart HoloTouch.")
             self.start_btn.setEnabled(False)
 
         self.timer = QTimer(self)
@@ -1552,17 +1554,21 @@ class MainWindow(QMainWindow):
         if self._start_worker is not None and self._start_worker.is_alive():  # type: ignore
             return
         if self._mediapipe_error:
-            self.preview.setText(self._mediapipe_error)
+            import sys
+            print(f"MediaPipe initialization error: {self._mediapipe_error}", file=sys.stderr)
+            self.preview.setText("Camera Initialization Failed\n\nPlease restart HoloTouch.")
             return
 
         if self.tracker is None:
             try:
                 self.tracker = HandTracker()
             except Exception as exc:
+                import sys
                 self.tracker = None
                 self._mediapipe_error = str(exc)
+                print(f"MediaPipe initialization error: {self._mediapipe_error}", file=sys.stderr)
                 self.cam_status.setText("MediaPipe Error")
-                self.preview.setText(self._mediapipe_error)
+                self.preview.setText("Camera Initialization Failed\n\nPlease restart HoloTouch.")
                 self.start_btn.setEnabled(False)
                 return
 
